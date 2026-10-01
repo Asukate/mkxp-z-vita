@@ -1,0 +1,51 @@
+name: HardRPG Vita CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vita-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.profile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [real-vita, vita3k]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build pinned VitaSDK environment
+        run: docker build -f ci/Dockerfile -t hardrpg-build .
+      - name: Check, bootstrap, compile, and package
+        env:
+          BUILD_PROFILE: ${{ matrix.profile }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/hardrpg-work"
+          docker run --rm -e JOBS=2 \
+            -v "$GITHUB_WORKSPACE:/source:ro" \
+            -v "$RUNNER_TEMP/hardrpg-work:/work" \
+            hardrpg-build bash ci/run.sh "$BUILD_PROFILE" /work
+      - name: Upload package and build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: HardRPG-${{ matrix.profile }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/hardrpg-work/packages/
+            ${{ runner.temp }}/hardrpg-work/logs/
+            ${{ runner.temp }}/hardrpg-work/bootstrap-manifest.txt
+            ${{ runner.temp }}/hardrpg-work/*state.json
+          if-no-files-found: warn
+          retention-days: 7

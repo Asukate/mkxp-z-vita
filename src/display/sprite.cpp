@@ -1,0 +1,1271 @@
+#include "frame_profile.h"
+/*
+ ** sprite.cpp
+ **
+ ** This file is part of mkxp.
+ **
+ ** Copyright (C) 2013 - 2021 Amaryllis Kulla <ancurio@mapleshrine.eu>
+ **
+ ** mkxp is free software: you can redistribute it and/or modify
+ ** it under the terms of the GNU General Public License as published by
+ ** the Free Software Foundation, either version 2 of the License, or
+ ** (at your option) any later version.
+ **
+ ** mkxp is distributed in the hope that it will be useful,
+ ** but WITHOUT ANY WARRANTY; without even the implied warranty of
+ ** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ ** GNU General Public License for more details.
+ **
+ ** You should have received a copy of the GNU General Public License
+ ** along with mkxp.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "sprite.h"
+
+#include "sharedstate.h"
+#include "bitmap.h"
+#include "debugwriter.h"
+#include "config.h"
+#include "etc.h"
+#include "etc-internal.h"
+#include "util.h"
+
+#include "gl-util.h"
+#include "quad.h"
+#include "transform.h"
+#include "shader.h"
+#include "glstate.h"
+#include "quadarray.h"
+
+#include <math.h>
+#ifndef M_PI
+# define M_PI 3.14159265358979323846
+#endif
+
+#include <SDL_rect.h>
+
+#include <string.h>
+#include <vector>
+
+#include "sigslot/signal.hpp"
+
+/* S38: vitaGL debug accessors (real vbo struct lives in vitaGL). */
+extern "C" {
+    void *vglGetBufferDataByID(unsigned int id);
+    int vglGetBufferSizeByID(unsigned int id);
+    unsigned int vglGetBufferLastFrameByID(unsigned int id);
+    /* S39d: texture info accessor */
+    void vglGetTexInfo(unsigned int id, int *w, int *h, int *stride, void **data);
+    /* S39g: full GXM descriptor dump */
+    void vglGetTexDescriptor(unsigned int id, int *w, int *h, int *stride,
+                             int *format, int *mipcount, int *swizzle,
+                             unsigned int *flags, void **data);
+    /* S40: raw descriptor control words */
+    void vglGetTexControlWords(unsigned int id, unsigned int *cw0,
+                               unsigned int *cw1, unsigned int *cw2,
+                               unsigned int *cw3);
+}
+
+static float fwrap(float value, float range)
+{
+    float res = fmod(value, range);
+    return res < 0 ? res + range : res;
+}
+
+struct SpritePrivate
+{
+    Bitmap *bitmap;
+    
+    sigslot::connection bitmapDispCon;
+    
+    Quad quad;
+    Transform trans;
+    
+    Rect *srcRect;
+    FloatRect adjustedSrcRect;
+    sigslot::connection srcRectCon;
+    
+    bool mirrored;
+    int bushDepth;
+    float efBushDepth;
+    float bushSlope;
+    float bushIntercept;
+    bool bushY;
+    bool bushUnder;
+    bool bushDirty;
+    NormValue bushOpacity;
+    NormValue opacity;
+    BlendType blendType;
+    
+    Bitmap *pattern;
+    BlendType patternBlendType;
+    bool patternTile;
+    NormValue patternOpacity;
+    Vec2 patternScroll;
+    Vec2 patternZoom;
+    
+    bool invert;
+    
+    Scene::Geometry sceneGeo;
+    
+    /* Would this sprite be visible on
+     * the screen if drawn? */
+    bool isVisible;
+    
+    Color *color;
+    Tone *tone;
+    
+    struct
+    {
+        int amp;
+        int length;
+        int speed;
+        float phase;
+        
+        /* Wave effect is active (amp != 0) */
+        bool active;
+        /* qArray needs updating */
+        bool dirty;
+        SimpleQuadArray qArray;
+    } wave;
+    
+    EtcTemps tmp;
+    
+    sigslot::connection prepareCon;
+    
+    SpritePrivate()
+    : bitmap(0),
+    srcRect(&tmp.rect),
+    mirrored(false),
+    bushDepth(0),
+    bushSlope(0),
+    bushIntercept(1.0f),
+    bushY(true),
+    bushUnder(true),
+    bushDirty(true),
+    bushOpacity(128),
+    opacity(255),
+    blendType(BlendNormal),
+    pattern(0),
+    patternTile(true),
+    patternOpacity(255),
+    invert(false),
+    isVisible(false),
+    color(&tmp.color),
+    tone(&tmp.tone)
+    
+    {
+        updateSrcRectCon();
+        
+        prepareCon = shState->prepareDraw.connect
+        (&SpritePrivate::prepare, this);
+        
+        patternScroll = Vec2(0,0);
+        patternZoom = Vec2(1, 1);
+        
+        wave.amp = 0;
+        wave.length = 180;
+        wave.speed = 360;
+        wave.phase = 0.0f;
+        wave.dirty = false;
+    }
+    
+    ~SpritePrivate()
+    {
+        srcRectCon.disconnect();
+        prepareCon.disconnect();
+        
+        bitmapDisposal();
+    }
+    
+    void bitmapDisposal()
+    {
+        bitmap = 0;
+        bitmapDispCon.disconnect();
+    }
+
+    void recomputeBushDepth()
+    {
+        if (nullOrDisposed(bitmap))
+            return;
+        
+        bushDirty = false;
+        
+        if (bushDepth <= 0)
+        {
+            bushSlope = 0;
+            bushIntercept = 1.0f;
+            bushY = true;
+            bushUnder = true;
+            return;
+        }
+        
+        // Invert the angle if mirrored
+        int mirror = mirrored ? -1 : 1;
+        float angle = fwrap(mirror * trans.getRotation(), 360);
+        
+        // If it's not rotated, then we can skip all of those other calculations.
+        if (angle == 0.0f)
+        {
+            bushSlope = 0;
+            bushIntercept = (srcRect->y + srcRect->height - (bushDepth / trans.getScale().y)) / bitmap->height();
+            bushY = true;
+            bushUnder = true;
+            return;
+        }
+        
+        // Calculate the slope in segments of 45deg, so I don't have to deal with near-infinite slopes
+        bushSlope = tan(abs(fwrap(angle - 45, 90) - 45) * M_PI / 180.0f);
+        // Manually set negative slopes
+        bushSlope *= fwrap(angle, 180) > 90 ? -1 : 1;
+        
+        
+        // If the angle is within 45deg of 90deg or 270deg we use the x-axis instead
+        // Additionally, since the shader's coordinates are percentage based, we need to make
+        // the slope relative to the scaled bitmap's ratio
+        float scaledW = bitmap->width() * trans.getScale().x;
+        float scaledH = bitmap->height() * trans.getScale().y;
+        if (fwrap(angle + 45, 180) < 90)
+        {
+            bushY = true;
+            bushSlope = bushSlope * scaledW / scaledH;
+        }
+        else
+        {
+            bushY = false;
+            bushSlope = bushSlope * scaledH / scaledW;
+        }
+        // Invert the check when we switch from the y-axis to the x-axis
+        bushUnder = angle < 45 || angle >= 225;
+        
+        // Zoom and rotate the srcRect
+        FloatRect src = srcRect->toFloatRect();
+        // Mirrored sprites whose src_rects extend beyond the bounds of the bitmap
+        // need to swap the overflows
+        if (mirrored)
+        {
+            float overflowX = std::max(src.x + src.w - bitmap->width(), 0.0f);
+            
+            if (src.x < 0)
+            {
+                src.x = 0;
+            }
+            src.x -= overflowX;
+        }
+        src.x *= trans.getScale().x;
+        src.y *= trans.getScale().y;
+        src.w *= trans.getScale().x;
+        src.h *= trans.getScale().y;
+        
+        // We use a "left-handed" coordinate system, with positive y values being below the x-axis,
+        // so we need to use the negative of the angle to get the proper y values.
+        float rotation  = -angle * M_PI / 180.0f;
+        
+        // p1 doesn't change, so we can skip rotating it
+        Vec2 p1 = src.topLeft();
+        Vec2 p2 = rotate_point(p1, rotation, src.topRight());
+        Vec2 p3 = rotate_point(p1, rotation, src.bottomLeft());
+        Vec2 p4 = rotate_point(p1, rotation, src.bottomRight());
+        
+        // Find the upper boundary of the bush effect and rotate it back.
+        // The rotated slope is a horizontal line, so any x value will work.
+        Vec2 point(0, std::max(std::max(p1.y, p2.y), std::max(p3.y, p4.y)) - bushDepth);
+        point = rotate_point(p1, -rotation, point);
+        
+        // Unzoom the point and convert it into a percentage
+        point.y = point.y / trans.getScale().y / bitmap->height();
+        point.x = point.x / trans.getScale().x / bitmap->width();
+        
+        if (bushY)
+            bushIntercept = (point.y - (bushSlope * point.x));
+        else
+            bushIntercept = (point.x - (bushSlope * point.y));
+    }
+    
+    void onSrcRectChange()
+    {
+        adjustedSrcRect = srcRect->toFloatRect();
+        FloatRect &rect = adjustedSrcRect;
+        Vec2i bmSize;
+        Vec2i bmSizeHires;
+        
+        if (!nullOrDisposed(bitmap))
+        {
+            bmSize = Vec2i(bitmap->width(), bitmap->height());
+            if (bitmap->hasHires())
+            {
+                bmSizeHires = Vec2i(bitmap->getHires()->width(), bitmap->getHires()->height());
+            }
+        }
+        
+        /* Clamp the rectangle so it doesn't reach outside
+         * the bitmap bounds */
+        if (rect.x < 0)
+        {
+            rect.w += rect.x;
+            trans.setSrcRectOrigin(Vec2(rect.x, trans.getSrcRectOrigin().y));
+        }
+        else if(trans.getSrcRectOrigin().x != 0)
+            trans.setSrcRectOrigin(Vec2(0, trans.getSrcRectOrigin().y));
+        if (rect.y < 0)
+        {
+            rect.h += rect.y;
+            trans.setSrcRectOrigin(Vec2(trans.getSrcRectOrigin().x, rect.y));
+        }
+        else if(trans.getSrcRectOrigin().y != 0)
+            trans.setSrcRectOrigin(Vec2(trans.getSrcRectOrigin().x, 0));
+        rect.x = clamp<int>(rect.x, 0, bmSize.x);
+        rect.y = clamp<int>(rect.y, 0, bmSize.y);
+        rect.w = clamp<int>(rect.w, 0, bmSize.x-rect.x);
+        rect.h = clamp<int>(rect.h, 0, bmSize.y-rect.y);
+        
+        if (bmSizeHires.x && bmSizeHires.y && bmSize.x && bmSize.y)
+        {
+            FloatRect rectHires(rect.x * bmSizeHires.x / bmSize.x,
+                                rect.y * bmSizeHires.y / bmSize.y,
+                                rect.w * bmSizeHires.x / bmSize.x,
+                                rect.h * bmSizeHires.y / bmSize.y);
+            quad.setTexRect(mirrored ? rectHires.hFlipped() : rectHires);
+        }
+        else
+        {
+            quad.setTexRect(mirrored ? rect.hFlipped() : rect);
+        }
+        
+        quad.setPosRect(FloatRect(0, 0, rect.w, rect.h));
+        bushDirty = true;
+        
+        if (wave.active)
+            wave.dirty = true;
+    }
+    
+    void updateSrcRectCon()
+    {
+        /* Cut old connection */
+        srcRectCon.disconnect();
+        /* Create new one */
+        srcRectCon = srcRect->valueChanged.connect
+        (&SpritePrivate::onSrcRectChange, this);
+    }
+    
+    void updateVisibility()
+    {
+        isVisible = false;
+        
+        if (nullOrDisposed(bitmap))
+            return;
+        
+        if (!opacity)
+            return;
+        
+        if (wave.active)
+        {
+            /* Don't do expensive wave bounding box
+             * calculations */
+            isVisible = wave.qArray.quadCount != 0;
+            return;
+        }
+        
+        /* Compare sprite bounding box against the scene */
+        
+        /* If sprite is zoomed/rotated, just opt out for now
+         * for simplicity's sake */
+        const Vec2 &scale = trans.getScale();
+        if (scale.x != 1 || scale.y != 1 || trans.getRotation() != 0)
+        {
+            isVisible = true;
+            return;
+        }
+        
+        IntRect self = adjustedSrcRect;
+        self.setPos(trans.getPositionI() + trans.getGlobalOffset() - trans.getAdjustedOriginI());
+        
+        isVisible = SDL_HasIntersection(&self, &sceneGeo.rect);
+    }
+    
+    void emitWaveChunk(SVertex *&vert, float phase, int width,
+                       const Vec2 &zoom, int chunkY, int chunkLength, int offsetLength)
+    {
+        float wavePos = phase + ((offsetLength + chunkY) / (float) wave.length) * (float) (M_PI * 2);
+        float chunkX = sin(wavePos) * wave.amp / zoom.x;
+        
+        FloatRect pos(chunkX, chunkY / zoom.y, adjustedSrcRect.w, chunkLength / zoom.y);
+        
+        /* For some bizarre reason, combining a positive wave.amp with
+         * a non-zero angle (including multiples of 360) reduces the width.
+         * That being said, RGSS applies the wave effect after rotation
+         * and we're applying it before, so since we're deviating anyway
+         * and this behavior is weird I'm choosing to not do it. */
+        //if (p->trans.getRotation())
+        //    pos.w *= pos.w / (pos.w + (2.0f * wave.amp));
+        
+        FloatRect tex = mirrored ? adjustedSrcRect.hFlipped() : adjustedSrcRect;
+        
+        tex.y += pos.y;
+        tex.h = pos.h;
+        if (bitmap->hasHires())
+        {
+            Vec2 bmSize = Vec2(bitmap->width(), bitmap->height());
+            Vec2 bmSizeHires = Vec2(bitmap->getHires()->width(), bitmap->getHires()->height());
+            if (bmSizeHires.x && bmSizeHires.y && bmSize.x && bmSize.y)
+            {
+                tex.x *= bmSizeHires.x / bmSize.x;
+                tex.y *= bmSizeHires.y / bmSize.y;
+                tex.w *= bmSizeHires.x / bmSize.x;
+                tex.h *= bmSizeHires.y / bmSize.y;
+            }
+        }
+        
+        Quad::setTexPosRect(vert, tex, pos);
+        vert += 4;
+    }
+    
+    void updateWave()
+    {
+        wave.dirty = false;
+        
+        if (nullOrDisposed(bitmap))
+            return;
+        
+        if (wave.amp == 0)
+        {
+            wave.active = false;
+            return;
+        }
+        
+        wave.active = true;
+        
+        int width = adjustedSrcRect.w;
+        int height = adjustedSrcRect.h;
+        const Vec2 &zoom = trans.getScale();
+        
+        /* The length of the sprite as it appears on screen */
+        int visibleLength = height * zoom.y;
+        
+        if (!visibleLength || !width)
+        {
+            wave.qArray.resize(0);
+            wave.qArray.commit();
+            
+            return;
+        }
+        
+        /* RMVX does this, and I have no fucking clue why */
+        if (wave.amp < 0)
+        {
+            float scaledAmp = wave.amp / zoom.x;
+            
+            FloatRect tex = mirrored ? adjustedSrcRect.hFlipped() : adjustedSrcRect;
+            FloatRect pos(0, 0, 0, adjustedSrcRect.h);
+            float mult = (scaledAmp * 2) / (float)srcRect->width;
+            pos.x = -scaledAmp - (trans.getSrcRectOrigin().x * mult);
+            pos.w = tex.w * (1 + mult);
+            
+            if ((pos.w * zoom.x) < 0.5f)
+            {
+                wave.qArray.resize(0);
+                wave.qArray.commit();
+                
+                return;
+            }
+            
+            if (bitmap->hasHires())
+            {
+                Vec2 bmSize = Vec2(bitmap->width(), bitmap->height());
+                Vec2 bmSizeHires = Vec2(bitmap->getHires()->width(), bitmap->getHires()->height());
+                if (bmSizeHires.x && bmSizeHires.y && bmSize.x && bmSize.y)
+                {
+                    tex.x *= bmSizeHires.x / bmSize.x;
+                    tex.y *= bmSizeHires.y / bmSize.y;
+                    tex.w *= bmSizeHires.x / bmSize.x;
+                    tex.h *= bmSizeHires.y / bmSize.y;
+                }
+            }
+            wave.qArray.resize(1);
+            Quad::setTexPosRect(&wave.qArray.vertices[0], tex, pos);
+            wave.qArray.commit();
+            
+            return;
+        }
+        
+        /* A negative position in the srcRect affects the wave position. */
+        int offsetLength = abs(trans.getSrcRectOrigin().y * zoom.y);
+        
+        /* First chunk length (aligned to 8 pixel boundary) */
+        int posY = (int) trans.getPosition().y - (int) (trans.getOrigin().y * zoom.y) + trans.getGlobalOffset().y;
+        int firstLength = 8 - ((posY + offsetLength) % 8);
+        firstLength = std::min(firstLength % 8, visibleLength);
+        
+        /* If the position is negative, then the first chunk's alignment
+         * needs a little more fiddling */
+        int firstOffset;
+        if (offsetLength && firstLength)
+        {
+            firstOffset = 8 - (posY % 8);
+            firstOffset = std::min(firstOffset % 8, offsetLength);
+            firstOffset += (offsetLength - firstOffset) & (~7);
+        } else {
+            firstOffset = 0;
+        }
+        
+        /* Amount of full 8 pixel chunks in the middle */
+        int chunks = (visibleLength - firstLength) / 8;
+        
+        /* Final chunk length */
+        int lastLength = (visibleLength - firstLength) % 8;
+        
+        wave.qArray.resize(!!firstLength + chunks + !!lastLength);
+        SVertex *vert = &wave.qArray.vertices[0];
+        
+        float phase = (wave.phase * (float) M_PI) / 180.0f;
+        
+        if (firstLength > 0)
+            emitWaveChunk(vert, phase, width, zoom, 0, firstLength, firstOffset);
+        
+        for (int i = 0; i < chunks; ++i)
+            emitWaveChunk(vert, phase, width, zoom, firstLength + i * 8, 8, offsetLength);
+        
+        if (lastLength > 0)
+            emitWaveChunk(vert, phase, width, zoom, firstLength + chunks * 8, lastLength, offsetLength);
+        
+        wave.qArray.commit();
+    }
+    
+    void prepare()
+    {
+        if (wave.dirty)
+        {
+            updateWave();
+        }
+        
+        updateVisibility();
+        
+        if (isVisible && bushDirty)
+            recomputeBushDepth();
+    }
+};
+
+Sprite::Sprite(Viewport *viewport)
+: ViewportElement(viewport)
+{
+    p = new SpritePrivate;
+    onGeometryChange(scene->getGeometry());
+}
+
+Sprite::~Sprite()
+{
+    dispose();
+}
+
+DEF_ATTR_RD_SIMPLE(Sprite, Bitmap,     Bitmap*, p->bitmap)
+DEF_ATTR_RD_SIMPLE(Sprite, X,          int,     p->trans.getPosition().x)
+DEF_ATTR_RD_SIMPLE(Sprite, Y,          int,     p->trans.getPosition().y)
+DEF_ATTR_RD_SIMPLE(Sprite, OX,         int,     p->trans.getOrigin().x)
+DEF_ATTR_RD_SIMPLE(Sprite, OY,         int,     p->trans.getOrigin().y)
+DEF_ATTR_RD_SIMPLE(Sprite, ZoomX,      float,   p->trans.getScale().x)
+DEF_ATTR_RD_SIMPLE(Sprite, ZoomY,      float,   p->trans.getScale().y)
+DEF_ATTR_RD_SIMPLE(Sprite, Angle,      float,   p->trans.getRotation())
+DEF_ATTR_RD_SIMPLE(Sprite, Mirror,     bool,    p->mirrored)
+DEF_ATTR_RD_SIMPLE(Sprite, BushDepth,  int,     p->bushDepth)
+DEF_ATTR_RD_SIMPLE(Sprite, BlendType,  int,     p->blendType)
+DEF_ATTR_RD_SIMPLE(Sprite, Pattern,    Bitmap*, p->pattern)
+DEF_ATTR_RD_SIMPLE(Sprite, PatternBlendType, int, p->patternBlendType)
+DEF_ATTR_RD_SIMPLE(Sprite, Width,      int,     p->srcRect->width)
+DEF_ATTR_RD_SIMPLE(Sprite, Height,     int,     p->srcRect->height)
+DEF_ATTR_RD_SIMPLE(Sprite, WaveAmp,    int,     p->wave.amp)
+DEF_ATTR_RD_SIMPLE(Sprite, WaveLength, int,     p->wave.length)
+DEF_ATTR_RD_SIMPLE(Sprite, WaveSpeed,  int,     p->wave.speed)
+DEF_ATTR_RD_SIMPLE(Sprite, WavePhase,  float,   p->wave.phase)
+
+DEF_ATTR_SIMPLE(Sprite, BushOpacity, int,     p->bushOpacity)
+DEF_ATTR_SIMPLE(Sprite, Opacity,     int,     p->opacity)
+DEF_ATTR_SIMPLE(Sprite, SrcRect,     Rect&,  *p->srcRect)
+DEF_ATTR_SIMPLE(Sprite, Color,       Color&, *p->color)
+DEF_ATTR_SIMPLE(Sprite, Tone,        Tone&,  *p->tone)
+DEF_ATTR_SIMPLE(Sprite, PatternTile, bool, p->patternTile)
+DEF_ATTR_SIMPLE(Sprite, PatternOpacity, int, p->patternOpacity)
+DEF_ATTR_SIMPLE(Sprite, PatternScrollX, int, p->patternScroll.x)
+DEF_ATTR_SIMPLE(Sprite, PatternScrollY, int, p->patternScroll.y)
+DEF_ATTR_SIMPLE(Sprite, PatternZoomX, float, p->patternZoom.x)
+DEF_ATTR_SIMPLE(Sprite, PatternZoomY, float, p->patternZoom.y)
+DEF_ATTR_SIMPLE(Sprite, Invert,      bool,    p->invert)
+
+void Sprite::setBitmap(Bitmap *bitmap)
+{
+    guardDisposed();
+    vitaDiagLogVglMemory("sprite_set_bitmap_begin");
+
+    vitaDiagLog("SETBITMAP", "entry self=%p p=%p bitmap=%p old=%p",
+                (void *)this, (void *)p, (void *)bitmap, (void *)p->bitmap);
+    vitaDiagLog("SETBITMAP", "addrs &bitmapDispCon=%p &wasDisposed=%p srcRect=%p &quad=%p",
+                (void *)&p->bitmapDispCon,
+                (void *)(bitmap ? &bitmap->wasDisposed : nullptr),
+                (void *)p->srcRect, (void *)&p->quad);
+
+    if (p->bitmap == bitmap)
+    {
+        vitaDiagLog("SETBITMAP", "early_return same_bitmap");
+        return;
+    }
+
+    p->bitmap = bitmap;
+    vitaDiagLog("SETBITMAP", "after bitmap assignment");
+
+    /* Diagnostic (2026-08-08): skip sigslot disconnect/
+     * connect when the trigger file exists, to prove sigslot is the blocker.
+     * Disposed-bitmap handling is broken in this mode — diagnostic only. */
+    {
+        FILE *skip = fopen("ux0:/data/hardrpg/skip-sigslot", "rb");
+        if (skip)
+        {
+            fclose(skip);
+            vitaDiagLog("SETBITMAP", "SIGSLOT SKIPPED (trigger present)");
+            goto skip_sigslot;
+        }
+    }
+
+    p->bitmapDispCon.disconnect();
+    vitaDiagLog("SETBITMAP", "after disconnect");
+
+    if (nullOrDisposed(bitmap))
+    {
+        p->bitmap = 0;
+        vitaDiagLog("SETBITMAP", "early_return null_or_disposed");
+        return;
+    }
+
+    p->bitmapDispCon = bitmap->wasDisposed.connect(&SpritePrivate::bitmapDisposal, p);
+    vitaDiagLog("SETBITMAP", "after connect");
+
+skip_sigslot:
+    bitmap->ensureNonMega();
+    vitaDiagLog("SETBITMAP", "after ensureNonMega");
+
+    *p->srcRect = bitmap->rect();
+    vitaDiagLog("SETBITMAP", "after srcRect assignment");
+
+    p->onSrcRectChange();
+    vitaDiagLog("SETBITMAP", "after onSrcRectChange");
+
+    p->quad.setPosRect(p->srcRect->toFloatRect());
+    vitaDiagLog("SETBITMAP", "after setPosRect");
+    vitaDiagLogVglMemory("sprite_set_bitmap_done");
+    
+    if (p->wave.active)
+        p->wave.dirty = true;
+}
+
+void Sprite::setX(int value)
+{
+    guardDisposed();
+    
+    if (p->trans.getPosition().x == value)
+        return;
+    
+    p->trans.setPosition(Vec2(value, getY()));
+}
+
+void Sprite::setY(int value)
+{
+    guardDisposed();
+    
+    if (p->trans.getPosition().y == value)
+        return;
+    
+    p->trans.setPosition(Vec2(getX(), value));
+    
+    if (p->wave.active)
+        p->wave.dirty = true;
+    
+    if (rgssVer >= 2)
+        setSpriteY(value);
+}
+
+void Sprite::setOX(int value)
+{
+    guardDisposed();
+    
+    if (p->trans.getOrigin().x == value)
+        return;
+    
+    p->trans.setOrigin(Vec2(value, getOY()));
+}
+
+void Sprite::setOY(int value)
+{
+    guardDisposed();
+    
+    if (p->trans.getOrigin().y == value)
+        return;
+    
+    p->trans.setOrigin(Vec2(getOX(), value));
+    
+    if (p->wave.active)
+        p->wave.dirty = true;
+}
+
+void Sprite::setZoomX(float value)
+{
+    guardDisposed();
+    
+    if (p->trans.getScale().x == value)
+        return;
+    
+    p->trans.setScale(Vec2(value, getZoomY()));
+    
+    if (p->wave.active)
+        p->wave.dirty = true;
+}
+
+void Sprite::setZoomY(float value)
+{
+    guardDisposed();
+    
+    if (p->trans.getScale().y == value)
+        return;
+    
+    p->trans.setScale(Vec2(getZoomX(), value));
+    p->bushDirty = true;
+    
+    if (p->wave.active)
+        p->wave.dirty = true;
+}
+
+void Sprite::setAngle(float value)
+{
+    guardDisposed();
+    
+    if (p->trans.getRotation() == value)
+        return;
+    
+    p->trans.setRotation(value);
+    
+    p->bushDirty = true;
+}
+
+void Sprite::setMirror(bool mirrored)
+{
+    guardDisposed();
+    
+    if (p->mirrored == mirrored)
+        return;
+    
+    p->mirrored = mirrored;
+    p->onSrcRectChange();
+    
+    if (p->wave.active)
+        p->wave.dirty = true;
+}
+
+void Sprite::setBushDepth(int value)
+{
+    guardDisposed();
+    
+    if (p->bushDepth == value)
+        return;
+    
+    p->bushDepth = value;
+    p->bushDirty = true;
+}
+
+void Sprite::setBlendType(int type)
+{
+    guardDisposed();
+    
+    switch (type)
+    {
+        default :
+        case BlendNormal :
+            p->blendType = BlendNormal;
+            return;
+        case BlendAddition :
+            p->blendType = BlendAddition;
+            return;
+        case BlendSubstraction :
+            p->blendType = BlendSubstraction;
+            return;
+    }
+}
+
+void Sprite::setPattern(Bitmap *value)
+{
+    guardDisposed();
+    
+    if (p->pattern == value)
+        return;
+    
+    p->pattern = value;
+    
+    if (!nullOrDisposed(value))
+        value->ensureNonMega();
+}
+
+void Sprite::setPatternBlendType(int type)
+{
+    guardDisposed();
+    
+    switch (type)
+    {
+        default :
+        case BlendNormal :
+            p->patternBlendType = BlendNormal;
+            return;
+        case BlendAddition :
+            p->patternBlendType = BlendAddition;
+            return;
+        case BlendSubstraction :
+            p->patternBlendType = BlendSubstraction;
+            return;
+    }
+}
+
+#define DEF_WAVE_SETTER(Name, name, type) \
+void Sprite::setWave##Name(type value) \
+{ \
+guardDisposed(); \
+if (p->wave.name == value) \
+return; \
+p->wave.name = value; \
+p->wave.dirty = true; \
+}
+
+DEF_WAVE_SETTER(Amp,    amp,    int)
+DEF_WAVE_SETTER(Length, length, int)
+DEF_WAVE_SETTER(Speed,  speed,  int)
+DEF_WAVE_SETTER(Phase,  phase,  float)
+
+#undef DEF_WAVE_SETTER
+
+void Sprite::initDynAttribs()
+{
+    p->srcRect = new Rect;
+    p->color = new Color;
+    p->tone = new Tone;
+    
+    p->updateSrcRectCon();
+}
+
+/* Flashable */
+void Sprite::update()
+{
+    guardDisposed();
+    
+    Flashable::update();
+    
+    if (p->wave.speed != 0)
+    {
+        p->wave.phase += p->wave.speed / 180;
+        p->wave.dirty = true;
+    }
+}
+
+/* SceneElement */
+void Sprite::draw()
+{
+    FrameProfile::Scope profile(FrameProfile::DrawSprite);
+    if (!p->isVisible)
+        return;
+    
+    if (emptyFlashFlag)
+        return;
+    
+    profile.stage(FrameProfile::SpriteShaderState);
+    ShaderBase *base;
+    
+    bool renderEffect = p->color->hasEffect() ||
+    p->tone->hasEffect()  ||
+    flashing              ||
+    p->bushDepth != 0     ||
+    p->invert             ||
+    (p->pattern && !p->pattern->isDisposed());
+    
+    int scalingMethod = NearestNeighbor;
+
+    int sourceWidthHires = p->bitmap->hasHires() ? p->bitmap->getHires()->width() : p->bitmap->width();
+    int sourceHeightHires = p->bitmap->hasHires() ? p->bitmap->getHires()->height() : p->bitmap->height();
+
+    double framebufferScalingFactor = shState->config().enableHires ? shState->config().framebufferScalingFactor : 1.0;
+
+    int targetWidthHires = (int)lround(framebufferScalingFactor * p->bitmap->width() * p->trans.getScale().x);
+    int targetHeightHires = (int)lround(framebufferScalingFactor * p->bitmap->height() * p->trans.getScale().y);
+
+    int scaleIsSpecial = UpScale;
+
+    if (targetWidthHires == sourceWidthHires && targetHeightHires == sourceHeightHires)
+    {
+        scaleIsSpecial = SameScale;
+    }
+
+    if (targetWidthHires < sourceWidthHires && targetHeightHires < sourceHeightHires)
+    {
+        scaleIsSpecial = DownScale;
+    }
+
+    switch (scaleIsSpecial)
+    {
+    case SameScale:
+        scalingMethod = NearestNeighbor;
+        break;
+    case DownScale:
+        scalingMethod = shState->config().bitmapSmoothScalingDown;
+        break;
+    default:
+        scalingMethod = shState->config().bitmapSmoothScaling;
+    }
+
+    if (p->trans.getRotation() != 0.0)
+    {
+        scalingMethod = shState->config().bitmapSmoothScaling;
+    }
+
+    if (renderEffect)
+    {
+        if (scalingMethod != NearestNeighbor)
+        {
+            Debug() << "BUG: Smooth SpriteShader not implemented:" << scalingMethod;
+            scalingMethod = NearestNeighbor;
+        }
+
+        SpriteShader &shader = shState->shaders().sprite;
+        
+        shader.bind();
+        shader.applyViewportProj();
+        shader.setSpriteMat(p->trans.getMatrix());
+        
+        shader.setTone(p->tone->norm);
+        shader.setOpacity(p->opacity.norm);
+        shader.setBushDepth(p->bushY, p->bushUnder, p->bushSlope, p->bushIntercept);
+        shader.setBushOpacity(p->bushOpacity.norm);
+        
+        if (p->pattern && p->patternOpacity > 0) {
+            if (p->pattern->hasHires()) {
+                Debug() << "BUG: High-res Sprite pattern not implemented";
+            }
+
+            shader.setPattern(p->pattern->getGLTypes().tex, Vec2(p->pattern->width(), p->pattern->height()));
+            shader.setPatternBlendType(p->patternBlendType);
+            shader.setPatternTile(p->patternTile);
+            shader.setPatternZoom(p->patternZoom);
+            shader.setPatternOpacity(p->patternOpacity.norm);
+            shader.setPatternScroll(p->patternScroll);
+            shader.setShouldRenderPattern(true);
+        }
+        else {
+            shader.setShouldRenderPattern(false);
+        }
+        
+        shader.setInvert(p->invert);
+        
+        /* When both flashing and effective color are set,
+         * the one with higher alpha will be blended */
+        const Vec4 *blend = (flashing && flashColor.w > p->color->norm.w) ?
+        &flashColor : &p->color->norm;
+        
+        shader.setColor(*blend);
+        
+        base = &shader;
+    }
+    else if (p->opacity != 255)
+    {
+        if (scalingMethod != NearestNeighbor)
+        {
+            Debug() << "BUG: Smooth AlphaSpriteShader not implemented:" << scalingMethod;
+            scalingMethod = NearestNeighbor;
+        }
+
+        AlphaSpriteShader &shader = shState->shaders().alphaSprite;
+        shader.bind();
+        
+        shader.setSpriteMat(p->trans.getMatrix());
+        shader.setAlpha(p->opacity.norm);
+        shader.applyViewportProj();
+        base = &shader;
+    }
+    else
+    {
+        switch (scalingMethod)
+        {
+        case Bicubic:
+        {
+            BicubicSpriteShader &shader = shState->shaders().bicubicSprite;
+            shader.bind();
+
+            shader.setTexSize(Vec2i(sourceWidthHires, sourceHeightHires));
+            shader.setSharpness(shState->config().bicubicSharpness);
+            shader.setSpriteMat(p->trans.getMatrix());
+            shader.applyViewportProj();
+            base = &shader;
+        }
+            break;
+        case Lanczos3:
+        {
+            Lanczos3SpriteShader &shader = shState->shaders().lanczos3Sprite;
+            shader.bind();
+            
+            shader.setTexSize(Vec2i(sourceWidthHires, sourceHeightHires));
+            shader.setSpriteMat(p->trans.getMatrix());
+            shader.applyViewportProj();
+            base = &shader;
+        }
+            break;
+#ifdef MKXPZ_SSL
+        case xBRZ:
+        {
+            XbrzSpriteShader &shader = shState->shaders().xbrzSprite;
+            shader.bind();
+
+            shader.setTexSize(Vec2i(sourceWidthHires, sourceHeightHires));
+            shader.setTargetScale(Vec2((float)(shState->config().xbrzScalingFactor), (float)(shState->config().xbrzScalingFactor)));
+            shader.setSpriteMat(p->trans.getMatrix());
+            shader.applyViewportProj();
+            base = &shader;
+        }
+            break;
+#endif
+        default:
+        {
+            SimpleSpriteShader &shader = shState->shaders().simpleSprite;
+            shader.bind();
+
+            shader.setSpriteMat(p->trans.getMatrix());
+            shader.applyViewportProj();
+            base = &shader;
+        }
+        }        
+    }
+    
+    profile.stage(FrameProfile::DrawSprite);
+    glState.blendMode.pushSet(p->blendType);
+    
+    p->bitmap->bindTex(*base, false);
+
+#ifdef MKXPZ_SSL
+    if (scalingMethod == xBRZ)
+    {
+        XbrzShader &shader = shState->shaders().xbrz;
+        shader.setTargetScale(Vec2((float)(shState->config().xbrzScalingFactor), (float)(shState->config().xbrzScalingFactor)));
+    }
+#endif
+    
+    TEX::setSmooth(scalingMethod == Bilinear);
+
+    if (p->wave.active)
+        p->wave.qArray.draw();
+    else
+    {
+        /* S36 Part B: one-shot no-Viewport sprite geometry capture.
+         * The quadrant bug shifts no-Viewport Sprites by +320,+240 (half of
+         * 640x480). Capture the FINAL submitted quad vertices + matrices for
+         * the first two no-Viewport sprites at the title. */
+        static int s36SpriteCount = 0;
+        if (s36SpriteCount < 4 && !getViewport() && p->bitmap)
+        {
+            ++s36SpriteCount;
+            const Vertex *v = p->quad.vert;
+            vitaDiagLog("S36-SPR", "sprite#%d novp x=%d y=%d ox=%d oy=%d zoom=%f,%f src=%d,%d %dx%d",
+                        s36SpriteCount, getX(), getY(), getOX(), getOY(),
+                        (double)p->trans.getScale().x, (double)p->trans.getScale().y,
+                        p->srcRect->x, p->srcRect->y, p->srcRect->width, p->srcRect->height);
+            if (v) {
+                vitaDiagLog("S36-SPR", "sprite#%d quad0 pos=(%f,%f) tex=(%f,%f) quad1 pos=(%f,%f) tex=(%f,%f)",
+                            s36SpriteCount,
+                            (double)v[0].pos.x, (double)v[0].pos.y,
+                            (double)v[0].texPos.x, (double)v[0].texPos.y,
+                            (double)v[1].pos.x, (double)v[1].pos.y,
+                            (double)v[1].texPos.x, (double)v[1].texPos.y);
+                vitaDiagLog("S36-SPR", "sprite#%d quad2 pos=(%f,%f) quad3 pos=(%f,%f)",
+                            s36SpriteCount,
+                            (double)v[2].pos.x, (double)v[2].pos.y,
+                            (double)v[3].pos.x, (double)v[3].pos.y);
+            }
+            const float *m = p->trans.getMatrix();
+            if (m)
+                vitaDiagLog("S36-SPR", "sprite#%d mat=[%f %f %f %f | %f %f %f %f | %f %f %f %f | %f %f %f %f]",
+                            s36SpriteCount,
+                            (double)m[0], (double)m[1], (double)m[2], (double)m[3],
+                            (double)m[4], (double)m[5], (double)m[6], (double)m[7],
+                            (double)m[8], (double)m[9], (double)m[10], (double)m[11],
+                            (double)m[12], (double)m[13], (double)m[14], (double)m[15]);
+            /* S36 Part B2: ACTUAL GL viewport (not mkxp-z cached state) +
+             * the glState viewport, to catch a state desync. */
+            GLint glVp[4] = {-1, -1, -1, -1};
+            gl.GetIntegerv(GL_VIEWPORT, glVp);
+            const IntRect &stVp = glState.viewport.get();
+            /* S39b: LIVE GXM viewport state (vitaGL globals) at draw. */
+            extern float x_port, y_port, x_scale, y_scale;
+            extern int is_rendering_display;
+            vitaDiagLog("S36-SPR", "sprite#%d glViewport=%d,%d %dx%d stateViewport=%d,%d %dx%d GXM(x_port=%.1f y_port=%.1f x_scale=%.1f y_scale=%.1f disp=%d)",
+                        s36SpriteCount,
+                        (int)glVp[0], (int)glVp[1], (int)glVp[2], (int)glVp[3],
+                        stVp.x, stVp.y, stVp.w, stVp.h,
+                        (double)x_port, (double)y_port, (double)x_scale, (double)y_scale,
+                        is_rendering_display);
+            /* S38: CPU Quad vs ACTUAL VBO contents. Use the Quad's own
+             * VBO handle via vitaGL accessors (NOT vertex_array_unit —
+             * Quad::draw unbinds GL_ARRAY_BUFFER before VAO bind).
+             * Compare all 128 bytes PRE-update; the draw below uploads
+             * if dirty. */
+            {
+                const GLuint vboId = p->quad.vbo.gl;
+                void *vboPtr = vglGetBufferDataByID(vboId);
+                const int32_t vboSize = vglGetBufferSizeByID(vboId);
+                const uint32_t vboFrame = vglGetBufferLastFrameByID(vboId);
+                const bool quadDirty = p->quad.vboDirty;
+                const Vertex *cpuV = p->quad.vert;
+                const Vertex *gpuV = (const Vertex *)vboPtr;
+                bool equal = false;
+                if (cpuV && gpuV)
+                    equal = (memcmp(cpuV, gpuV, sizeof(Vertex[4])) == 0);
+                vitaDiagLog("S38-QUAD", "sprite#%d PRE dirty=%d vbo=%u ptr=%p size=%d lastFrame=%u cpu_first=(%f,%f) gpu_first=(%f,%f) equal=%d",
+                            s36SpriteCount, quadDirty ? 1 : 0,
+                            (unsigned)vboId, vboPtr, (int)vboSize, (unsigned)vboFrame,
+                            cpuV ? (double)cpuV[0].pos.x : -1.0, cpuV ? (double)cpuV[0].pos.y : -1.0,
+                            gpuV ? (double)gpuV[0].pos.x : -1.0, gpuV ? (double)gpuV[0].pos.y : -1.0,
+                            equal ? 1 : 0);
+                if (gpuV) {
+                    vitaDiagLog("S38-QUAD", "sprite#%d PRE gpu0=(%f,%f) gpu1=(%f,%f) gpu2=(%f,%f) gpu3=(%f,%f)",
+                                s36SpriteCount,
+                                (double)gpuV[0].pos.x, (double)gpuV[0].pos.y,
+                                (double)gpuV[1].pos.x, (double)gpuV[1].pos.y,
+                                (double)gpuV[2].pos.x, (double)gpuV[2].pos.y,
+                                (double)gpuV[3].pos.x, (double)gpuV[3].pos.y);
+                }
+            }
+        }
+        p->quad.draw();
+        /* S38 POST: after the draw (updateBuffer ran if dirty), re-read
+         * the VBO and compare against CPU again. One-shot via own counter. */
+        static int s38PostCount = 0;
+        if (s38PostCount < 4 && !getViewport() && p->bitmap) {
+            ++s38PostCount;
+            const GLuint vboId = p->quad.vbo.gl;
+            void *vboPtr = vglGetBufferDataByID(vboId);
+            const Vertex *cpuV = p->quad.vert;
+            const Vertex *gpuV = (const Vertex *)vboPtr;
+            bool equal = false;
+            if (cpuV && gpuV)
+                equal = (memcmp(cpuV, gpuV, sizeof(Vertex[4])) == 0);
+            vitaDiagLog("S38-QUAD", "sprite#%d POST dirty=%d ptr=%p equal=%d",
+                        s36SpriteCount, p->quad.vboDirty ? 1 : 0, vboPtr, equal ? 1 : 0);
+            if (gpuV)
+                vitaDiagLog("S38-QUAD", "sprite#%d POST gpu0=(%f,%f) gpu1=(%f,%f) gpu2=(%f,%f) gpu3=(%f,%f)",
+                            s36SpriteCount,
+                            (double)gpuV[0].pos.x, (double)gpuV[0].pos.y,
+                            (double)gpuV[1].pos.x, (double)gpuV[1].pos.y,
+                            (double)gpuV[2].pos.x, (double)gpuV[2].pos.y,
+                            (double)gpuV[3].pos.x, (double)gpuV[3].pos.y);
+        }
+
+        /* S39: DECISIVE A/B — same regular Quad, texture contents replaced
+         * with solid green IN PLACE (glTexSubImage2D on the already-bound
+         * valid bitmap texture — no new texture creation, no bind games).
+         * Runs on sprite#2 (sprite#1 does the pre-fill texture scan). */
+        static bool s39GreenDone = false;
+        /* S41: green-fill probe DISABLED — it replaced the title texture with
+         * green on sprite#2 (Gerson saw the blink). One-shot evidence already
+         * collected (S39/S40). Gate off: s36SpriteCount == 2 → 999. */
+        if (!s39GreenDone && s36SpriteCount == 999 && !getViewport() && p->bitmap) {
+            s39GreenDone = true;
+            /* Allocate a full green frame for the bound 640x480 texture. */
+            std::vector<unsigned char> greenPx(640 * 480 * 4);
+            for (size_t i = 0; i < greenPx.size(); i += 4) {
+                greenPx[i + 0] = 0;
+                greenPx[i + 1] = 255;
+                greenPx[i + 2] = 0;
+                greenPx[i + 3] = 255;
+            }
+            gl.TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 640, 480,
+                             GL_RGBA, GL_UNSIGNED_BYTE, &greenPx[0]);
+            glFinish();
+
+            /* Re-draw the same quad (texture now guaranteed solid). */
+            p->quad.draw();
+
+            glFinish();
+            unsigned char corner[4] = {0}, center[4] = {0}, midBR[4] = {0}, midTL[4] = {0};
+            gl.ReadPixels(2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, corner);
+            gl.ReadPixels(320, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
+            gl.ReadPixels(480, 360, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, midBR);
+            gl.ReadPixels(160, 120, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, midTL);
+            vitaDiagLog("S39-GREEN", "sprite#%d in-place-green redraw: corner=(%d,%d,%d,%d) midTL=(%d,%d,%d,%d) center=(%d,%d,%d,%d) midBR=(%d,%d,%d,%d) err=0x%04x",
+                        s36SpriteCount,
+                        (int)corner[0], (int)corner[1], (int)corner[2], (int)corner[3],
+                        (int)midTL[0], (int)midTL[1], (int)midTL[2], (int)midTL[3],
+                        (int)center[0], (int)center[1], (int)center[2], (int)center[3],
+                        (int)midBR[0], (int)midBR[1], (int)midBR[2], (int)midBR[3],
+                        (unsigned)gl.GetError());
+        }
+        /* S39d: scan the ACTUAL bound title texture storage.
+         * If the texture's own data is only in the bottom-right quadrant,
+         * the bug is texture upload, geometry fully exonerated. */
+        static bool s39TexScanDone = false;
+        if (!s39TexScanDone && s36SpriteCount == 1 && !getViewport() && p->bitmap) {
+            s39TexScanDone = true;
+            GLint boundTex = 0;
+            gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &boundTex);
+            int tw = 0, th = 0, tstride = 0, tformat = -1, tmip = -1, tswz = -1;
+            unsigned int tflags = 0;
+            void *tdata = 0;
+            vglGetTexDescriptor(boundTex, &tw, &th, &tstride, &tformat,
+                                &tmip, &tswz, &tflags, &tdata);
+            vitaDiagLog("S39-TEX", "sprite#%d boundTex=%u w=%d h=%d stride=%d fmt=0x%08x mip=%d swizzle=0x%04x flags=0x%08x data=%p",
+                        s36SpriteCount, (unsigned)boundTex, tw, th, tstride,
+                        (unsigned)tformat, tmip, (unsigned)tswz, (unsigned)tflags, tdata);
+            {
+                unsigned int cw0 = 0, cw1 = 0, cw2 = 0, cw3 = 0;
+                vglGetTexControlWords(boundTex, &cw0, &cw1, &cw2, &cw3);
+                vitaDiagLog("S39-TEX", "control_words cw0=0x%08x cw1=0x%08x cw2=0x%08x cw3=0x%08x",
+                            cw0, cw1, cw2, cw3);
+            }
+            if (tdata && tw > 0 && th > 0) {
+                const unsigned char *px = (const unsigned char *)tdata;
+                int strideB = tstride > 0 ? tstride : tw * 4;
+                long long tl = 0, tr = 0, bl = 0, br = 0;
+                unsigned char c00[4], cMid[4], cBR[4];
+                for (int y = 0; y < th; y++) {
+                    const unsigned char *row = px + (long long)y * strideB;
+                    for (int x = 0; x < tw; x++) {
+                        const unsigned char *p = row + (long long)x * 4;
+                        if (p[0] || p[1] || p[2] || p[3] > 0x10) {
+                            if (x < tw / 2 && y < th / 2) tl++;
+                            else if (x >= tw / 2 && y < th / 2) tr++;
+                            else if (x < tw / 2 && y >= th / 2) bl++;
+                            else br++;
+                        }
+                    }
+                }
+                memcpy(c00, px, 4);
+                memcpy(cMid, px + (long long)(th / 2) * strideB + (long long)(tw / 2) * 4, 4);
+                memcpy(cBR, px + (long long)(th - 1) * strideB + (long long)(tw - 1) * 4, 4);
+                vitaDiagLog("S39-TEX", "quadrants nonblack TL=%lld TR=%lld BL=%lld BR=%lld px(0,0)=(%d,%d,%d,%d) px(w/2,h/2)=(%d,%d,%d,%d) px(w-1,h-1)=(%d,%d,%d,%d)",
+                            tl, tr, bl, br,
+                            (int)c00[0], (int)c00[1], (int)c00[2], (int)c00[3],
+                            (int)cMid[0], (int)cMid[1], (int)cMid[2], (int)cMid[3],
+                            (int)cBR[0], (int)cBR[1], (int)cBR[2], (int)cBR[3]);
+            }
+        }
+    }
+    
+    TEX::setSmooth(false);
+
+    glState.blendMode.pop();
+}
+
+void Sprite::onGeometryChange(const Scene::Geometry &geo)
+{
+    /* Offset at which the sprite will be drawn
+     * relative to screen origin */
+    const Vec2i &offset = geo.offset();
+    if (p->wave.active && p->trans.getGlobalOffset().y != offset.y)
+        p->wave.dirty = true;
+    p->trans.setGlobalOffset(offset);
+    
+    p->sceneGeo = geo;
+}
+
+void Sprite::releaseResources()
+{
+    unlink();
+    
+    delete p;
+}

@@ -1,0 +1,20 @@
+# Generated Vita build workspaces and packages
+/build/
+/builddir/
+/artifacts/
+*.o
+*.a
+*.vpk
+*.velf
+*.elf
+eboot.bin
+param.sfo
+*.xxd
+__pycache__/
+*.pyc
+
+# Local editor and temporary files
+/.vscode/
+*.code-workspace
+*.bak
+.DS_Store

@@ -1,0 +1,12 @@
+{
+  "fixedAspectRatio": false,
+  "vsync": false,
+  "frameSkip": false,
+  "preloadScript": [
+    "ux0:/data/hardrpg/config/shims/tothemoon_shim.rb"
+  ],
+  "RTP": [
+    "ux0:/data/hardrpg/games/to-the-moon/Audio.dat",
+    "ux0:/data/hardrpg/games/to-the-moon/lang.dat"
+  ]
+}

@@ -1,0 +1,27 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -99,6 +99,24 @@
+     ${PHYSFS_M_SRCS}
+ )
+ 
++option(PHYSFS_VITA_BACKEND "Use the Vita platform backend (VitaSDK builds)" FALSE)
++if(PHYSFS_VITA_BACKEND)
++    # Vita has no argv, no /proc and no XDG pref dirs, so the unix backend's
++    # base/pref-dir derivation always fails init. Use the dedicated Vita
++    # backend instead (mutexes and file I/O still come from the posix
++    # backend). The unix backend is dropped outright so its symbols cannot
++    # shadow the Vita ones at link time; the other foreign backends compile
++    # to near-empty objects and are dropped for hygiene, matching the
++    # reference Vita archive layout.
++    list(REMOVE_ITEM PHYSFS_SRCS
++        src/physfs_platform_unix.c
++        src/physfs_platform_windows.c
++        src/physfs_platform_os2.c
++        src/physfs_platform_qnx.c
++        src/physfs_platform_android.c)
++    list(APPEND PHYSFS_SRCS src/physfs_platform_vita.c)
++endif()
++
+ 
+ # Archivers ...
+ # These are (mostly) on by default now, so these options are only useful for

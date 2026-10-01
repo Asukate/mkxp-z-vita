@@ -1,0 +1,908 @@
+--- a/Makefile	2026-05-12 21:04:08.000000000 -0300
++++ b/Makefile	2026-09-21 13:33:37.647871291 -0300
+@@ -152,7 +152,7 @@
+ endif
+ 
+ ifeq ($(LOG_ERRORS),2)
+-CFLAGS += -DLOG_ERRORS -DFILE_LOG
++CFLAGS += -DLOG_ERRORS
+ endif
+ 
+ ifeq ($(HAVE_WRAPPED_ALLOCATORS),1)
+--- a/source/buffers.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/buffers.c	2026-09-03 03:29:03.023085076 -0300
+@@ -229,6 +229,59 @@
+ 	}
+ }
+ 
++/* S38: debug accessors for the diag build — expose the real vbo struct
++ * fields to mkxp-z without duplicating its layout. Buffer IDs ARE the
++ * vbo struct pointers (glGenBuffers returns (GLuint)gpu_buf). */
++void *vglGetBufferDataByID(GLuint id) {
++	vbo *b = (vbo *)id;
++	return b ? b->ptr : NULL;
++}
++
++int32_t vglGetBufferSizeByID(GLuint id) {
++	vbo *b = (vbo *)id;
++	return b ? b->size : -1;
++}
++
++uint32_t vglGetBufferLastFrameByID(GLuint id) {
++	vbo *b = (vbo *)id;
++	return b ? b->last_frame : 0;
++}
++
++/* S39d: texture info accessor — real gxm_tex + its storage. */
++void vglGetTexInfo(GLuint id, int *w, int *h, int *stride, void **data) {
++	texture *tex = &texture_slots[id];
++	if (w) *w = (int)sceGxmTextureGetWidth(&tex->gxm_tex);
++	if (h) *h = (int)sceGxmTextureGetHeight(&tex->gxm_tex);
++	if (stride) *stride = (int)sceGxmTextureGetStride(&tex->gxm_tex);
++	if (data) *data = (void *)sceGxmTextureGetData(&tex->gxm_tex);
++}
++
++/* S39g: full GXM texture descriptor dump. */
++void vglGetTexDescriptor(GLuint id, int *w, int *h, int *stride, int *format,
++                         int *mipcount, int *swizzle, unsigned int *flags,
++                         void **data) {
++	texture *tex = &texture_slots[id];
++	if (w) *w = (int)sceGxmTextureGetWidth(&tex->gxm_tex);
++	if (h) *h = (int)sceGxmTextureGetHeight(&tex->gxm_tex);
++	if (stride) *stride = (int)sceGxmTextureGetStride(&tex->gxm_tex);
++	if (format) *format = (int)sceGxmTextureGetFormat(&tex->gxm_tex);
++	if (mipcount) *mipcount = (int)sceGxmTextureGetMipmapCount(&tex->gxm_tex);
++	if (swizzle) *swizzle = (int)sceGxmTextureGetFormat(&tex->gxm_tex);
++	if (flags) *flags = (unsigned int)tex->gxm_tex.normalize_mode;
++	if (data) *data = (void *)sceGxmTextureGetData(&tex->gxm_tex);
++}
++
++/* S40: raw 4 control words of the descriptor. */
++void vglGetTexControlWords(GLuint id, unsigned int *cw0, unsigned int *cw1,
++                           unsigned int *cw2, unsigned int *cw3) {
++	texture *tex = &texture_slots[id];
++	SceGxmTextureInternal *t = (SceGxmTextureInternal *)&tex->gxm_tex;
++	if (cw0) *cw0 = t->control_words[0];
++	if (cw1) *cw1 = t->control_words[1];
++	if (cw2) *cw2 = t->control_words[2];
++	if (cw3) *cw3 = t->control_words[3];
++}
++
+ inline __attribute__((always_inline)) void glGenBuffers(GLsizei n, GLuint *res) {
+ #ifndef SKIP_ERROR_HANDLING
+ 	if (n < 0) {
+--- a/source/custom_shaders.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/custom_shaders.c	2026-09-02 03:05:52.183874165 -0300
+@@ -709,7 +709,7 @@
+ 			}
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-			tex->last_frame = vgl_framecount;
++			mark_texture_used(tex);
+ #endif
+ 			sampler *smp = samplers[(int)p->frag_texunits[i]->data];
+ 			if (smp) {
+@@ -761,7 +761,7 @@
+ 			}
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-			tex->last_frame = vgl_framecount;
++			mark_texture_used(tex);
+ #endif
+ 			sampler *smp = samplers[(int)p->vert_texunits[i]->data];
+ 			if (smp) {
+@@ -926,7 +926,7 @@
+ 			}
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-			tex->last_frame = vgl_framecount;
++			mark_texture_used(tex);
+ #endif
+ 			sampler *smp = samplers[(int)p->frag_texunits[i]->data];
+ 			if (smp) {
+@@ -978,7 +978,7 @@
+ 			}
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-			tex->last_frame = vgl_framecount;
++			mark_texture_used(tex);
+ #endif
+ 			sampler *smp = samplers[(int)p->vert_texunits[i]->data];
+ 			if (smp) {
+@@ -1172,7 +1172,7 @@
+ 			}
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-			tex->last_frame = vgl_framecount;
++			mark_texture_used(tex);
+ #endif
+ 			sampler *smp = samplers[(int)p->frag_texunits[i]->data];
+ 			if (smp) {
+@@ -1224,7 +1224,7 @@
+ 			}
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-			tex->last_frame = vgl_framecount;
++			mark_texture_used(tex);
+ #endif
+ 			sampler *smp = samplers[(int)p->vert_texunits[i]->data];
+ 			if (smp) {
+@@ -1440,7 +1440,7 @@
+ #endif
+ 			texture *tex = &texture_slots[texture_units[i].tex_id[0]];
+ #ifndef TEXTURES_SPEEDHACK
+-			tex->last_frame = vgl_framecount;
++			mark_texture_used(tex);
+ #endif
+ 			sceGxmSetFragmentTexture(gxm_context, i, &tex->gxm_tex);
+ #ifdef HAVE_GLSL_TEXTURE_SIZE
+--- a/source/draw.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/draw.c	2026-09-02 03:05:52.181874174 -0300
+@@ -642,7 +642,7 @@
+ 			if (texture_slots[tex_unit->tex_id[0]].status != TEX_VALID)
+ 				return;
+ #ifndef TEXTURES_SPEEDHACK
+-			texture_slots[tex_unit->tex_id[0]].last_frame = vgl_framecount;
++			mark_texture_used(&texture_slots[tex_unit->tex_id[0]]);
+ #endif
+ 			sceGxmSetFragmentTexture(gxm_context, 0, &texture_slots[tex_unit->tex_id[0]].gxm_tex);
+ 			sceGxmSetVertexStream(gxm_context, 1, texture_object);
+--- a/source/ffp.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/ffp.c	2026-09-02 03:06:40.883651275 -0300
+@@ -1184,7 +1184,7 @@
+ 		restore_tex_cache(tex);
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-		tex->last_frame = vgl_framecount;
++			mark_texture_used(tex);
+ #endif
+ 		sampler *smp = samplers[i];
+ 		if (smp) {
+@@ -1317,7 +1317,7 @@
+ 		restore_tex_cache(tex);
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-		tex->last_frame = vgl_framecount;
++		mark_texture_used(tex);
+ #endif
+ 		sampler *smp = samplers[i];
+ 		if (smp) {
+@@ -1524,7 +1524,7 @@
+ 		restore_tex_cache(tex);
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-		tex->last_frame = vgl_framecount;
++		mark_texture_used(tex);
+ #endif
+ 		sampler *smp = samplers[i];
+ 		if (smp) {
+@@ -2447,7 +2447,7 @@
+ 			restore_tex_cache(tex);
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-			tex->last_frame = vgl_framecount;
++			mark_texture_used(tex);
+ #endif
+ 			sampler *smp = samplers[i];
+ 			if (smp) {
+@@ -2475,7 +2475,7 @@
+ 		restoreTexCache(tex);
+ #endif
+ #ifndef TEXTURES_SPEEDHACK
+-		tex->last_frame = vgl_framecount;
++		mark_texture_used(tex);
+ #endif
+ 		sampler *smp = samplers[0];
+ 		if (smp) {
+--- a/source/framebuffers.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/framebuffers.c	2026-09-11 00:34:50.441551638 -0300
+@@ -31,6 +31,18 @@
+ framebuffer *active_write_fb = NULL; // Current write framebuffer in use
+ renderbuffer *active_rb = NULL; // Current renderbuffer in use
+ 
++#if defined(HAVE_SHARED_RENDERTARGETS) && defined(RECYCLE_RENDERTARGETS)
++/* A recycled render-target wrapper can still be referenced by dormant FBOs.
++ * Clear those references before changing its dimensions; dormant FBOs will
++ * acquire a correctly-sized target when they are rendered again. */
++void __vglInvalidateSharedRenderTarget(render_target *target) {
++	for (int i = 0; i < BUFFERS_NUM; i++) {
++		if (framebuffers[i].active && framebuffers[i].target == (SceGxmRenderTarget *)target)
++			framebuffers[i].target = NULL;
++	}
++}
++#endif
++
+ uint32_t get_color_from_texture(SceGxmTextureFormat type) {
+ 	switch (type) {
+ 	case SCE_GXM_TEXTURE_FORMAT_U8_R:
+--- a/source/gxm.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/gxm.c	2026-09-18 03:40:58.018457240 -0300
+@@ -23,6 +23,20 @@
+ 
+ #include "shared.h"
+ 
++/* Optional single-render-thread diagnostic hooks; no logging or added fences.
++ * Splits scene_reset into scene end (EndScene submit + waits) and scene
++ * begin (render-target validation, reattach, BeginScene). IDs must match
++ * frame_profile.h SceneEnd/SceneBegin. Weak linkage keeps
++ * non-diagnostic builds hook-free. */
++extern int mkxp_upload_profile_enter(unsigned, uint64_t) __attribute__((weak));
++extern void mkxp_upload_profile_leave(void) __attribute__((weak));
++static void scene_profile_end(int *active) {
++    if (*active && mkxp_upload_profile_leave) mkxp_upload_profile_leave();
++}
++#define SCENE_PROFILE(id, bytes) \
++    int scene_profile_active __attribute__((cleanup(scene_profile_end))) = \
++        mkxp_upload_profile_enter ? mkxp_upload_profile_enter(id, bytes) : 0
++
+ #define MAX_SCENES_PER_FRAME 8 // Maximum amount of scenes per frame allowed by sceGxm per render target
+ 
+ // FIXME: Since we use our own default uniform buffers circular pool, fragment and vertex buffer rings can likely be reduced in size
+@@ -100,6 +114,10 @@
+ float *legacy_pool_end = NULL; // Address of the end of the GL1 immediate draw pipeline vertex pool
+ #endif
+ uint32_t vgl_framecount = 0; // Current frame number since application started
++uint32_t vgl_finish_epoch = 0; // Explicit GPU completion generation
++GLboolean vgl_gpu_write_pending = GL_TRUE; // Conservative boot state: drain before first CPU upload
++uint32_t vgl_upload_barrier_count = 0; // Upload barriers executed since boot
++uint64_t vgl_upload_barrier_us = 0; // ... and their total drained microseconds
+ 
+ void *frame_purge_list[FRAME_PURGE_FREQ][FRAME_PURGE_LIST_SIZE]; // Purge list for internal elements
+ void *frame_rt_purge_list[FRAME_PURGE_FREQ][FRAME_PURGE_RENDERTARGETS_LIST_SIZE]; // Purge list for rendertargets
+@@ -159,10 +177,47 @@
+ }
+ 
+ #ifdef HAVE_SHARED_RENDERTARGETS
+-#define MAX_RENDER_TARGETS_NUM 47 // Maximum amount of dedicated render targets usable for fbos
++#define MAX_RENDER_TARGETS_NUM 12 // Maximum amount of dedicated render targets usable for fbos
+ #define MAX_SHARED_RT_SIZE 256 // Maximum  width value in pixels for shared rendertargets usage
+ render_target rt_list[MAX_RENDER_TARGETS_NUM];
+ 
++#if defined(HAVE_SHARED_RENDERTARGETS) && defined(RECYCLE_RENDERTARGETS)
++void __vglInvalidateSharedRenderTarget(render_target *target);
++#endif
++
++#ifdef RECYCLE_RENDERTARGETS
++static render_target *recycle_render_target(int w, int h, int max_refs, const char *reason) {
++	(void)reason;
++	uint32_t oldest_framecount = 0xFFFFFFFF;
++	render_target *r = NULL;
++	for (int i = 0; i < MAX_RENDER_TARGETS_NUM; i++) {
++		if (rt_list[i].rt && rt_list[i].last_frame < oldest_framecount) {
++			oldest_framecount = rt_list[i].last_frame;
++			r = &rt_list[i];
++		}
++	}
++	if (!r)
++		return NULL;
++
++	sceGxmFinish(gxm_context);
++	__vglInvalidateSharedRenderTarget(r);
++	sceGxmDestroyRenderTarget(r->rt);
++	r->rt = NULL;
++	r->ref_count = 0;
++	r->max_refs = max_refs;
++	int res = setup_render_target(&r->rt, w, h, max_refs);
++	if (res) {
++		r->rt = NULL;
++		return NULL;
++	}
++	r->w = w;
++	r->h = h;
++	r->ref_count = 1;
++	r->last_frame = vgl_framecount;
++	return r;
++}
++#endif
++
+ render_target *get_free_render_target(int w, int h) {
+ 	int i;
+ 	for (i = 0; i < MAX_RENDER_TARGETS_NUM; i++) {
+@@ -178,6 +233,15 @@
+ 			if (r)
+ 				vgl_log("%s:%d Failed to create a shared rendertarget of size %dx%d (%s).\n", __FILE__, __LINE__, w, h, get_gxm_error_literal(r));
+ #endif
++			if (r) {
++				rt_list[i].rt = NULL;
++#ifdef RECYCLE_RENDERTARGETS
++				return recycle_render_target(w, h, rt_list[i].max_refs,
++				                             "physical allocation failed");
++#else
++				return NULL;
++#endif
++			}
+ 			rt_list[i].w = w;
+ 			rt_list[i].h = h;
+ 			rt_list[i].ref_count = 1;
+@@ -185,27 +249,9 @@
+ 		}
+ 	}
+ #ifdef RECYCLE_RENDERTARGETS
+-	vgl_log("%s:%d Out of rendertargets handles: Recycling an old rendertarget.\n", __FILE__, __LINE__);
+-	uint32_t oldest_framecount = 0xFFFFFFFF;
+-	render_target *r = NULL;
+-	for (i = 0; i < MAX_RENDER_TARGETS_NUM; i++) {
+-		if (rt_list[i].last_frame < oldest_framecount) {
+-			oldest_framecount = rt_list[i].last_frame;
+-			r = &rt_list[i];
+-		}
+-	}
+-	sceGxmFinish(gxm_context);
+-	sceGxmDestroyRenderTarget(r->rt);
+-	r->max_refs = w > MAX_SHARED_RT_SIZE ? 1 : MAX_SCENES_PER_FRAME;
+-	int res = setup_render_target(&r->rt, w, h, r->max_refs);
+-#ifdef LOG_ERRORS
+-	if (res)
+-		vgl_log("%s:%d Failed to create a shared rendertarget of size %dx%d (%s).\n", __FILE__, __LINE__, w, h, get_gxm_error_literal(res));
+-#endif
+-	r->w = w;
+-	r->h = h;
+-	r->ref_count = 1;
+-	return r;
++	return recycle_render_target(w, h,
++	                             w > MAX_SHARED_RT_SIZE ? 1 : MAX_SCENES_PER_FRAME,
++	                             "render-target handle pool full");
+ #else
+ #ifdef LOG_ERRORS
+ 	vgl_log("%s:%d Failed to create a shared rendertarget of size %dx%d (Out of rendertargets handles).\n", __FILE__, __LINE__, w, h);
+@@ -272,27 +318,42 @@
+ 	for (;;) {
+ 		// Waiting for garbage collection request
+ 		sceKernelWaitSema(gc_mutex[0], 1, NULL);
++		vgl_log("[VGLGC] purge begin tid=%d clean_idx=%d rt_idx=%d\n", (int)sceKernelGetThreadId(), frame_purge_clean_idx, frame_rt_purge_idx);
+ #endif
+ 		// Purging all elements marked for deletion
+ 		for (int i = 0; i < FRAME_PURGE_LIST_SIZE; i++) {
+ 			if (frame_purge_list[frame_purge_clean_idx][i]) {
++				// Duplicate-pointer guard: scan the remainder of this slot
++				// for the same address before freeing (double-free detector).
++				for (int j = i + 1; j < FRAME_PURGE_LIST_SIZE; j++) {
++					if (frame_purge_list[frame_purge_clean_idx][j] == frame_purge_list[frame_purge_clean_idx][i]) {
++						vgl_log("[VGLGC] DUP-DETECT ptr=%p at idx=%d (also idx=%d)\n", frame_purge_list[frame_purge_clean_idx][i], i, j);
++						break;
++					}
++				}
++				vgl_log("[VGLGC] free elem tid=%d idx=%d ptr=%p\n", (int)sceKernelGetThreadId(), i, frame_purge_list[frame_purge_clean_idx][i]);
+ 				vgl_free(frame_purge_list[frame_purge_clean_idx][i]);
+ 				frame_purge_list[frame_purge_clean_idx][i] = NULL;
++				vgl_log("[VGLGC] free elem done tid=%d idx=%d\n", (int)sceKernelGetThreadId(), i);
+ 			} else
+ 				break;
+ 		}
+ 		for (int i = 0; i < FRAME_PURGE_RENDERTARGETS_LIST_SIZE; i++) {
+ 			if (frame_rt_purge_list[frame_purge_clean_idx][i]) {
++				vgl_log("[VGLGC] destroy rt tid=%d idx=%d rt=%p\n", (int)sceKernelGetThreadId(), i, frame_rt_purge_list[frame_purge_clean_idx][i]);
+ 				sceGxmDestroyRenderTarget(frame_rt_purge_list[frame_purge_clean_idx][i]);
+ 				frame_rt_purge_list[frame_purge_clean_idx][i] = NULL;
++				vgl_log("[VGLGC] destroy rt done tid=%d idx=%d\n", (int)sceKernelGetThreadId(), i);
+ 			} else
+ 				break;
+ 		}
++		vgl_log("[VGLGC] purge done tid=%d clean_idx=%d\n", (int)sceKernelGetThreadId(), frame_purge_clean_idx);
+ 		frame_purge_clean_idx = (frame_purge_clean_idx + 1) % FRAME_PURGE_FREQ;
+ 		frame_purge_idx = (frame_purge_idx + 1) % FRAME_PURGE_FREQ;
+ 		frame_elem_purge_idx = 0;
+ 		frame_rt_purge_idx = 0;
+ #ifndef HAVE_SINGLE_THREADED_GC
++		vgl_log("[VGLGC] purge signaled tid=%d\n", (int)sceKernelGetThreadId());
+ 		sceKernelSignalSema(gc_mutex[1], 1);
+ 	}
+ #ifndef HAVE_PTHREAD
+@@ -581,11 +642,20 @@
+ 	// Ends current gxm scene
+ 	query_fence.value++;
+ 	sceGxmEndScene(gxm_context, NULL, &query_fence);
++	/* NOTE: synchronous GC-sync from the render thread is intentionally NOT
++	 * performed here. Freeing render targets / circular pool entries before
++	 * the in-flight frame has been consumed corrupts GPU-referenced memory.
++	 * Reclamation stays with the dedicated GC thread (original design). */
+ 	if (system_app_mode && vsync_interval)
+ 		sceDisplayWaitVblankStartMulti(vsync_interval);
+ }
+ 
+ void scene_reset(void) {
++	/* Every GPU emit (draw/clear/blit) is preceded by this call, and every
++	 * call either submits prior work for async execution or continues an
++	 * open scene. Either way GPU writes may now be outstanding, so latch
++	 * the hazard flag for the next CPU texture upload. */
++	vgl_gpu_write_pending = GL_TRUE;
+ 	if (in_use_framebuffer != active_write_fb || needs_scene_reset || dirty_framebuffer || dirty_query) {
+ 		dirty_framebuffer = GL_FALSE;
+ 		dirty_query = GL_FALSE;
+@@ -594,6 +664,7 @@
+ 		is_fbo_float = in_use_framebuffer ? in_use_framebuffer->is_float : GL_FALSE;
+ 
+ 		// Ending drawing scene
++		{ SCENE_PROFILE(53, 0);
+ 		if (needs_end_scene) {
+ 			scene_end();
+ 		} else {
+@@ -606,6 +677,7 @@
+ 			}
+ 			needs_end_scene = GL_TRUE;
+ 		}
++		} /* end SceneEnd */
+ 
+ #ifndef SKIP_SPLASHSCREEN	
+ 		// If we're running the boot splashscreen, we need to terminate it first
+@@ -619,6 +691,7 @@
+ 		}
+ #endif
+ 
++		{ SCENE_PROFILE(54, 0);
+ 		// Starting drawing scene
+ 		is_rendering_display = !active_write_fb;
+ 		if (is_rendering_display) { // Default framebuffer is used
+@@ -638,6 +711,41 @@
+ 			}
+ #endif
+ 		} else {
++			/* Session 33 (Asuka diag): backport of current upstream vitaGL —
++			 * if the attached texture's storage moved since the FBO was
++			 * linked (e.g. allocEmpty resize 544x416 -> 640x480 without a
++			 * second link), reattach the framebuffer so the color surface
++			 * matches the CURRENT texture storage. Reattach (not just
++			 * SetData) refreshes width/height/stride/format and invalidates
++			 * the render target on size change. */
++			if (active_write_fb->tex &&
++			    sceGxmColorSurfaceGetData(&active_write_fb->colorbuffer) !=
++			        active_write_fb->tex->data) {
++				static int s33_reattach_count = 0;
++				if (s33_reattach_count < 16) {
++					s33_reattach_count++;
++					vgl_log("S33-VGL: FBO_REATTACH fb=%p tex=%u old_color_data=%p new_tex_data=%p old_fb_w=%d old_fb_h=%d tex_w=%u tex_h=%u\n",
++					             (void *)active_write_fb,
++					             (unsigned int)(active_write_fb->tex - texture_slots),
++					             sceGxmColorSurfaceGetData(&active_write_fb->colorbuffer),
++					             active_write_fb->tex->data,
++					             active_write_fb->width, active_write_fb->height,
++					             sceGxmTextureGetWidth(&active_write_fb->tex->gxm_tex),
++					             sceGxmTextureGetHeight(&active_write_fb->tex->gxm_tex));
++				}
++				glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
++				                       GL_TEXTURE_2D,
++				                       (GLuint)(active_write_fb->tex - texture_slots),
++				                       0);
++				if (s33_reattach_count <= 16) {
++					vgl_log("S33-VGL: FBO_REATTACH_DONE fb=%p color_data=%p tex_data=%p fb_w=%d fb_h=%d\n",
++					             (void *)active_write_fb,
++					             sceGxmColorSurfaceGetData(&active_write_fb->colorbuffer),
++					             active_write_fb->tex->data,
++					             active_write_fb->width, active_write_fb->height);
++				}
++			}
++
+ 			// If a depthstencil surface is not bound to the in use framebuffer, we get one for it to ensure scissor testing compatibility
+ 			if (!active_write_fb->depthbuffer_ptr) {
+ 				init_depth_stencil_buffer(active_write_fb->width, active_write_fb->height, &active_write_fb->depthbuffer, GL_FALSE);
+@@ -689,6 +797,7 @@
+ 				vgl_log("%s:%d Scene reset failed due to sceGxmBeginScene erroring (%s) on framebuffer 0x%08X.\n", __FILE__, __LINE__, get_gxm_error_literal(r), active_write_fb);
+ #endif
+ 		}
++		} /* end SceneBegin */
+ 
+ 		// Setting back current viewport if enabled cause sceGxm will reset it at sceGxmEndScene call
+ 		if (old_framebuffer != in_use_framebuffer) {
+@@ -758,6 +867,7 @@
+ }
+ 
+ void vglSwapBuffers(GLboolean has_commondialog) {
++	vgl_log("[VGLSWAP] enter has_cd=%d framecount=%u needs_scene_reset=%d\n", has_commondialog, vgl_framecount, needs_scene_reset);
+ #ifndef SKIP_SPLASHSCREEN
+ 	// Ignore display swaps during splashscreen since we handle them in the splashscreen thread
+ 	if (is_splashscreen_active)
+@@ -807,6 +917,7 @@
+ 
+ 	if (!needs_scene_reset)
+ 		scene_end();
++	vgl_log("[VGLSWAP] after_scene_end needs_scene_reset=%d\n", needs_scene_reset);
+ 
+ 	if (has_commondialog) {
+ 		// Populating SceCommonDialog parameters
+@@ -926,7 +1037,9 @@
+ #ifdef HAVE_PROFILING
+ 		tick = sceKernelGetProcessTimeLow();
+ #endif
++		vgl_log("[VGLSWAP] before_display_queue_add front=%d back=%d\n", gxm_front_buffer_index, gxm_back_buffer_index);
+ 		sceGxmDisplayQueueAddEntry(gxm_sync_objects[gxm_back_buffer_index], gxm_sync_objects[gxm_front_buffer_index], &queue_cb_data);
++		vgl_log("[VGLSWAP] after_display_queue_add\n");
+ #ifdef HAVE_PROFILING
+ 		gpu_stall_cnt += sceKernelGetProcessTimeLow() - tick;
+ #endif
+@@ -935,8 +1048,10 @@
+ #endif
+ 		gxm_front_buffer_index = gxm_back_buffer_index;
+ 		gxm_back_buffer_index = (gxm_back_buffer_index + 1) % gxm_display_buffer_count;
++		vgl_log("[VGLSWAP] rotated front=%d back=%d\n", gxm_front_buffer_index, gxm_back_buffer_index);
+ 	}
+ 	needs_scene_reset = GL_TRUE;
++	vgl_log("[VGLSWAP] leave needs_scene_reset=%d\n", needs_scene_reset);
+ 	
+ 	// Perform resolution change if there's one pending
+ 	if (NEW_DISPLAY_WIDTH) {
+@@ -972,6 +1087,12 @@
+ 	dirty_framebuffer = GL_TRUE;
+ 	scene_reset();
+ 	sceGxmFinish(gxm_context);
++	/* Any texture submitted in an older epoch can now be updated in place.
++	 * Frame numbers alone cannot express a finish followed by another draw in
++	 * the same frame. */
++	vgl_finish_epoch++;
++	/* GPU fully drained: no writes outstanding, uploads are safe. */
++	vgl_gpu_write_pending = GL_FALSE;
+ }
+ 
+ void glReleaseShaderCompiler(void) {
+@@ -1003,4 +1124,4 @@
+ 	}
+ #endif
+ 	gxm_display_rt_size = size;
+-}
+\ No newline at end of file
++}
+--- a/source/misc.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/misc.c	2026-09-08 03:40:47.827947945 -0300
+@@ -23,6 +23,19 @@
+ 
+ #include "shared.h"
+ 
++/* Optional single-render-thread diagnostic hooks; no logging or added fences.
++ * Splits glClear into scene sync (EndScene/BeginScene churn), state setup,
++ * and draw submission. IDs must match frame_profile.h ClearSync/ClearSetup/
++ * ClearSubmit. Weak linkage keeps non-diagnostic builds hook-free. */
++extern int mkxp_upload_profile_enter(unsigned, uint64_t) __attribute__((weak));
++extern void mkxp_upload_profile_leave(void) __attribute__((weak));
++static void clear_profile_end(int *active) {
++    if (*active && mkxp_upload_profile_leave) mkxp_upload_profile_leave();
++}
++#define CLEAR_PROFILE(id, bytes) \
++    int clear_profile_active __attribute__((cleanup(clear_profile_end))) = \
++        mkxp_upload_profile_enter ? mkxp_upload_profile_enter(id, bytes) : 0
++
+ #define ATTRIBS_STACK_DEPTH 16 // Depth of attributes stack
+ 
+ enum {
+@@ -621,7 +634,11 @@
+ 		SET_GL_ERROR(GL_INVALID_VALUE);
+ 	}
+ #endif
++	{ CLEAR_PROFILE(50, 0);
+ 	scene_reset();
++	} /* end ClearSync */
++	{
++		CLEAR_PROFILE(51, 0);
+ 
+ 	// Invalidating viewport and culling
+ 	invalidate_viewport();
+@@ -646,7 +663,15 @@
+ 	sceGxmSetVertexProgram(gxm_context, clear_vertex_program_patched);
+ 	sceGxmSetFragmentProgram(gxm_context, is_fbo_float ? clear_fragment_program_float_patched : clear_fragment_program_patched);
+ 
+-	sceGxmReserveVertexDefaultUniformBuffer(gxm_context, &vbuffer);
++	{
++		int _rv = sceGxmReserveVertexDefaultUniformBuffer(gxm_context, &vbuffer);
++#ifdef FILE_LOG
++		vgl_log("BSGL: clear vbuffer=%p rv=0x%08X cv=%p depth=%f fbo=%p\n",
++		             (void *)vbuffer, (unsigned int)_rv,
++		             (void *)clear_vertices, (double)clear_depth_value,
++		             (void *)active_write_fb);
++#endif
++	}
+ 	sceGxmSetUniformDataF(vbuffer, clear_position, 0, 4, &clear_vertices->x);
+ 	sceGxmSetUniformDataF(vbuffer, clear_depth, 0, 1, &clear_depth_value);
+ 
+@@ -690,7 +715,12 @@
+ 		sceGxmSetBackStencilRef(gxm_context, stencil_value & 0xFF);
+ 	}
+ 
++	} /* end ClearSetup (state sets) */
++
++	{ CLEAR_PROFILE(52, 0);
+ 	sceGxmDraw(gxm_context, SCE_GXM_PRIMITIVE_TRIANGLE_FAN, SCE_GXM_INDEX_FORMAT_U16, depth_clear_indices, 4);
++	} /* end ClearSubmit */
++	{ CLEAR_PROFILE(51, 0);
+ 
+ 	validate_depth_test();
+ 	change_depth_write((depth_mask_state && depth_test_state) ? SCE_GXM_DEPTH_WRITE_ENABLED : SCE_GXM_DEPTH_WRITE_DISABLED);
+@@ -711,6 +741,7 @@
+ 
+ 	vglRestoreFragmentUniformBuffer();
+ 	vglRestoreVertexUniformBuffer();
++	} /* end ClearSetup (restore) */
+ }
+ 
+ void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
+--- a/source/shared.h	2026-05-12 21:04:08.000000000 -0300
++++ b/source/shared.h	2026-09-18 03:40:58.018457240 -0300
+@@ -123,6 +123,10 @@
+ typedef struct texture {
+ #ifndef TEXTURES_SPEEDHACK
+ 	uint32_t last_frame;
++	/* Completion epoch in which this texture was last submitted.  Unlike
++	 * last_frame, this distinguishes draws made before and after an explicit
++	 * sceGxmFinish inside the same frame. */
++	uint32_t last_finish_epoch;
+ #endif
+ #ifdef HAVE_TEX_CACHE
+ 	uint32_t upload_frame;
+@@ -153,6 +157,21 @@
+ #endif
+ } texture;
+ 
++#ifndef TEXTURES_SPEEDHACK
++extern uint32_t vgl_finish_epoch;
++#define mark_texture_used(tex) do { \
++	(tex)->last_frame = vgl_framecount; \
++	(tex)->last_finish_epoch = vgl_finish_epoch; \
++} while (0)
++#endif
++
++/* CPU-upload vs GPU-write hazard latch. Set whenever a GXM scene boundary
++ * runs while draws may be outstanding, cleared only by an explicit GPU
++ * drain (glFinish) or by the upload barrier in _glTexSubImage2D. */
++extern GLboolean vgl_gpu_write_pending;
++extern uint32_t vgl_upload_barrier_count;
++extern uint64_t vgl_upload_barrier_us;
++
+ // Memory file cache settings
+ #ifdef HAVE_TEX_CACHE
+ extern char vgl_file_cache_path[256];
+--- a/source/textures.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/textures.c	2026-09-18 01:39:29.236523585 -0300
+@@ -23,6 +23,18 @@
+ 
+ #include "shared.h"
+ 
++/* Optional single-render-thread diagnostic hooks; no logging or added fences.
++ * Payload is bytes for copy/allocation stages, carried in the profiler counter. */
++extern int mkxp_upload_profile_enter(unsigned, uint64_t) __attribute__((weak));
++extern void mkxp_upload_profile_leave(void) __attribute__((weak));
++static void upload_profile_end(int *active) {
++    if (*active && mkxp_upload_profile_leave) mkxp_upload_profile_leave();
++}
++#define UPLOAD_PROFILE(id, bytes) \
++    int upload_profile_active __attribute__((cleanup(upload_profile_end))) = \
++        mkxp_upload_profile_enter ? mkxp_upload_profile_enter(id, bytes) : 0
++
++
+ #ifdef HAVE_UNPURE_TEXFORMATS
+ #define resolve_tex_target(target, unresolved_action) \
+ 	switch (target) { \
+@@ -961,7 +973,21 @@
+ 	} else if (tex->status != TEX_VALID) {
+ 		SET_GL_ERROR(GL_INVALID_OPERATION)
+ 	}
+-#endif	
++#endif
++
++	/* CPU-upload vs GPU-write hazard: GXM scenes execute asynchronously, so a
++	 * GPU write (clear/draw) emitted before this CPU memcpy may still be
++	 * queued. Without a drain it executes after the memcpy and wipes the
++	 * uploaded pixels (observed as missing one-shot window text after
++	 * fill_rect). glFinish submits the open scene and drains it; later
++	 * uploads skip until the next scene activity re-arms the latch. */
++	if (vgl_gpu_write_pending) {
++		uint32_t barrier_start = sceKernelGetProcessTimeLow();
++		glFinish();
++		vgl_upload_barrier_us += (uint64_t)(sceKernelGetProcessTimeLow() - barrier_start);
++		vgl_upload_barrier_count++;
++		vgl_gpu_write_pending = GL_FALSE;
++	}
+ 
+ #ifdef HAVE_TEX_CACHE
+ 	restore_tex_cache(tex);
+@@ -969,7 +995,9 @@
+ 
+ #ifndef TEXTURES_SPEEDHACK
+ 	// Copying the texture in a new mem location and dirtying old one
+-	if (tex->last_frame != OBJ_NOT_USED && (vgl_framecount - tex->last_frame <= FRAME_PURGE_FREQ)) {
++	if (tex->last_frame != OBJ_NOT_USED &&
++		tex->last_finish_epoch == vgl_finish_epoch &&
++		(vgl_framecount - tex->last_frame <= FRAME_PURGE_FREQ)) {
+ 		uint32_t size;
+ 		if (tex->mip_count > 1) {
+ 			po2_w = nearest_po2(orig_w);
+@@ -986,15 +1014,33 @@
+ 		} else {
+ 			size = orig_h * VGL_ALIGN(orig_w, 8) * bpp;
+ 		}
+-		void *texture_data = gpu_alloc_mapped(size, VGL_MEM_MAIN);
+-		vgl_fast_memcpy(texture_data, tex->data, size);
+-		gpu_free_texture_data(tex);
+-		sceGxmTextureSetData(&tex->gxm_tex, texture_data);
+-		tex->data = texture_data;
+-		tex->last_frame = OBJ_NOT_USED;
++		/* A copy-on-write clone is an optimization, not a required allocation.
++		 * Never enter the allocator's multi-second forced-GC retry path here.
++		 * If no pool can satisfy the clone immediately, one GPU fence makes the
++		 * existing backing store safe to update in place. */
++		void *texture_data;
++		{ UPLOAD_PROFILE(41, size); texture_data = gpu_try_alloc_mapped(size, VGL_MEM_MAIN); }
++		if (texture_data) {
++			{ UPLOAD_PROFILE(42, size); vgl_fast_memcpy(texture_data, tex->data, size); }
++			{ UPLOAD_PROFILE(43, 0); gpu_free_texture_data(tex); }
++			sceGxmTextureSetData(&tex->gxm_tex, texture_data);
++			tex->data = texture_data;
++			tex->last_frame = OBJ_NOT_USED;
+ #ifdef HAVE_TEX_CACHE
+-		mark_as_cacheable(tex)
++			mark_as_cacheable(tex)
+ #endif
++		} else {
++			static uint32_t cow_fallback_count = 0;
++			if (cow_fallback_count < 32) {
++				vgl_log("texsubimage COW fallback #%u: %ux%u size=%u frame=%u epoch=%u\n",
++				        cow_fallback_count + 1, orig_w, orig_h, size,
++				        vgl_framecount, vgl_finish_epoch);
++			}
++			cow_fallback_count++;
++			{ UPLOAD_PROFILE(44, 0); sceGxmFinish(gxm_context); }
++			vgl_finish_epoch++;
++			tex->last_frame = OBJ_NOT_USED;
++		}
+ 	}
+ #endif
+ 	// Calculating start address of requested texture modification
+@@ -1218,6 +1264,7 @@
+ 		}
+ 		ptr += xoffset * bpp + yoffset * mip_stride;
+ 		if (fast_store) { // Internal format and input format are the same, we can take advantage of this
++			UPLOAD_PROFILE(45, (uint64_t)width * height * bpp);
+ 			uint8_t *data = (uint8_t *)pixels;
+ 			uint32_t line_size = width * bpp;
+ 			uint32_t src_stride = (unpack_row_len ? unpack_row_len : width) * bpp;
+@@ -1231,6 +1278,7 @@
+ 				}
+ 			}
+ 		} else { // Executing texture modification via callbacks
++			UPLOAD_PROFILE(46, (uint64_t)width * height * bpp);
+ 			uint8_t *ptr_line = ptr;
+ 			uint8_t *data = (uint8_t *)pixels;
+ 			for (int i = 0; i < height; i++) {
+@@ -1702,6 +1750,7 @@
+ 			texture_slots[i].dirty = GL_FALSE;
+ #ifndef TEXTURES_SPEEDHACK
+ 			texture_slots[i].last_frame = OBJ_NOT_USED;
++			texture_slots[i].last_finish_epoch = vgl_finish_epoch;
+ #endif
+ #ifdef HAVE_TEX_CACHE
+ 			texture_slots[i].prev = NULL;
+@@ -2482,3 +2531,37 @@
+ 		SET_GL_ERROR_WITH_RET(GL_INVALID_ENUM, NULL)
+ 	}
+ }
++
++/* Session 30 (Asuka diag): ID-based lookups. Unlike vglGetGxmTexture /
++ * vglGetTexDataPointer (which read the CURRENTLY BOUND texture), these
++ * resolve the texture slot by GL texture ID directly — no GL state change,
++ * safe to call mid-composite. Diagnostics only. */
++SceGxmTexture *vglGetGxmTextureByID(GLuint texId) {
++	if (texId >= TEXTURES_NUM) {
++		SET_GL_ERROR_WITH_RET(GL_INVALID_VALUE, NULL)
++	}
++	texture *tex = &texture_slots[texId];
++	if (tex->status == TEX_UNUSED || tex->status == TEX_UNINITIALIZED)
++		return NULL;
++	return &tex->gxm_tex;
++}
++
++void *vglGetTexDataPointerByID(GLuint texId) {
++	if (texId >= TEXTURES_NUM) {
++		SET_GL_ERROR_WITH_RET(GL_INVALID_VALUE, NULL)
++	}
++	texture *tex = &texture_slots[texId];
++	if (tex->status == TEX_UNUSED || tex->status == TEX_UNINITIALIZED)
++		return NULL;
++	return tex->data;
++}
++
++/* Session 32 (Asuka diag): get the data pointer of the FBO's colorbuffer
++ * (i.e. where the GPU actually writes when rendering to this FBO). Compare
++ * with vglGetTexDataPointerByID(attached tex) to detect stale attachment. */
++void *vglGetFramebufferColorData(GLuint fbo) {
++	framebuffer *fb = (framebuffer *)fbo;
++	if (!fb || fb->tex == NULL)
++		return NULL;
++	return sceGxmColorSurfaceGetData(&fb->colorbuffer);
++}
+--- a/source/utils/gpu_utils.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/utils/gpu_utils.c	2026-09-02 03:25:10.633238850 -0300
+@@ -85,6 +85,30 @@
+ }
+ 
+ static int unsafe_allocator_counter = 0;
++
++void *gpu_try_alloc_mapped_aligned(size_t alignment, size_t size, vglMemType type) {
++	void *res = vgl_memalign(alignment, size, type);
++	if (res)
++		return res;
++
++	res = vgl_memalign(alignment, size, type == VGL_MEM_VRAM ? VGL_MEM_RAM : VGL_MEM_VRAM);
++	if (res)
++		return res;
++
++	res = vgl_memalign(alignment, size, VGL_MEM_SLOW);
++	if (res)
++		return res;
++
++	res = vgl_memalign(alignment, size, VGL_MEM_BUDGET);
++	if (res)
++		return res;
++
++	if (use_extra_mem)
++		res = vgl_memalign(alignment, size, VGL_MEM_EXTERNAL);
++
++	return res;
++}
++
+ void *gpu_alloc_mapped_aligned_unsafe(size_t alignment, size_t size, vglMemType type) {
+ 	// Performing a garbage collection cycle prior to attempting to allocate the memory again
+ 	unsafe_allocator_counter++;
+--- a/source/utils/gpu_utils.h	2026-05-12 21:04:08.000000000 -0300
++++ b/source/utils/gpu_utils.h	2026-09-02 03:25:10.633238850 -0300
+@@ -37,6 +37,13 @@
+ // Alloc a generic memblock into sceGxm mapped memory with alignment
+ void *gpu_alloc_mapped_aligned(size_t alignment, size_t size, vglMemType type);
+ 
++// Try all mapped memory pools once, without forcing garbage collection or waiting
++void *gpu_try_alloc_mapped_aligned(size_t alignment, size_t size, vglMemType type);
++
++static inline __attribute__((always_inline)) void *gpu_try_alloc_mapped(size_t size, vglMemType type) {
++	return gpu_try_alloc_mapped_aligned(MEM_ALIGNMENT, size, type);
++}
++
+ // Alloc a generic memblock into sceGxm mapped memory
+ static inline __attribute__((always_inline)) void *gpu_alloc_mapped(size_t size, vglMemType type) {
+ 	return gpu_alloc_mapped_aligned(MEM_ALIGNMENT, size, type);
+--- a/source/utils/mem_utils.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/utils/mem_utils.c	2026-09-18 14:46:44.338956711 -0300
+@@ -496,6 +496,8 @@
+ }
+ 
+ void vgl_free(void *ptr) {
++	if (!ptr)
++		return;
+ 	vglMemType type = vgl_mem_get_type_by_addr(ptr);
+ 	if (type == VGL_MEM_EXTERNAL)
+ #ifdef HAVE_WRAPPED_ALLOCATORS
+@@ -575,8 +577,17 @@
+ 	else if (size <= tm_free[type])
+ 		return heap_alloc(type, size, alignment);
+ #else
+-	else if (mempool_mspace[type])
+-		return sceClibMspaceMemalign(mempool_mspace[type], alignment, size);
++	else if (mempool_mspace[type]) {
++		/* Generalized fix (Session 24): tiny VRAM mspace allocations
++		 * (e.g. 12-byte quad index buffers via memalign(16)) produce
++		 * minimal chunks whose deferred free wedges sceClibMspaceFree.
++		 * Round the PHYSICAL size up to 32 bytes for VRAM; callers keep
++		 * their requested logical size and alignment semantics. */
++		size_t phys_size = size;
++		if (type == VGL_MEM_VRAM && phys_size < 32)
++			phys_size = 32;
++		return sceClibMspaceMemalign(mempool_mspace[type], alignment, phys_size);
++	}
+ #endif
+ 	return NULL;
+ }
+--- a/source/vitaGL.h	2026-05-12 21:04:08.000000000 -0300
++++ b/source/vitaGL.h	2026-09-18 14:46:44.338956711 -0300
+@@ -1078,6 +1078,18 @@
+ // Get the internal texture data pointer of a GL texture.
+ void *vglGetTexDataPointer(GLenum target);
+ 
++// Get the internal sceGxm texture descriptor of a GL texture by texture ID
++// (no binding, no state change — diagnostics only).
++SceGxmTexture *vglGetGxmTextureByID(GLuint texture);
++
++// Get the internal texture data pointer of a GL texture by texture ID
++// (no binding, no state change — diagnostics only).
++void *vglGetTexDataPointerByID(GLuint texture);
++
++// Get the FBO colorbuffer data pointer (where the GPU writes) by FBO ID
++// (no binding, no state change — diagnostics only).
++void *vglGetFramebufferColorData(GLuint fbo);
++
+ // Simple vitaGL init function. Legacy pool size is the amount of memory to reserve to handle immediate mode usage.
+ GLboolean vglInit(int legacy_pool_size);
+ 

@@ -1,0 +1,21 @@
+{
+  "rgssVersion": 0,
+  "defScreenW": 960,
+  "defScreenH": 544,
+  "fixedAspectRatio": true,
+  "screenMode": "fullscreen",
+  "vsync": false,
+  "frameSkip": false,
+  "pathCache": false,
+  "enableAudio": true,
+  "enableSettings": false,
+  "enableReset": false,
+  "debugMode": false,
+  "useScriptNames": false,
+  "printFPS": false,
+  "preloadScript": [
+    "app0:/time_strftime_guard.rb",
+    "app0:/performance_patch.rb"
+  ],
+  "subImageFix": false
+}

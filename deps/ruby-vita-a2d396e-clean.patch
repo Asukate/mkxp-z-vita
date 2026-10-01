@@ -1,0 +1,251 @@
+diff --git a/configure.ac b/configure.ac
+index 67b3a23..7360536 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -2540,6 +2540,9 @@ AS_CASE([$coroutine_type], [yes|''], [
+         [*86-mingw*], [
+             coroutine_type=win32
+         ],
++        [arm*-vita*], [
++            coroutine_type=arm32
++        ],
+         [arm*-linux*], [
+             coroutine_type=arm32
+         ],
+diff --git a/cont.c b/cont.c
+index 4b18ddd..d06dbe2 100644
+--- a/cont.c
++++ b/cont.c
+@@ -16,6 +16,10 @@
+ #include <sys/mman.h>
+ #endif
+ 
++#ifdef __vita__
++#include <psp2/kernel/threadmgr.h>
++#endif
++
+ // On Solaris, madvise() is NOT declared for SUS (XPG4v2) or later,
+ // but MADV_* macros are defined when __EXTENSIONS__ is defined.
+ #ifdef NEED_MADVICE_PROTOTYPE_USING_CADDR_T
+@@ -750,6 +754,36 @@ fiber_entry(struct coroutine_context * from, struct coroutine_context * to)
+     rb_fiber_t *fiber = to->argument;
+     rb_thread_t *thread = fiber->cont.saved_ec.thread_ptr;
+ 
++#if defined(__vita__) && defined(COROUTINE_PTHREAD_CONTEXT)
++    /*
++     * Vita pthread preserves pthread_attr_setstack()'s size but ignores its
++     * caller-provided address and asks the kernel for a separate stack.  The
++     * Fiber EC was initialized from the unused caller-owned interval in
++     * fiber_initialize_coroutine().  Anchor it to the stack this pthread is
++     * actually executing on before any Ruby Fiber code can run.
++     */
++    volatile VALUE vita_stack_anchor = 0;
++    SceKernelThreadInfo vita_thread_info = {0};
++    vita_thread_info.size = sizeof(vita_thread_info);
++
++    if (sceKernelGetThreadInfo(sceKernelGetThreadId(), &vita_thread_info) >= 0 &&
++        vita_thread_info.stack != NULL && vita_thread_info.stackSize > 0) {
++        char *stack_low = (char *)vita_thread_info.stack;
++        char *stack_high = stack_low + vita_thread_info.stackSize;
++        char *stack_anchor = (char *)&vita_stack_anchor;
++
++        if (stack_anchor > stack_low && stack_anchor < stack_high) {
++            rb_execution_context_t *ec = &fiber->cont.saved_ec;
++
++            /* ARM/Vita uses a downward-growing machine stack.  This mirrors
++             * native_thread_init_stack(): stack_start is the entry-time live
++             * anchor, and stack_maxsize is the usable depth below it. */
++            ec->machine.stack_start = (VALUE *)&vita_stack_anchor;
++            ec->machine.stack_maxsize = (size_t)(stack_anchor - stack_low);
++        }
++    }
++#endif
++
+ #ifdef COROUTINE_PTHREAD_CONTEXT
+     ruby_thread_set_native(thread);
+ #endif
+diff --git a/coroutine/arm32/Context.S b/coroutine/arm32/Context.S
+index 1850c4c..30922a1 100644
+--- a/coroutine/arm32/Context.S
++++ b/coroutine/arm32/Context.S
+@@ -9,6 +9,8 @@
+ #define PREFIXED_SYMBOL(prefix,name) TOKEN_PASTE(prefix,name)
+ 
+ .file "Context.S"
++.arch armv7-a
++.fpu neon
+ .text
+ .globl PREFIXED_SYMBOL(SYMBOL_PREFIX,coroutine_transfer)
+ .align 2
+@@ -19,13 +21,25 @@ PREFIXED_SYMBOL(SYMBOL_PREFIX,coroutine_transfer):
+ 	# Save caller state (8 registers + return address)
+ 	push {r4-r11,lr}
+ 
++	# Save callee-saved VFP registers (d8-d15) and FPSCR. Without this the
++	# resumed fiber sees the other fiber's floating point state; RGSS code
++	# keeps live values in these registers across the switch call.
++	vpush {d8-d15}
++	vmrs r3, fpscr
++	push {r3}
++
+ 	# Save caller stack pointer
+ 	str sp, [r0]
+ 
+ 	# Restore callee stack pointer
+ 	ldr sp, [r1]
+ 
+-	# Restore callee state (8 registers program counter)
++	# Restore callee FP state
++	pop {r3}
++	vmsr fpscr, r3
++	vpop {d8-d15}
++
++	# Restore callee state (8 registers + program counter)
+ 	pop {r4-r11,pc}
+ 
+ #if defined(__linux__) && defined(__ELF__)
+diff --git a/coroutine/arm32/Context.h b/coroutine/arm32/Context.h
+index 09410eb..1caeae6 100644
+--- a/coroutine/arm32/Context.h
++++ b/coroutine/arm32/Context.h
+@@ -19,6 +19,11 @@
+ #define COROUTINE_LIMITED_ADDRESS_SPACE
+ 
+ enum {COROUTINE_REGISTERS = 8};
++/* d8-d15 are callee-saved under the hard-float ABI (Vita is always built with
++ * -mfloat-abi=hard); their slots plus one FPSCR word live in the coroutine
++ * frame so coroutine_transfer in Context.S and coroutine_initialize agree on
++ * the layout. */
++enum {COROUTINE_VFP_REGISTERS = 16};
+ 
+ struct coroutine_context
+ {
+@@ -48,6 +53,14 @@ static inline void coroutine_initialize(
+ 
+     context->stack_pointer -= COROUTINE_REGISTERS;
+     memset(context->stack_pointer, 0, sizeof(void*) * COROUTINE_REGISTERS);
++
++    // Mirror the frame built by coroutine_transfer in Context.S: the callee
++    // VFP registers (d8-d15), then the FPSCR word at the lowest address, so a
++    // freshly created fiber starts with a defined floating point state.
++    context->stack_pointer -= COROUTINE_VFP_REGISTERS;
++    memset(context->stack_pointer, 0, sizeof(void*) * COROUTINE_VFP_REGISTERS);
++    context->stack_pointer -= 1;
++    memset(context->stack_pointer, 0, sizeof(void*));
+ }
+ 
+ struct coroutine_context * coroutine_transfer(struct coroutine_context * current, struct coroutine_context * target);
+diff --git a/gc.c b/gc.c
+index d77dc2c..ddf53b9 100644
+--- a/gc.c
++++ b/gc.c
+@@ -4997,7 +4997,20 @@ read_barrier_handler(uintptr_t address)
+     RB_VM_LOCK_LEAVE();
+ }
+ 
+-#if defined(_WIN32)
++#if defined(__vita__)
++/* The Vita SDK has no POSIX signal-info ABI and page protection is a no-op
++ * in the compatibility allocator. Ruby's normal mark/sweep collector still
++ * works; compaction read barriers are intentionally disabled on this target. */
++static void
++uninstall_handlers(void)
++{
++}
++
++static void
++install_handlers(void)
++{
++}
++#elif defined(_WIN32)
+ static LPTOP_LEVEL_EXCEPTION_FILTER old_handler;
+ typedef void (*signal_handler)(int);
+ static signal_handler old_sigsegv_handler;
+diff --git a/loadpath.c b/loadpath.c
+index b8969e6..df52412 100644
+--- a/loadpath.c
++++ b/loadpath.c
+@@ -56,10 +56,18 @@ typedef char ruby_lib_version_string[(int)sizeof(RUBY_LIB_VERSION) - 2];
+ #endif
+ 
+ #if !defined(LOAD_RELATIVE) || !LOAD_RELATIVE
+-const char ruby_exec_prefix[] = RUBY_EXEC_PREFIX;
++const char ruby_exec_prefix[] =
++#ifdef __vita__
++    "";
++#else
++    RUBY_EXEC_PREFIX;
++#endif
+ #endif
+ 
+ const char ruby_initial_load_paths[] =
++#ifdef __vita__
++    ""
++#else
+ #ifndef NO_INITIAL_LOAD_PATH
+ #ifdef RUBY_SEARCH_PATH
+     RUBY_SEARCH_PATH "\0"
+@@ -87,5 +95,6 @@ const char ruby_initial_load_paths[] =
+     RUBY_ARCH_LIB_FOR(RUBY_THINARCH) "\0"
+ #endif
+     RUBY_ARCH_LIB_FOR(RUBY_ARCH) "\0"
++#endif
+ #endif
+     "";
+diff --git a/ruby.c b/ruby.c
+index f63cecd..5b8fd73 100644
+--- a/ruby.c
++++ b/ruby.c
+@@ -2777,5 +2777,11 @@ ruby_sysinit(int *argc, char ***argv)
+ 	origarg.argc = *argc;
+ 	origarg.argv = *argv;
+     }
++#if !defined(__vita__)
++    /* Vita starts the homebrew with its own tty/file descriptors.  The
++     * desktop repair path probes them with fstat(), creates pipes, and
++     * duplicates descriptors; those POSIX operations are not a valid
++     * startup contract on the Vita libc shim and can trap before ruby_init. */
+     fill_standard_fds();
++#endif
+ }
+diff --git a/thread_pthread.h b/thread_pthread.h
+index 2ac3540..412b40b 100644
+--- a/thread_pthread.h
++++ b/thread_pthread.h
+@@ -70,12 +70,15 @@ typedef struct rb_global_vm_lock_struct {
+ } rb_global_vm_lock_t;
+ 
+ 
+-#if __STDC_VERSION__ >= 201112
++#if !defined(__vita__) && __STDC_VERSION__ >= 201112
+   #define RB_THREAD_LOCAL_SPECIFIER _Thread_local
+-#elif defined(__GNUC__)
++#elif !defined(__vita__) && defined(__GNUC__)
+   /* note that ICC (linux) and Clang are covered by __GNUC__ */
+   #define RB_THREAD_LOCAL_SPECIFIER __thread
+ #else
++  /* Vita's loader/emulator does not provide the compiler TLS model used by
++   * __thread. Use Ruby's pthread-key fallback for both current EC and the
++   * native-thread cache instead. */
+ 
+ typedef pthread_key_t native_tls_key_t;
+ 
+diff --git a/transient_heap.c b/transient_heap.c
+index c3df263..abfa180 100644
+--- a/transient_heap.c
++++ b/transient_heap.c
+@@ -60,7 +60,14 @@
+                                           /*  K      M */
+ #define TRANSIENT_HEAP_BLOCK_SIZE  (1024 *   32       ) /* 32KB int16_t */
+ #ifndef TRANSIENT_HEAP_TOTAL_SIZE
++# if defined(__vita__)
++/* Keep the optional transient allocation arena below Vita's practical
++ * contiguous-allocation limit. Large requests fall back to Ruby's normal
++ * heap, so this only reduces the optimization's cache, not Ruby capacity. */
++#  define TRANSIENT_HEAP_TOTAL_SIZE  (1024 * 1024 * 4) /* 4 MB */
++# else
+ #define TRANSIENT_HEAP_TOTAL_SIZE  (1024 * 1024 *   32) /* 32 MB */
++# endif
+ #endif
+ #define TRANSIENT_HEAP_ALLOC_MAX   (1024 *    2       ) /* 2 KB */
+ #define TRANSIENT_HEAP_BLOCK_NUM   (TRANSIENT_HEAP_TOTAL_SIZE / TRANSIENT_HEAP_BLOCK_SIZE)

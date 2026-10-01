@@ -1,0 +1,9 @@
+{
+  "fixedAspectRatio": false,
+  "vsync": false,
+  "frameSkip": false,
+  "preloadScript": [
+    "ux0:/data/hardrpg/config/shims/vita_absolutizer.rb",
+    "ux0:/data/hardrpg/config/shims/vita_diet.rb"
+  ]
+}
