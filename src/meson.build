@@ -72,6 +72,14 @@ if host_system == 'vita'
     vita_shark = compilers['cpp'].find_library('vitashark', dirs: vita_libdir, static: true, required: true)
     vita_threadmgr = compilers['cpp'].find_library('SceKernelThreadMgr_stub', dirs: vita_libdir, static: true, required: true)
     global_dependencies += [vita_gl, vita_mathneon, vita_appmgr, vita_apputil, vita_ctrl, vita_common_dialog, vita_dmac, vita_modulemgr, vita_shacc, vita_shark, vita_threadmgr]
+    if get_option('native_launcher')
+        global_link_args += '-Wl,--wrap=sceCommonDialogUpdate'
+        global_dependencies += [
+            compilers['cpp'].find_library('SceIme_stub', dirs: vita_libdir, static: true, required: true),
+            compilers['cpp'].find_library('SceTouch_stub', dirs: vita_libdir, static: true, required: true),
+            compilers['cpp'].find_library('SceSysmodule_stub', dirs: vita_libdir, static: true, required: true),
+        ]
+    endif
 
     # SDL keeps its vitaGL references weak so no-GL SDL clients can link
     # without the renderer. Make the production executable pull the real
@@ -155,10 +163,18 @@ main_source = files(
 )
 
 if host_system == 'vita'
-    main_source += files('vita_stubs.cpp', 'vita_posix_compat.c', 'vita_livearea.cpp', 'input/vita_input.cpp')
+    main_source += files('vita_stubs.cpp', 'vita_posix_compat.c', 'vita_livearea.cpp', 'input/vita_input.cpp', 'vita_error_report.cpp', 'vita_resume.cpp', 'vita_runtime_log.c')
+    global_link_args += '-Wl,--wrap=_write_r'
+    if get_option('native_launcher') and not get_option('proto_launcher')
+        error('native_launcher requires proto_launcher')
+    endif
     if get_option('proto_launcher')
         main_source += files('vita_proto_launcher.cpp')
         global_args += '-DMKXPZ_PROTO_LAUNCHER'
+        if get_option('native_launcher')
+            main_source += files('native_launcher/model.cpp', 'native_launcher/ui.cpp', 'native_launcher/view.cpp', 'native_launcher/runtime.cpp', 'native_launcher/text_input.cpp')
+            global_args += '-DMKXPZ_NATIVE_LAUNCHER'
+        endif
     endif
     if get_option('vita_diagnostics')
         main_source += files('vita_diagnostic.cpp', 'vita_uid_auditor_bridge.c')

@@ -215,9 +215,10 @@
  uint32_t get_color_from_texture(SceGxmTextureFormat type) {
  	switch (type) {
  	case SCE_GXM_TEXTURE_FORMAT_U8_R:
---- a/source/gxm.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/gxm.c	2026-09-18 03:40:58.018457240 -0300
-@@ -23,6 +23,20 @@
+--- a/source/gxm.c
++++ b/source/gxm.c
+@@ -22,8 +22,22 @@
+  */
  
  #include "shared.h"
  
@@ -238,7 +239,9 @@
  #define MAX_SCENES_PER_FRAME 8 // Maximum amount of scenes per frame allowed by sceGxm per render target
  
  // FIXME: Since we use our own default uniform buffers circular pool, fragment and vertex buffer rings can likely be reduced in size
-@@ -100,6 +114,10 @@
+ uint32_t gxm_param_buf_size = SCE_GXM_DEFAULT_PARAMETER_BUFFER_SIZE; // Param buffer size for sceGxm
+@@ -99,8 +113,12 @@
+ #ifndef SKIP_ERROR_HANDLING
  float *legacy_pool_end = NULL; // Address of the end of the GL1 immediate draw pipeline vertex pool
  #endif
  uint32_t vgl_framecount = 0; // Current frame number since application started
@@ -249,7 +252,9 @@
  
  void *frame_purge_list[FRAME_PURGE_FREQ][FRAME_PURGE_LIST_SIZE]; // Purge list for internal elements
  void *frame_rt_purge_list[FRAME_PURGE_FREQ][FRAME_PURGE_RENDERTARGETS_LIST_SIZE]; // Purge list for rendertargets
-@@ -159,10 +177,47 @@
+ int frame_purge_idx = 0; // Index for currently populatable purge list
+@@ -158,11 +176,48 @@
+ 	return sceGxmCreateRenderTarget(&renderTargetParams, rt);
  }
  
  #ifdef HAVE_SHARED_RENDERTARGETS
@@ -257,7 +262,7 @@
 +#define MAX_RENDER_TARGETS_NUM 12 // Maximum amount of dedicated render targets usable for fbos
  #define MAX_SHARED_RT_SIZE 256 // Maximum  width value in pixels for shared rendertargets usage
  render_target rt_list[MAX_RENDER_TARGETS_NUM];
- 
++
 +#if defined(HAVE_SHARED_RENDERTARGETS) && defined(RECYCLE_RENDERTARGETS)
 +void __vglInvalidateSharedRenderTarget(render_target *target);
 +#endif
@@ -294,11 +299,12 @@
 +	return r;
 +}
 +#endif
-+
+ 
  render_target *get_free_render_target(int w, int h) {
  	int i;
  	for (i = 0; i < MAX_RENDER_TARGETS_NUM; i++) {
-@@ -178,6 +233,15 @@
+@@ -177,36 +232,27 @@
+ #ifdef LOG_ERRORS
  			if (r)
  				vgl_log("%s:%d Failed to create a shared rendertarget of size %dx%d (%s).\n", __FILE__, __LINE__, w, h, get_gxm_error_literal(r));
  #endif
@@ -314,7 +320,7 @@
  			rt_list[i].w = w;
  			rt_list[i].h = h;
  			rt_list[i].ref_count = 1;
-@@ -185,27 +249,9 @@
+ 			return &rt_list[i];
  		}
  	}
  #ifdef RECYCLE_RENDERTARGETS
@@ -345,7 +351,9 @@
  #else
  #ifdef LOG_ERRORS
  	vgl_log("%s:%d Failed to create a shared rendertarget of size %dx%d (Out of rendertargets handles).\n", __FILE__, __LINE__, w, h);
-@@ -272,27 +318,42 @@
+ #endif
+@@ -271,29 +317,44 @@
+ #ifndef HAVE_SINGLE_THREADED_GC
  	for (;;) {
  		// Waiting for garbage collection request
  		sceKernelWaitSema(gc_mutex[0], 1, NULL);
@@ -388,7 +396,9 @@
  		sceKernelSignalSema(gc_mutex[1], 1);
  	}
  #ifndef HAVE_PTHREAD
-@@ -581,11 +642,20 @@
+ 	return sceKernelExitDeleteThread(0);
+@@ -580,21 +641,31 @@
+ static inline __attribute__((always_inline)) void scene_end(void) {
  	// Ends current gxm scene
  	query_fence.value++;
  	sceGxmEndScene(gxm_context, NULL, &query_fence);
@@ -409,7 +419,8 @@
  	if (in_use_framebuffer != active_write_fb || needs_scene_reset || dirty_framebuffer || dirty_query) {
  		dirty_framebuffer = GL_FALSE;
  		dirty_query = GL_FALSE;
-@@ -594,6 +664,7 @@
+ 		needs_scene_reset = GL_FALSE;
+ 		in_use_framebuffer = active_write_fb;
  		is_fbo_float = in_use_framebuffer ? in_use_framebuffer->is_float : GL_FALSE;
  
  		// Ending drawing scene
@@ -417,7 +428,9 @@
  		if (needs_end_scene) {
  			scene_end();
  		} else {
-@@ -606,6 +677,7 @@
+ 			if (legacy_pool_size) {
+@@ -605,8 +676,9 @@
+ #endif
  			}
  			needs_end_scene = GL_TRUE;
  		}
@@ -425,7 +438,9 @@
  
  #ifndef SKIP_SPLASHSCREEN	
  		// If we're running the boot splashscreen, we need to terminate it first
-@@ -619,6 +691,7 @@
+ 		if (is_splashscreen_active) {
+@@ -618,8 +690,9 @@
+ 			sceKernelDeleteSema(splash_mutex[1]);
  		}
  #endif
  
@@ -433,7 +448,9 @@
  		// Starting drawing scene
  		is_rendering_display = !active_write_fb;
  		if (is_rendering_display) { // Default framebuffer is used
-@@ -638,6 +711,41 @@
+ 			if (system_app_mode) {
+@@ -637,8 +710,43 @@
+ 				vgl_log("%s:%d Scene reset failed due to sceGxmBeginScene erroring (%s) on display.\n", __FILE__, __LINE__, get_gxm_error_literal(r));
  			}
  #endif
  		} else {
@@ -475,7 +492,9 @@
  			// If a depthstencil surface is not bound to the in use framebuffer, we get one for it to ensure scissor testing compatibility
  			if (!active_write_fb->depthbuffer_ptr) {
  				init_depth_stencil_buffer(active_write_fb->width, active_write_fb->height, &active_write_fb->depthbuffer, GL_FALSE);
-@@ -689,6 +797,7 @@
+ 				active_write_fb->depthbuffer_ptr = &active_write_fb->depthbuffer;
+@@ -688,8 +796,9 @@
+ 			if (r)
  				vgl_log("%s:%d Scene reset failed due to sceGxmBeginScene erroring (%s) on framebuffer 0x%08X.\n", __FILE__, __LINE__, get_gxm_error_literal(r), active_write_fb);
  #endif
  		}
@@ -483,7 +502,9 @@
  
  		// Setting back current viewport if enabled cause sceGxm will reset it at sceGxmEndScene call
  		if (old_framebuffer != in_use_framebuffer) {
-@@ -758,6 +867,7 @@
+ 			dirty_scissor_state = GL_TRUE;
+@@ -757,8 +866,9 @@
+ 	gxm_display_buffer_count = count;
  }
  
  void vglSwapBuffers(GLboolean has_commondialog) {
@@ -491,7 +512,9 @@
  #ifndef SKIP_SPLASHSCREEN
  	// Ignore display swaps during splashscreen since we handle them in the splashscreen thread
  	if (is_splashscreen_active)
-@@ -807,6 +917,7 @@
+ 		return;
+@@ -806,8 +916,9 @@
+ 	needs_end_scene = GL_FALSE;
  
  	if (!needs_scene_reset)
  		scene_end();
@@ -499,7 +522,9 @@
  
  	if (has_commondialog) {
  		// Populating SceCommonDialog parameters
-@@ -926,7 +1037,9 @@
+ 		SceCommonDialogUpdateParam updateParam;
+@@ -925,19 +1036,23 @@
+ 		queue_cb_data.addr = gxm_color_surfaces_addr[gxm_back_buffer_index];
  #ifdef HAVE_PROFILING
  		tick = sceKernelGetProcessTimeLow();
  #endif
@@ -509,7 +534,8 @@
  #ifdef HAVE_PROFILING
  		gpu_stall_cnt += sceKernelGetProcessTimeLow() - tick;
  #endif
-@@ -935,8 +1048,10 @@
+ #ifdef HAVE_CPU_TRACER
+ 		sceRazorCpuSync();
  #endif
  		gxm_front_buffer_index = gxm_back_buffer_index;
  		gxm_back_buffer_index = (gxm_back_buffer_index + 1) % gxm_display_buffer_count;
@@ -520,9 +546,24 @@
  	
  	// Perform resolution change if there's one pending
  	if (NEW_DISPLAY_WIDTH) {
-@@ -972,6 +1087,12 @@
+ 		sceGxmFinish(gxm_context);
+@@ -967,12 +1082,25 @@
+ #endif
+ }
+ 
+ void glFinish(void) {
+-	// Waiting for GPU to finish drawing jobs
++	/* Submit the existing scene without opening a replacement. An empty
++	 * replacement still owns its color surface and can store stale tiles
++	 * over subsequent CPU uploads or recycled texture storage. The next
++	 * draw's scene_reset() starts a scene with the current attachment. */
++	if (needs_end_scene) {
++		scene_end();
++		needs_end_scene = GL_FALSE;
++	}
++	needs_scene_reset = GL_TRUE;
  	dirty_framebuffer = GL_TRUE;
- 	scene_reset();
+-	scene_reset();
  	sceGxmFinish(gxm_context);
 +	/* Any texture submitted in an older epoch can now be updated in place.
 +	 * Frame numbers alone cannot express a finish followed by another draw in
@@ -533,7 +574,9 @@
  }
  
  void glReleaseShaderCompiler(void) {
-@@ -1003,4 +1124,4 @@
+ 	if (is_shark_online) {
+@@ -1002,5 +1130,5 @@
+ 		SET_GL_ERROR_WITH_VALUE(GL_INVALID_VALUE, size)
  	}
  #endif
  	gxm_display_rt_size = size;
@@ -906,3 +949,17 @@
  // Simple vitaGL init function. Legacy pool size is the amount of memory to reserve to handle immediate mode usage.
  GLboolean vglInit(int legacy_pool_size);
  
+
+--- a/source/shared.h
++++ b/source/shared.h
+@@ -47,7 +47,9 @@
+ #define FRAME_PURGE_LIST_SIZE 16384 // Number of elements a single frame can hold
+ #define FRAME_PURGE_RENDERTARGETS_LIST_SIZE 128 // Number of rendertargets a single frame can hold
+ #define FRAME_PURGE_FREQ 4 // Frequency in frames for garbage collection
+-#define BUFFERS_NUM 256 // Maximum amount of framebuffers objects usable
++// RGSS bitmaps each retain a framebuffer, including source-only images.
++// Menu transitions can exceed 256 live objects before Ruby collects them.
++#define BUFFERS_NUM 1024 // Maximum amount of framebuffer/renderbuffer objects
+ #ifdef HAVE_HIGH_FFP_TEXUNITS
+ #define FFP_VERTEX_ATTRIBS_NUM 9 // Number of attributes used in ffp shaders
+ #else

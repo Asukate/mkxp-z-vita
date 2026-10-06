@@ -436,6 +436,7 @@ static char vita_img_error[256];
 
 static void vita_img_set_error(const char *message) {
     snprintf(vita_img_error, sizeof(vita_img_error), "%s", message ? message : "");
+    SDL_SetError("%s", vita_img_error);
 }
 
 typedef struct VitaPNGReader {
@@ -458,16 +459,26 @@ static unsigned char *vita_read_rw(SDL_RWops *src, size_t *size_out, int freesrc
     Sint64 size;
     unsigned char *data;
     size_t read_size;
-    if (!src) return NULL;
+    if (!src) {
+        vita_img_set_error("image stream is null");
+        return NULL;
+    }
     size = SDL_RWsize(src);
-    if (size <= 0 || size > (Sint64)SIZE_MAX) {
+    if (size <= 0 || (uint64_t)size > SIZE_MAX) {
+        vita_img_set_error("invalid image stream size");
         if (freesrc) SDL_RWclose(src);
         return NULL;
     }
     read_size = (size_t)size;
     data = (unsigned char *)malloc(read_size);
-    if (!data || SDL_RWseek(src, 0, RW_SEEK_SET) < 0 ||
-        SDL_RWread(src, data, 1, read_size) != read_size) {
+    if (!data) {
+        vita_img_set_error("out of memory reading image");
+    } else if (SDL_RWseek(src, 0, RW_SEEK_SET) < 0) {
+        vita_img_set_error("unable to seek image stream");
+        free(data);
+        data = NULL;
+    } else if (SDL_RWread(src, data, 1, read_size) != read_size) {
+        vita_img_set_error("incomplete image stream read");
         free(data);
         data = NULL;
     }
@@ -522,7 +533,12 @@ static SDL_Surface *vita_png_decode(const unsigned char *data, size_t size) {
     png_read_update_info(png, info);
     rowbytes = png_get_rowbytes(png, info);
     surface = vita_make_surface((int)width, (int)height);
-    if (!surface || rowbytes < width * 4u) {
+    if (!surface) {
+        vita_img_set_error("out of memory allocating PNG pixels");
+        png_destroy_read_struct(&png, &info, NULL);
+        return NULL;
+    }
+    if (rowbytes < width * 4u) {
         vita_img_set_error("invalid PNG dimensions");
         if (surface) SDL_FreeSurface(surface);
         png_destroy_read_struct(&png, &info, NULL);
@@ -530,6 +546,7 @@ static SDL_Surface *vita_png_decode(const unsigned char *data, size_t size) {
     }
     rows = (png_bytep *)calloc(height, sizeof(*rows));
     if (!rows) {
+        vita_img_set_error("out of memory allocating PNG rows");
         SDL_FreeSurface(surface);
         png_destroy_read_struct(&png, &info, NULL);
         return NULL;
@@ -602,7 +619,6 @@ SDL_Surface *IMG_LoadTyped_RW(SDL_RWops *src, int freesrc, const char *type) {
     (void)type;
     data = vita_read_rw(src, &size, freesrc);
     if (!data) {
-        vita_img_set_error("unable to read image");
         return NULL;
     }
     if (size >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff)

@@ -23,6 +23,8 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <list>
+#include <new>
 #include <pwd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -418,6 +420,69 @@ struct VitaTtfLayout
     bool has_ink;
 };
 
+// Cache FreeType results, never composed text or GPU textures. Color, position
+// and kerning remain per draw. Bound both storage and entry count across faces.
+struct VitaTtfGlyphKey
+{
+    TTF_Font *font;
+    FT_UInt index;
+    unsigned int x_ppem, y_ppem;
+    int style, hinting, outline;
+    bool rasterize;
+    bool operator==(const VitaTtfGlyphKey &other) const {
+        return font == other.font && index == other.index &&
+            x_ppem == other.x_ppem && y_ppem == other.y_ppem &&
+            style == other.style && hinting == other.hinting &&
+            outline == other.outline && rasterize == other.rasterize;
+    }
+};
+struct VitaTtfCachedGlyph
+{
+    VitaTtfGlyphKey key;
+    int left, top, pitch, m_left, m_top;
+    unsigned int width, rows, m_width, m_rows;
+    FT_Pos advance;
+    std::vector<unsigned char> coverage;
+};
+static std::list<VitaTtfCachedGlyph> vita_ttf_glyphs;
+static size_t vita_ttf_glyph_bytes = 0;
+static constexpr size_t VitaTtfGlyphEntries = 256;
+static constexpr size_t VitaTtfGlyphBytes = 512 * 1024;
+
+static void vita_ttf_forget_glyphs(TTF_Font *font)
+{
+    for (auto it = vita_ttf_glyphs.begin(); it != vita_ttf_glyphs.end();) {
+        if (it->key.font == font) {
+            vita_ttf_glyph_bytes -= it->coverage.size();
+            it = vita_ttf_glyphs.erase(it);
+        } else ++it;
+    }
+}
+static const VitaTtfCachedGlyph *vita_ttf_find_glyph(const VitaTtfGlyphKey &key)
+{
+    for (auto it = vita_ttf_glyphs.begin(); it != vita_ttf_glyphs.end(); ++it) {
+        if (it->key == key) {
+            vita_ttf_glyphs.splice(vita_ttf_glyphs.begin(), vita_ttf_glyphs, it);
+            return &vita_ttf_glyphs.front();
+        }
+    }
+    return nullptr;
+}
+static void vita_ttf_remember_glyph(const VitaTtfCachedGlyph &glyph)
+{
+    if (glyph.coverage.size() > VitaTtfGlyphBytes) return;
+    while (!vita_ttf_glyphs.empty() &&
+           (vita_ttf_glyphs.size() >= VitaTtfGlyphEntries ||
+            vita_ttf_glyph_bytes + glyph.coverage.size() > VitaTtfGlyphBytes)) {
+        vita_ttf_glyph_bytes -= vita_ttf_glyphs.back().coverage.size();
+        vita_ttf_glyphs.pop_back();
+    }
+    try {
+        vita_ttf_glyphs.push_front(glyph);
+        vita_ttf_glyph_bytes += glyph.coverage.size();
+    } catch (const std::bad_alloc &) { /* Caching is optional. */ }
+}
+
 static bool vita_ttf_layout(TTF_Font *font,
                             const std::vector<uint32_t> &codepoints,
                             bool rasterize, VitaTtfLayout *layout)
@@ -470,8 +535,24 @@ static bool vita_ttf_layout(TTF_Font *font,
         unsigned int m_rows = 0;
         std::vector<unsigned char> coverage;
 
-        if (FT_Load_Glyph(font->face, glyph, FT_LOAD_DEFAULT) == 0)
-        {
+        const VitaTtfGlyphKey key{font, glyph,
+            font->face->size ? font->face->size->metrics.x_ppem : 0U,
+            font->face->size ? font->face->size->metrics.y_ppem : 0U,
+            font->style, font->hinting, outline, rasterize};
+        const VitaTtfCachedGlyph *cached = vita_ttf_find_glyph(key);
+        FT_Pos advance = 0;
+        bool loaded = cached != nullptr;
+        bool cacheable = !rasterize;
+        if (cached) {
+            left = cached->left; top = cached->top;
+            width = cached->width; rows = cached->rows; pitch = cached->pitch;
+            m_left = cached->m_left; m_top = cached->m_top;
+            m_width = cached->m_width; m_rows = cached->m_rows;
+            advance = cached->advance;
+            coverage = cached->coverage;
+        } else if (FT_Load_Glyph(font->face, glyph, FT_LOAD_DEFAULT) == 0) {
+            loaded = true;
+            advance = font->face->glyph->advance.x;
             if (rasterize)
             {
                 /* Measure from the UNSTROKED raster; the surface then grows
@@ -498,6 +579,7 @@ static bool vita_ttf_layout(TTF_Font *font,
                     left = font->face->glyph->bitmap_left;
                     top = font->face->glyph->bitmap_top;
                     have_bitmap = true;
+                    cacheable = !want_stroke;
                 }
 
                 if (have_bitmap && bitmap)
@@ -569,7 +651,7 @@ static bool vita_ttf_layout(TTF_Font *font,
                         FT_Stroker_Done(stroker);
                     }
                     FT_Done_Glyph(outline_copy);
-                    (void)stroked;
+                    cacheable = have_bitmap && stroked;
                 }
             }
             else
@@ -588,6 +670,15 @@ static bool vita_ttf_layout(TTF_Font *font,
                 m_rows = rows;
             }
 
+            if (cacheable) {
+                try {
+                    vita_ttf_remember_glyph(VitaTtfCachedGlyph{key,
+                        left, top, pitch, m_left, m_top, width, rows, m_width, m_rows,
+                        advance, coverage});
+                } catch (const std::bad_alloc &) { /* Keep the rendered result. */ }
+            }
+        }
+        if (loaded) {
             if (m_width && m_rows)
             {
                 const int box_left = pos_x + m_left;
@@ -612,7 +703,7 @@ static bool vita_ttf_layout(TTF_Font *font,
                 layout->has_ink = true;
             }
 
-            pen += font->face->glyph->advance.x;
+            pen += advance;
             previous = glyph;
         }
 
@@ -969,6 +1060,7 @@ void TTF_CloseFont(TTF_Font *font)
 {
     if (!font)
         return;
+    vita_ttf_forget_glyphs(font);
     if (font->face)
         FT_Done_Face(font->face);
     /* vita_ttf_blobs owns the immutable backing memory.  It intentionally

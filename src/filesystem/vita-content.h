@@ -49,9 +49,11 @@ inline std::vector<std::string> mountOrder(
     const std::vector<std::string> &patches, const std::vector<std::string> &rtps,
     const std::string &assetsArchive = "") {
     std::vector<std::string> paths = patches;
+    // Match RGSS: encrypted game assets precede loose files, which may
+    // contain generic RTP copies. Explicit patch mounts still override both.
+    if (!archive.empty()) paths.push_back(archive);
     paths.push_back(gameRoot);
     if (!assetsArchive.empty()) paths.push_back(assetsArchive);
-    if (!archive.empty()) paths.push_back(archive);
     paths.insert(paths.end(), rtps.begin(), rtps.end());
     return paths;
 }

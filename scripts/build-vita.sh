@@ -2,24 +2,26 @@
 # HardRPG Vita engine build.
 #
 # Usage:
-#   VITASDK=/opt/vitasdk ./scripts/build-vita.sh [--ws <dir>] [--profile real-vita|vita3k] [-j N]
+#   VITASDK=/opt/vitasdk ./scripts/build-vita.sh [--ws <dir>] [--profile real-vita|vita3k] [--rgss-launcher] [-j N]
 #
 # Requires a completed bootstrap-vita.sh in the same workspace.
 # Configures the Vita engine and leaves a verified ELF for packaging.
 set -euo pipefail
 
-WS=""; PROFILE="real-vita"; JOBS="4"
+WS=""; PROFILE="real-vita"; JOBS="4"; NATIVE="true"
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [-j N]\n' "$0"; exit 0;;
+        -h|--help) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [--native-launcher|--rgss-launcher] [-j N]\n' "$0"; exit 0;;
         --ws|--profile|-j|--out|--title-id)
             [[ $# -ge 2 && "$2" != --* && -n "$2" ]] || { printf 'missing value for %s\n' "$1" >&2; exit 2; } ;;
     esac
     case "$1" in
+        --native-launcher) NATIVE="true"; shift;;
+        --rgss-launcher) NATIVE="false"; shift;;
         --ws) WS="$2"; shift 2;;
         --profile) PROFILE="$2"; shift 2;;
         -j) JOBS="$2"; shift 2;;
-        *) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [-j N]\n' "$0" >&2; exit 2;;
+        *) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [--native-launcher|--rgss-launcher] [-j N]\n' "$0" >&2; exit 2;;
     esac
 done
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo 'jobs must be a positive integer' >&2; exit 2; }
@@ -60,10 +62,11 @@ if [[ ! -f "$BUILD/build.ninja" ]]; then
         --cross-file="$OVERLAY" \
         -Dbuildtype=release -Denable-https=false \
         -Dshared_fluid=false -Dvita_diagnostics=false -Dproto_launcher=true \
+        -Dnative_launcher="$NATIVE" \
         -Dvita_libdir="$PREFIX/lib" \
         -Dvita_sdk_libdir="$VITASDK/arm-vita-eabi/lib"
 else
-    meson setup --reconfigure "$BUILD" "$CAND_SRC" -Dvita_diagnostics=false -Dproto_launcher=true
+    meson setup --reconfigure "$BUILD" "$CAND_SRC" -Dvita_diagnostics=false -Dproto_launcher=true -Dnative_launcher="$NATIVE"
 fi
 ninja -C "$BUILD" -j"$JOBS"
 python3 "$SCRIPT_DIR/build-state.py" engine "$WS" "$PROFILE"

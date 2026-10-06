@@ -249,3 +249,112 @@ index c3df263..abfa180 100644
  #endif
  #define TRANSIENT_HEAP_ALLOC_MAX   (1024 *    2       ) /* 2 KB */
  #define TRANSIENT_HEAP_BLOCK_NUM   (TRANSIENT_HEAP_TOTAL_SIZE / TRANSIENT_HEAP_BLOCK_SIZE)
+
+diff --git a/thread_pthread.c b/thread_pthread.c
+--- a/thread_pthread.c
++++ b/thread_pthread.c
+@@ -47,7 +47,7 @@
+ #  define USE_EVENTFD (0)
+ #endif
+ 
+-#if defined(SIGVTALRM) && !defined(__CYGWIN__) && !defined(__EMSCRIPTEN__)
++#if defined(SIGVTALRM) && !defined(__CYGWIN__) && !defined(__EMSCRIPTEN__) && !defined(__vita__)
+ #  define USE_UBF_LIST 1
+ #endif
+ 
+@@ -80,6 +80,13 @@
+ #define UBF_TIMER_POSIX 1
+ #define UBF_TIMER_PTHREAD 2
+ 
++#ifdef __vita__
++/* Vita cannot service the signal-pipe timer. Native condition waits keep
++ * GVL scheduling and Thread#sleep without an unsupported signal worker. */
++# undef UBF_TIMER
++# define UBF_TIMER UBF_TIMER_NONE
++#endif
++
+ #ifndef UBF_TIMER
+ #  if defined(HAVE_TIMER_SETTIME) && defined(HAVE_TIMER_CREATE) && \
+       defined(CLOCK_MONOTONIC) && defined(USE_UBF_LIST)
+@@ -193,7 +200,7 @@
+ #define native_thread_yield() ((void)0)
+ #endif
+ 
+-#if defined(HAVE_PTHREAD_CONDATTR_SETCLOCK) && \
++#if !defined(__vita__) && defined(HAVE_PTHREAD_CONDATTR_SETCLOCK) && \
+     defined(CLOCK_REALTIME) && defined(CLOCK_MONOTONIC) && \
+     defined(HAVE_CLOCK_GETTIME)
+ static pthread_condattr_t condattr_mono;
+@@ -1805,6 +1812,9 @@
+ static void
+ rb_thread_create_timer_thread(void)
+ {
++#ifdef __vita__
++    return;
++#else
+     /* we only create the pipe, and lazy-spawn */
+     rb_pid_t current = getpid();
+     rb_pid_t owner = signal_self_pipe.owner_process;
+@@ -1824,6 +1834,7 @@
+         sigwait_th = THREAD_INVALID;
+         signal_self_pipe.owner_process = current;
+     }
++#endif
+ }
+ 
+ static void
+@@ -2039,6 +2050,10 @@
+ int
+ rb_sigwait_fd_get(const rb_thread_t *th)
+ {
++#ifdef __vita__
++    (void)th;
++    return -1;
++#else
+     if (signal_self_pipe.normal[0] >= 0) {
+         VM_ASSERT(signal_self_pipe.owner_process == getpid());
+         /*
+@@ -2052,6 +2067,7 @@
+         }
+     }
+     return -1; /* avoid thundering herd and work stealing/starvation */
++#endif
+ }
+ 
+ void
+@@ -2215,8 +2231,12 @@
+ static void
+ native_sleep(rb_thread_t *th, rb_hrtime_t *rel)
+ {
++    rb_ractor_blocking_threads_inc(th->ractor, __FILE__, __LINE__);
++
++#ifdef __vita__
++    native_cond_sleep(th, rel);
++#else
+     int sigwait_fd = rb_sigwait_fd_get(th);
+-    rb_ractor_blocking_threads_inc(th->ractor, __FILE__, __LINE__);
+ 
+     if (sigwait_fd >= 0) {
+         rb_native_mutex_lock(&th->interrupt_lock);
+@@ -2242,6 +2262,8 @@
+     else {
+         native_cond_sleep(th, rel);
+     }
++
++#endif
+ 
+     rb_ractor_blocking_threads_dec(th->ractor, __FILE__, __LINE__);
+ }
+
+diff --git a/thread_pthread.c b/thread_pthread.c
+--- a/thread_pthread.c
++++ b/thread_pthread.c
+@@ -637,7 +637,7 @@
+ void
+ Init_native_thread(rb_thread_t *th)
+ {
+-#if defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
++#if !defined(__vita__) && defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
+     if (condattr_monotonic) {
+         int r = pthread_condattr_init(condattr_monotonic);
+         if (r == 0) {

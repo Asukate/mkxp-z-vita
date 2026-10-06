@@ -5,7 +5,7 @@ mkxp. Original copyright headers and component licenses are retained.
 The public repository starts with one source snapshot; this does not change
 the authorship or licensing of its upstream code.
 
-The Vita engine and RGSS picker share one runtime for supported games.
+The native launcher and alternative RGSS picker use the same game runtime.
 [VALIDATION.md](VALIDATION.md) describes build and hardware checks, while
 [COMPATIBILITY.md](COMPATIBILITY.md) lists observed game routes.
 
@@ -18,7 +18,7 @@ a disposable workspace prefix. The user supplies vitaSDK separately.
 Hardware logs, crash dumps, benchmarks, game data, and saves are not build
 inputs or part of the public source. The launcher VPK contains no games or saves.
 
-HardRPG 0.1 Alpha uses Title ID `HARDRPG01` and `ux0:/data/hardrpg/`.
+HardRPG 0.2.1 Alpha uses Title ID `HARDRPG01` and `ux0:/data/hardrpg/`.
 Games and RTP can also be selected from external directories without moving
 them. No automatic save migration is performed. Shared engine code and
 original license/copyright headers are retained.

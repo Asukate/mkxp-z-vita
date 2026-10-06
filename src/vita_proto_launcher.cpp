@@ -1,9 +1,8 @@
 // HardRPG game browser and restart handoff.
-// EasyRPG-style: one app boots N games from a shared folder. The picker UI
-// itself is an RGSS stub project generated during packaging: this hook only
-// decides WHICH project boots. First boot (no pick file) runs the stub;
-// after the player picks, the engine reboots itself and this hook consumes
-// the pick file. No persistence beyond one handoff.
+// A selection file identifies the next game boot. The RGSS backend launches
+// its packaged picker when there is no selection; the native backend handles
+// menu boots before configuration loading and probes this hook without
+// consuming the selection. A game boot consumes it exactly once.
 #ifdef MKXPZ_PROTO_LAUNCHER
 
 #include "vita_proto_launcher.h"
@@ -49,19 +48,19 @@ bool safeExternal(const std::string &path) {
 
 bool protoLauncherPick(std::string &gameFolder, int &rgssVersion,
                        std::vector<std::string> &rtps, std::string &vitaConfigPath,
-                       std::map<std::string, std::string> &rtpRoots) {
+                       std::map<std::string, std::string> &rtpRoots, bool consume) {
     rtps.clear();
     rtpRoots.clear();
     vitaConfigPath.clear();
 
-    // A leftover pick means the stub just exited with a choice: boot it.
+    // The launcher just exited with a choice: validate and consume it.
     FILE *pick = std::fopen(kPickPath, "rb");
     if (pick) {
         char buffer[4097] = {0};
         size_t n = std::fread(buffer, 1, sizeof(buffer) - 1, pick);
         bool complete = std::fgetc(pick) == EOF;
         std::fclose(pick);
-        std::remove(kPickPath);
+        if (consume) std::remove(kPickPath);
         try {
             auto selection = json5pp::parse(std::string(buffer, n));
             const auto &object = selection.as_object();

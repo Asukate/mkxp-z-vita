@@ -20,6 +20,8 @@ PREAMBLE = r'''
 #include FT_STROKER_H
 #include <algorithm>
 #include <vector>
+#include <list>
+#include <new>
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -56,6 +58,7 @@ int main(int argc,char **argv) {
    if(expected!=actual) {printf("CLIPPED size=%d outline=%d text=%s ink_y=%d..%d surface=%dx%d expected=%zu actual=%zu\n",size,outline,text,l.min_y,l.max_y,s->w,s->h,expected,actual);failures++;}
    cases++;SDL_FreeSurface(s);
   }
+  vita_ttf_forget_glyphs(&f);
   FT_Done_Face(f.face);
  }
  printf("cases=%d clipped=%d\n",cases,failures);return failures?1:0;

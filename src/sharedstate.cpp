@@ -456,19 +456,16 @@ void SharedState::uploadScratchTexture(int width, int height, const void *pixels
 
 TEXFBO &SharedState::gpTexFBO(int minW, int minH)
 {
-	bool needResize = false;
-
-	if (minW > p->gpTexFBO.width)
-	{
-		p->gpTexFBO.width = findNextPow2(minW);
-		needResize = true;
-	}
-
-	if (minH > p->gpTexFBO.height)
-	{
-		p->gpTexFBO.height = findNextPow2(minH);
-		needResize = true;
-	}
+	/* uploadScratchFBO temporarily replaces this target with an exact upload
+	 * extent. Restore the power-of-two copy-target contract even when that
+	 * extent is already large enough: vitaGL truncates odd viewport halves,
+	 * shifting existing pixels when subsequent text blits copy them. */
+	const int targetW = findNextPow2(std::max(std::max(2, minW), p->gpTexFBO.width));
+	const int targetH = findNextPow2(std::max(std::max(2, minH), p->gpTexFBO.height));
+	const bool needResize = targetW != p->gpTexFBO.width ||
+	                        targetH != p->gpTexFBO.height;
+	p->gpTexFBO.width = targetW;
+	p->gpTexFBO.height = targetH;
 
 	if (needResize)
 	{
@@ -476,6 +473,12 @@ TEXFBO &SharedState::gpTexFBO(int minW, int minH)
 		            minW, minH, p->gpTexFBO.width, p->gpTexFBO.height);
 		TEX::bind(p->gpTexFBO.tex);
 		TEX::allocEmpty(p->gpTexFBO.width, p->gpTexFBO.height);
+#ifdef __vita__
+		/* Refresh attachment dimensions and stride after replacing storage. */
+		const FBO::ID previous = FBO::boundFramebufferID;
+		TEXFBO::linkFBO(p->gpTexFBO);
+		FBO::bind(previous);
+#endif
 	}
 
 	return p->gpTexFBO;

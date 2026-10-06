@@ -27,6 +27,7 @@
 #include <ctype.h>
 #include <time.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <SDL_error.h>
 #ifndef _GNU_SOURCE
@@ -59,6 +60,12 @@ int truncate(const char *path, off_t length) { (void)path; (void)length; errno =
 
 #include "filesystem.h"
 #include "vita_diagnostic.h"
+#ifdef __vita__
+#include "vita_resume.h"
+#include "resume-read.h"
+#include <new>
+#include <limits>
+#endif
 
 #include "util/boost-hash.h"
 #include "util/debugwriter.h"
@@ -90,12 +97,33 @@ int truncate(const char *path, off_t length) { (void)path; (void)length; errno =
 struct SDLRWIoContext {
   SDL_RWops *ops;
   std::string filename;
+#ifdef __vita__
+  int64_t position = 0, length = -1;
+  unsigned epoch = vitaResumeEpoch();
+
+  bool reopen() {
+    SDL_RWops *fresh = SDL_RWFromFile(filename.c_str(), "rb");
+    if (!fresh) return false;
+    if (position && SDL_RWseek(fresh, position, RW_SEEK_SET) != position) {
+      SDL_RWclose(fresh);
+      return false;
+    }
+    SDL_RWclose(ops);
+    ops = fresh;
+    epoch = vitaResumeEpoch();
+    return true;
+  }
+  bool prepare() { return epoch == vitaResumeEpoch() || reopen(); }
+#endif
 
   SDLRWIoContext(const char *filename)
       : ops(SDL_RWFromFile(filename, "r")), filename(filename) {
     if (!ops)
       throw Exception(Exception::SDLError, "Failed to open file: %s",
                       SDL_GetError());
+#ifdef __vita__
+    length = SDL_RWsize(ops);
+#endif
   }
 
   ~SDLRWIoContext() { SDL_RWclose(ops); }
@@ -103,25 +131,60 @@ struct SDLRWIoContext {
 
 static PHYSFS_Io *createSDLRWIo(const char *filename);
 
+#ifndef __vita__
 static SDL_RWops *getSDLRWops(PHYSFS_Io *io) {
   return static_cast<SDLRWIoContext *>(io->opaque)->ops;
 }
+#endif
 
 static PHYSFS_sint64 SDLRWIoRead(struct PHYSFS_Io *io, void *buf,
                                  PHYSFS_uint64 len) {
+#ifdef __vita__
+  auto *ctx = static_cast<SDLRWIoContext *>(io->opaque);
+  if (len > SIZE_MAX || !ctx->prepare()) return -1;
+  size_t count = SDL_RWread(ctx->ops, buf, 1, static_cast<size_t>(len));
+  /* SDL fread reports zero both for EOF and an invalid remounted handle.
+   * Retry only when the archive's known length says data remains. */
+  if (!count && len && ctx->position < ctx->length && ctx->reopen())
+    count = SDL_RWread(ctx->ops, buf, 1, static_cast<size_t>(len));
+  ctx->position += count;
+  return count;
+#else
   return SDL_RWread(getSDLRWops(io), buf, 1, len);
+#endif
 }
 
 static int SDLRWIoSeek(struct PHYSFS_Io *io, PHYSFS_uint64 offset) {
+#ifdef __vita__
+  auto *ctx = static_cast<SDLRWIoContext *>(io->opaque);
+  if (offset > INT64_MAX || !ctx->prepare()) return 0;
+  auto result = SDL_RWseek(ctx->ops, static_cast<int64_t>(offset), RW_SEEK_SET);
+  if (result < 0 && ctx->reopen())
+    result = SDL_RWseek(ctx->ops, static_cast<int64_t>(offset), RW_SEEK_SET);
+  if (result < 0) return 0;
+  ctx->position = result;
+  return result == static_cast<int64_t>(offset);
+#else
   return (SDL_RWseek(getSDLRWops(io), offset, RW_SEEK_SET) != -1);
+#endif
 }
 
 static PHYSFS_sint64 SDLRWIoTell(struct PHYSFS_Io *io) {
+#ifdef __vita__
+  auto *ctx = static_cast<SDLRWIoContext *>(io->opaque);
+  return ctx->prepare() ? ctx->position : -1;
+#else
   return SDL_RWseek(getSDLRWops(io), 0, RW_SEEK_CUR);
+#endif
 }
 
 static PHYSFS_sint64 SDLRWIoLength(struct PHYSFS_Io *io) {
+#ifdef __vita__
+  auto *ctx = static_cast<SDLRWIoContext *>(io->opaque);
+  return ctx->prepare() ? ctx->length : -1;
+#else
   return SDL_RWsize(getSDLRWops(io));
+#endif
 }
 
 static struct PHYSFS_Io *SDLRWIoDuplicate(struct PHYSFS_Io *io) {
@@ -129,8 +192,10 @@ static struct PHYSFS_Io *SDLRWIoDuplicate(struct PHYSFS_Io *io) {
   int64_t offset = io->tell(io);
   PHYSFS_Io *dup = createSDLRWIo(ctx->filename.c_str());
 
-  if (dup)
-    SDLRWIoSeek(dup, offset);
+  if (dup && (offset < 0 || !SDLRWIoSeek(dup, offset))) {
+    dup->destroy(dup);
+    return nullptr;
+  }
 
   return dup;
 }
@@ -168,20 +233,81 @@ static PHYSFS_Io *createSDLRWIo(const char *filename) {
   return io;
 }
 
+static int mountPath(const char *path, const char *mountpoint) {
+#ifdef __vita__
+  /* Physical archive handles survive for the lifetime of the mount. Route
+   * those through the wake-aware stream too, including RGSS archives. */
+  struct stat info;
+  if (stat(path, &info) == 0 && S_ISREG(info.st_mode)) {
+    PHYSFS_Io *io = createSDLRWIo(path);
+    if (!io) return 0;
+    const int mounted = PHYSFS_mountIo(io, path, mountpoint, 1);
+    if (!mounted) io->destroy(io);
+    return mounted;
+  }
+#endif
+  int mounted = PHYSFS_mount(path, mountpoint, 1);
+  if (!mounted) {
+    PHYSFS_Io *io = createSDLRWIo(path);
+    if (io) {
+      mounted = PHYSFS_mountIo(io, path, mountpoint, 1);
+      if (!mounted) io->destroy(io);
+    }
+  }
+  return mounted;
+}
+
 static inline PHYSFS_File *sdlPHYS(SDL_RWops *ops) {
   return static_cast<PHYSFS_File *>(ops->hidden.unknown.data1);
 }
 
+#ifdef __vita__
+struct PhysReadIO {
+  static PHYSFS_File *open(const char *path) { return PHYSFS_openRead(path); }
+  static bool seek(PHYSFS_File *file, int64_t offset) { return PHYSFS_seek(file, offset) != 0; }
+  static void close(PHYSFS_File *file) { PHYSFS_close(file); }
+};
+using RecoverRead = ResumeRead<PHYSFS_File *, PhysReadIO>;
+static RecoverRead *sdlRecovery(SDL_RWops *ops) {
+  return static_cast<RecoverRead *>(ops->hidden.unknown.data2);
+}
+static bool prepareRead(SDL_RWops *ops) {
+  RecoverRead *read = sdlRecovery(ops);
+  if (!read) return true;
+  bool ok = read->ensure(vitaResumeEpoch());
+  ops->hidden.unknown.data1 = read->file;
+  return ok;
+}
+static bool repairRead(SDL_RWops *ops, int64_t position) {
+  RecoverRead *read = sdlRecovery(ops);
+  bool ok = read && read->reopen(position);
+  if (read) ops->hidden.unknown.data1 = read->file;
+  return ok;
+}
+#endif
+
 static Sint64 SDL_RWopsSize(SDL_RWops *ops) {
+#ifdef __vita__
+  if (!prepareRead(ops)) return -1;
+#endif
   PHYSFS_File *f = sdlPHYS(ops);
 
   if (!f)
     return -1;
 
-  return PHYSFS_fileLength(f);
+  Sint64 length = PHYSFS_fileLength(f);
+#ifdef __vita__
+  RecoverRead *read = sdlRecovery(ops);
+  if (length < 0 && read && repairRead(ops, read->position))
+    length = PHYSFS_fileLength(sdlPHYS(ops));
+#endif
+  return length;
 }
 
 static Sint64 SDL_RWopsSeek(SDL_RWops *ops, int64_t offset, int whence) {
+#ifdef __vita__
+  if (!prepareRead(ops)) return -1;
+#endif
   PHYSFS_File *f = sdlPHYS(ops);
 
   if (!f)
@@ -195,26 +321,55 @@ static Sint64 SDL_RWopsSeek(SDL_RWops *ops, int64_t offset, int whence) {
     base = 0;
     break;
   case RW_SEEK_CUR:
+#ifdef __vita__
+    base = sdlRecovery(ops) ? sdlRecovery(ops)->position : PHYSFS_tell(f);
+#else
     base = PHYSFS_tell(f);
+#endif
     break;
   case RW_SEEK_END:
     base = PHYSFS_fileLength(f);
     break;
   }
 
-  int result = PHYSFS_seek(f, base + offset);
+  if (base < 0 || (offset < 0 && offset < -base)) return -1;
+#ifdef __vita__
+  if (offset > 0 && base > std::numeric_limits<int64_t>::max() - offset) return -1;
+#endif
+  const int64_t target = base + offset;
+  int result = PHYSFS_seek(f, target);
+#ifdef __vita__
+  if (!result) {
+    Sint64 length = PHYSFS_fileLength(f);
+    if (length < 0 || target <= length) result = repairRead(ops, target);
+  }
+  if (result && sdlRecovery(ops)) sdlRecovery(ops)->position = target;
+  f = sdlPHYS(ops);
+#endif
 
   return (result != 0) ? PHYSFS_tell(f) : -1;
 }
 
 static size_t SDL_RWopsRead(SDL_RWops *ops, void *buffer, size_t size,
                             size_t maxnum) {
+  if (!size || !maxnum || maxnum > SIZE_MAX / size) return 0;
+#ifdef __vita__
+  if (!prepareRead(ops)) return 0;
+#endif
   PHYSFS_File *f = sdlPHYS(ops);
 
   if (!f)
     return 0;
 
   PHYSFS_sint64 result = PHYSFS_readBytes(f, buffer, size * maxnum);
+#ifdef __vita__
+  RecoverRead *read = sdlRecovery(ops);
+  const PHYSFS_sint64 length = result == 0 ? PHYSFS_fileLength(f) : 0;
+  if (read && (result < 0 || (result == 0 && (length < 0 || read->position < length))) &&
+      repairRead(ops, read->position))
+    result = PHYSFS_readBytes(sdlPHYS(ops), buffer, size * maxnum);
+  if (read && result > 0) read->position += result;
+#endif
 
   return (result != -1) ? (result / size) : 0;
 }
@@ -238,6 +393,10 @@ static int SDL_RWopsClose(SDL_RWops *ops) {
     return -1;
 
   int result = PHYSFS_close(f);
+#ifdef __vita__
+  delete sdlRecovery(ops);
+  ops->hidden.unknown.data2 = 0;
+#endif
   ops->hidden.unknown.data1 = 0;
 
   return (result != 0) ? 0 : -1;
@@ -284,7 +443,8 @@ static const char *findExt(const char *filename) {
   return 0;
 }
 
-static void initReadOps(PHYSFS_File *handle, SDL_RWops &ops, bool freeOnClose) {
+static void initReadOps(PHYSFS_File *handle, SDL_RWops &ops, bool freeOnClose,
+                        const char *path = nullptr) {
   ops.size = SDL_RWopsSize;
   ops.seek = SDL_RWopsSeek;
   ops.read = SDL_RWopsRead;
@@ -297,6 +457,11 @@ static void initReadOps(PHYSFS_File *handle, SDL_RWops &ops, bool freeOnClose) {
 
   ops.type = SDL_RWOPS_PHYSFS;
   ops.hidden.unknown.data1 = handle;
+  ops.hidden.unknown.data2 = nullptr;
+#ifdef __vita__
+  if (path && strlen(path) < sizeof(RecoverRead::path))
+    ops.hidden.unknown.data2 = new (std::nothrow) RecoverRead(handle, path, vitaResumeEpoch());
+#endif
 }
 
 static void strTolower(std::string &str) {
@@ -371,16 +536,7 @@ FileSystem::~FileSystem() {
 }
 
 void FileSystem::addPath(const char *path, const char *mountpoint, bool reload, const char *archiveRoot) {
-  /* Try the normal mount first */
-    int state = PHYSFS_mount(path, mountpoint, 1);
-  if (!state) {
-    /* If it didn't work, try mounting via a wrapped
-     * SDL_RWops */
-    PHYSFS_Io *io = createSDLRWIo(path);
-
-    if (io)
-      state = PHYSFS_mountIo(io, path, 0, 1);
-  }
+    int state = mountPath(path, mountpoint);
     if (!state) {
         PHYSFS_ErrorCode err = PHYSFS_getLastErrorCode();
         throw Exception(Exception::PHYSFSError, "Failed to mount %s (%s)", path, PHYSFS_getErrorByCode(err));
@@ -660,7 +816,7 @@ openReadEnumCB(void *d, const char *dirpath, const char *filename) {
 
     return PHYSFS_ENUM_ERROR;
   }
-  initReadOps(phys, data.ops, false);
+  initReadOps(phys, data.ops, false, fullPath);
 
 #if defined(__vita__) && defined(MKXPZ_VITA_DIAGNOSTICS)
   if (strncmp(fullPath, "Graphics/Tilesets/", 18) == 0) {
@@ -735,7 +891,7 @@ void FileSystem::openReadRaw(SDL_RWops &ops, const char *filename,
   if (!handle)
     throw Exception(Exception::NoFileError, "%s", filename);
 
-  initReadOps(handle, ops, freeOnClose);
+  initReadOps(handle, ops, freeOnClose, normalize(filename, 0, 0).c_str());
     return;
 }
 

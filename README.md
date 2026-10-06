@@ -22,12 +22,18 @@ launcher for standalone game packages.
 ## Status
 
 > [!NOTE]
-> HardRPG 0.1 Alpha is an early release. Compatibility varies by game; check the
+> HardRPG is an early alpha. Compatibility varies by game; check the
 > [game-by-game results](docs/COMPATIBILITY.md) before playing.
 
-The **0.1 Alpha release VPK** has been tested on a real PS Vita.
-Launching a title does not mean the full game is playable.
-Download **0.1 Alpha** from [Releases](https://github.com/Asukate/mkxp-z-vita/releases).
+The **0.2.1 Alpha** release includes the native launcher, game search and
+engine filters, persistent error history, compact settings and touch scrolling.
+It also carries the tested combat/menu performance improvements, window and
+gauge rendering fixes, standby recovery and bubble artwork.
+Hardware testing confirmed performance improvements in BLACK SOULS,
+BLACK SOULS II and Red Hood Woods. See [validation](docs/VALIDATION.md).
+
+Download **0.2.1 Alpha** from [Releases](https://github.com/Asukate/mkxp-z-vita/releases).
+See the [release notes](docs/RELEASE-NOTES-0.2.1.md) for the changes since 0.1.
 
 ## Installation
 
@@ -87,7 +93,8 @@ See [library, ZIP saves, and per-game settings](launcher/README.md) for details.
 
 **Settings** lets you change game aspect ratio, scaling and filtering; choose
 existing RTP folders or ZIPs; and add extra game folders to search automatically.
-RTP status shows **Detected** or **Missing**. Selected RTP stays in its original
+The native launcher also provides a timestamped game error history with report
+export, and dated release notes in About. RTP status shows **Detected** or **Missing**. Selected RTP stays in its original
 location, and RTP ZIPs are read directly without extracting another copy.
 
 The ZIP-game working copy does not expire or get cleaned automatically. Saves
@@ -95,13 +102,22 @@ can live inside it, so back them up before deleting a game's cache folder.
 
 ## Controls
 
-| In the launcher | Action |
+The native launcher includes search, filters and touch controls. The RGSS
+launcher remains an alternative build.
+
+| In the native launcher | Action |
 | --- | --- |
 | D-pad Up / Down | Move through menus and lists |
 | Cross | Select a menu item, open a folder or ZIP, or launch a game |
 | Circle | Go back or cancel |
 | Triangle | Refresh the current listing |
 | Start | Open or close the folder browser |
+| Select | Search game names with the Vita keyboard; blank clears the search |
+| L / R | Cycle engine filters; an active filter is labelled above the list |
+| L + R | Show all library paths |
+| Square, in the game list | Change a display name without renaming game files |
+| Front touchscreen | Drag to scroll; tap to select, then tap again to open |
+| Square, in game error history or an error trace | Export the selected report |
 | Square, in the folder browser | Scan this folder and add recognized games |
 | Square, in the RTP/game-folder settings browser | Use this folder without copying files |
 | Select **Exit** and press Cross | Return to LiveArea |
@@ -163,7 +179,7 @@ iterate on the menu before testing on hardware.
 | Directory | Purpose |
 | --- | --- |
 | `src/`, `binding/`, `shader/`, `assets/` | mkxp-z engine, Ruby bindings, renderer, and embedded resources |
-| `launcher/` | RGSS picker, package defaults, preloads, and LiveArea assets |
+| `launcher/` | Package defaults, preloads, LiveArea assets, and alternative RGSS picker |
 | `deps/` | Dependency lock, source snapshots, compatibility adapters, and patches |
 | `scripts/`, `ci/` | Bootstrap, build, package, verification, and CI environment |
 | `docs/` | Build instructions, compatibility, source provenance, and README media |

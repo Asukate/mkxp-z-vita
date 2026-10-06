@@ -42,6 +42,7 @@
 #include "vita_diagnostic.h"
 #ifdef __vita__
 #include "vita_startup_timer.h"
+#include "vita_error_report.h"
 #endif
 
 #include <vector>
@@ -447,6 +448,14 @@ static void mriBindingInit() {
 
 static void showMsg(const std::string &msg) {
     shState->eThread().showMessageBox(msg.c_str());
+}
+
+static void showEngineError(const std::string &msg) {
+#ifdef __vita__
+    vitaWriteErrorReport("Engine error\n\n" + msg);
+#else
+    showMsg(msg);
+#endif
 }
 
 static void printP(int argc, VALUE *argv, const char *convMethod,
@@ -1009,7 +1018,7 @@ static void runCustomScript(const std::string &filename) {
 #endif
     
     if (!readFileSDL(scriptPath.c_str(), scriptData)) {
-        showMsg(std::string("Unable to open '") + filename + "'");
+        showEngineError(std::string("Unable to open '") + filename + "'");
         return;
     }
     
@@ -1125,12 +1134,12 @@ static void runRMXPScripts(BacktraceData &btData) {
     const std::string &scriptPack = conf.game.scripts;
     
     if (scriptPack.empty()) {
-        showMsg("No script file has been specified. Check the game's INI and try again.");
+        showEngineError("No script file has been specified. Check the game's INI and try again.");
         return;
     }
     
     if (!shState->fileSystem().exists(scriptPack.c_str())) {
-        showMsg("Unable to load scripts from '" + scriptPack + "'");
+        showEngineError("Unable to load scripts from '" + scriptPack + "'");
         return;
     }
     
@@ -1143,12 +1152,12 @@ static void runRMXPScripts(BacktraceData &btData) {
     try {
         scriptArray = kernelLoadDataInt(scriptPack.c_str(), false, false);
     } catch (const Exception &e) {
-        showMsg(std::string("Failed to read script data: ") + e.msg);
+        showEngineError(std::string("Failed to read script data: ") + e.msg);
         return;
     }
     
     if (!RB_TYPE_P(scriptArray, RUBY_T_ARRAY)) {
-        showMsg("Failed to read script data");
+        showEngineError("Failed to read script data");
         return;
     }
 
@@ -1206,7 +1215,7 @@ static void runRMXPScripts(BacktraceData &btData) {
             snprintf(buffer, sizeof(buffer), "Error decoding script %ld: '%s'", i,
                      RSTRING_PTR(scriptName));
             
-            showMsg(buffer);
+            showEngineError(buffer);
             
             break;
         }
@@ -1338,6 +1347,33 @@ static void runRMXPScripts(BacktraceData &btData) {
 }
 
 static void showExc(VALUE exc, const BacktraceData &btData) {
+#ifdef __vita__
+    VALUE message = rb_funcall2(exc, rb_intern("message"), 0, NULL);
+    VALUE trace = rb_funcall2(exc, rb_intern("backtrace"), 0, NULL);
+    std::string report = std::string(rb_obj_classname(exc)) + "\n\n";
+    if (RB_TYPE_P(message, RUBY_T_STRING))
+        report.append(RSTRING_PTR(message), std::min<long>(RSTRING_LEN(message), 8192));
+    else
+        report += "Exception message unavailable.";
+    report += "\n\nBacktrace:\n";
+    if (RB_TYPE_P(trace, RUBY_T_ARRAY) && RARRAY_LEN(trace) > 0) {
+        for (long i = 0; i < RARRAY_LEN(trace) && i < 32; ++i) {
+            VALUE entry = rb_ary_entry(trace, i);
+            if (!RB_TYPE_P(entry, RUBY_T_STRING)) continue;
+            std::string line(RSTRING_PTR(entry), std::min<long>(RSTRING_LEN(entry), 1024));
+            const size_t colon = line.find(':');
+            if (colon != std::string::npos) {
+                const std::string name = line.substr(0, colon);
+                line.replace(0, colon, btData.scriptNames.value(name, name));
+            }
+            report += line + "\n";
+        }
+    } else {
+        report += "No backtrace was supplied by the game.\n";
+    }
+    vitaWriteErrorReport(report);
+    return;
+#endif
 #ifdef MKXPZ_VITA_DIAGNOSTICS
     /* Ruby exceptions are otherwise silent on Vita (no message box).
      * Always leave the crash name in the log, even in quiet mode. */
@@ -1515,7 +1551,7 @@ static void mriBindingExecute() {
          VALUE msg = rb_funcall(exc, rb_intern("message"), 0);
          #endif
          */
-        showMsg("An error occurred while initializing Ruby. (Invalid JIT settings?)");
+        showEngineError("An error occurred while initializing Ruby. (Invalid JIT settings?)");
         ruby_cleanup(state);
         shState->rtData().rqTermAck.set();
         return;

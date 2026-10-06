@@ -1,6 +1,6 @@
 # Shared browser/model for the RGSS launcher and the desktop preview.
 module HardRPG
-  VERSION = "0.1"
+  VERSION = "0.2"
   RELEASE_STAGE = "Alpha"
   ROOT = defined?(HARDRPG_DATA_ROOT) ? HARDRPG_DATA_ROOT : "ux0:/data/hardrpg"
   GAMES_ROOT = ROOT + "/games"
@@ -13,6 +13,7 @@ module HardRPG
   GAME_FOLDERS = ROOT + "/game-folders.txt"
   BROWSE_ROOTS = defined?(HARDRPG_BROWSE_ROOTS) ? HARDRPG_BROWSE_ROOTS : %w[ux0:/ uma0:/ imc0:/]
   REPOSITORY = "https://github.com/Asukate/mkxp-z-vita"
+  SPLASH_PATH = defined?(HARDRPG_SPLASH_PATH) ? HARDRPG_SPLASH_PATH : "Graphics/Pictures/hardrpg-splash.png"
   Entry = Struct.new(:name, :kind, :node, :version)
 
   # The Vita Ruby build deliberately omits the JSON extension. Encode only
@@ -40,6 +41,22 @@ module HardRPG
     mkdir(File.dirname(ROOT))
     [ROOT, GAMES_ROOT, RTP_ROOT, CONFIG_ROOT, CACHE_ROOT].each { |p| mkdir(p) }
     %w[Standard RPGVX RPGVXAce].each { |p| mkdir(RTP_ROOT + "/" + p) }
+  end
+
+  # Consume only after reading; leave the report available if storage fails.
+  # Keep the complete report on disk for a bug report, and wrap for Vita's UI.
+  def self.take_error_report
+    path = ROOT + "/last-error.txt"
+    return nil unless File.file?(path)
+    body = File.open(path, "rb") { |file| file.read(32800) }
+    body.force_encoding("UTF-8")
+    body = body.scrub.tr("\x00", " ")
+    previous = path + ".prev"
+    File.delete(previous) if File.file?(previous)
+    File.rename(path, previous)
+    body.lines.flat_map { |line| line.chomp.scan(/.{1,65}/).tap { |parts| parts << "" if parts.empty? } }
+  rescue IOError, SystemCallError
+    nil
   end
 
   def self.safe_relative?(path, empty = false)

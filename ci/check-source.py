@@ -27,7 +27,9 @@ with tempfile.TemporaryDirectory() as temp:
     run('ruby', str(ROOT / 'scripts/build-picker.rb'), str(stub))
     for line in (ROOT / 'launcher/release-payload.sha256').read_text().splitlines():
         sha, name = line.split(maxsplit=1)
-        if name.startswith('stub/'):
+        if name == 'stub/Graphics/Pictures/hardrpg-splash.png':
+            path = ROOT / 'launcher/assets/hardrpg-splash.png'
+        elif name.startswith('stub/'):
             path = Path(temp) / name
         elif name.startswith('sce_sys/'):
             path = ROOT / 'launcher/livearea' / Path(name).name

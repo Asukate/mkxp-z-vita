@@ -2276,6 +2276,10 @@ void Graphics::update(bool checkForShutdown) {
      * markers remain in swapGLBuffer, frames 35-50). */
     p->threadData->rqWindowAdjust.wait();
     p->last_update = shState->runTime();
+    if (p->threadData->rqFrameReset) {
+        p->threadData->rqFrameReset.clear();
+        p->fpsLimiter.resetFrameAdjust();
+    }
     
     // update Input.repeat timing, rounding the framerate to the nearest 2
     {

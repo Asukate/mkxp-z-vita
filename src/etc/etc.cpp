@@ -176,6 +176,10 @@ bool Tone::operator==(const Tone &o) const
 
 void Tone::set(double red, double green, double blue, double gray)
 {
+	if (this->red == red && this->green == green &&
+	    this->blue == blue && this->gray == gray)
+		return;
+
 	this->red   = red;
 	this->green = green;
 	this->blue  = blue;
@@ -187,6 +191,9 @@ void Tone::set(double red, double green, double blue, double gray)
 
 const Tone& Tone::operator=(const Tone &o)
 {
+	if (*this == o)
+		return o;
+
 	red   = o.red;
 	green = o.green;
 	blue  = o.blue;
@@ -200,6 +207,9 @@ const Tone& Tone::operator=(const Tone &o)
 
 void Tone::setRed(double value)
 {
+	if (red == value)
+		return;
+
 	red = value;
 	norm.x = (float) clamp<double>(value, -255, 255) / 255;
 
@@ -208,6 +218,9 @@ void Tone::setRed(double value)
 
 void Tone::setGreen(double value)
 {
+	if (green == value)
+		return;
+
 	green = value;
 	norm.y = (float) clamp<double>(value, -255, 255) / 255;
 
@@ -216,6 +229,9 @@ void Tone::setGreen(double value)
 
 void Tone::setBlue(double value)
 {
+	if (blue == value)
+		return;
+
 	blue = value;
 	norm.z = (float) clamp<double>(value, -255, 255) / 255;
 
@@ -224,6 +240,9 @@ void Tone::setBlue(double value)
 
 void Tone::setGray(double value)
 {
+	if (gray == value)
+		return;
+
 	gray = value;
 	norm.w = (float) clamp<double>(value, 0, 255) / 255;
 

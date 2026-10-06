@@ -38,6 +38,8 @@ def state(kind, ws, profile):
             'scripts/bootstrap-vita.sh', 'scripts/ruby-merge-archive.sh', 'scripts/ruby-install-headers.sh',
             ))
     else:
+        options = json.loads((ws / f'build/mkxp-z-parity-{profile}/meson-info/intro-buildoptions.json').read_text())
+        result['native_launcher'] = next(o['value'] for o in options if o['name'] == 'native_launcher')
         result['revision'] = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
         result['inputs_sha256'] = digest(inputs('src', 'binding', 'shader', 'assets', 'launcher',
             'scripts', 'linux', 'meson.build', 'meson_options.txt'))

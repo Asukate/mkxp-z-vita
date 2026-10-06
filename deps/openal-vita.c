@@ -252,7 +252,15 @@ static void *audio_mixer_main(void *unused) {
             continue;
         }
 
-        SDL_QueueAudio(out_dev, output, sizeof(output));
+        /* A disconnected output port must not turn the mixer into a busy
+         * loop that consumes the entire track while recovery is pending. */
+        while (SDL_QueueAudio(out_dev, output, sizeof(output)) < 0) {
+            usleep(10000);
+            pthread_mutex_lock(&mixer_mutex);
+            int active = mixer_running;
+            pthread_mutex_unlock(&mixer_mutex);
+            if (!active) return NULL;
+        }
         if ((++push_count % 256) == 1)
             al_trace("MIX_OUTPUT n=%u", push_count);
     }

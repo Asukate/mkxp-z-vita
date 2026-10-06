@@ -1,7 +1,7 @@
 # Building HardRPG
 
 The build has three stages: compile pinned dependencies into a workspace,
-compile the Vita engine, then package the RGSS picker. No installed game
+compile the Vita engine, then package the native launcher. No installed game
 or prebuilt dependency prefix is required.
 
 ## Pinned container (same environment as CI)
@@ -62,6 +62,11 @@ The default workspace is `build/<profile>/`. Pass the same absolute `--ws DIR`
 to all three scripts to build elsewhere; packaging also accepts `--out DIR`
 and `--title-id ID`. The default Title ID is `HARDRPG01`.
 
+The native launcher is the default for local and CI builds. For the alternative
+Ruby/RGSS picker, pass `--rgss-launcher` to `build-vita.sh`; packaging selects
+the backend recorded in the engine receipt. Games use the same RGSS runtime
+with either launcher. See [native launcher details](NATIVE-LAUNCHER.md).
+
 A workspace records its dependency recipes and SDK. If those change or a
 profile differs, choose a new workspace rather than reusing old archives.
 The engine receipt records source inputs and installed archive hashes;
@@ -78,9 +83,10 @@ executes both checks followed by bootstrap, build, and packaging. GitHub Actions
 with read-only repository permissions and seven-day artifact retention.
 It does not publish a release or install anything on a device.
 
-Packaging verifies the static payload SHA-256 manifest, exact picker source
-round-trip through Ruby Marshal/zlib, the HardRPG SFO title, and requested
-Title ID. The VPK contains the engine, picker stub, two preloads, fonts,
+Packaging verifies the static payload SHA-256 manifest, launcher backend,
+the HardRPG SFO title, app version and requested Title ID. Alternative RGSS
+packages also verify the picker source round-trip through Ruby Marshal/zlib.
+The VPK contains the engine, launcher backend, two preloads, font,
 LiveArea assets, and license notices. Games, RTP, saves,
 and Sony firmware modules are supplied separately.
 
@@ -88,3 +94,12 @@ Successful compilation and packaging are build checks. A new package still
 needs a physical-Vita launch/game/return/save test before it is described as
 hardware-accepted. See [compatibility](COMPATIBILITY.md) and
 [validation results](VALIDATION.md).
+
+## Release build paths
+
+Use the documented container mounts at `/source` and `/work` for distributable
+packages. Compiler assertion strings in the engine and static dependencies
+can retain absolute build paths after debug information is stripped. Package
+verification rejects embedded developer home-directory paths. Rebuilding
+only the engine does not remove paths from previously built static libraries;
+use a fresh dependency workspace for the release build.

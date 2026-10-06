@@ -25,6 +25,7 @@ HARDRPG_DATA_ROOT = options[:data] || File.join(options[:work], "data/hardrpg")
 HARDRPG_BROWSE_ROOTS = options[:browse].empty? ? [File.expand_path(options[:work]) + "/"] : options[:browse]
 FileUtils.mkdir_p(HARDRPG_DATA_ROOT)
 HARDRPG_PREVIEW_DRIVER = true
+HARDRPG_SPLASH_PATH = File.join(ROOT, "launcher/assets/hardrpg-splash.png")
 native = File.join(options[:work], "hardrpg_archive.so")
 if !File.exist?(native) || File.mtime(native) < File.mtime(File.join(ROOT, "binding/launcher-filesystem-binding.cpp"))
   abort "Could not compile ZIP backend" unless system(RbConfig.ruby, File.join(__dir__, "build-host-archive.rb"), native)
@@ -46,7 +47,8 @@ end
 
 module SDL
   extend Fiddle::Importer
-  dlload "libSDL2-2.0.so.0", "libSDL2_ttf-2.0.so.0"
+  dlload "libSDL2-2.0.so.0", "libSDL2_ttf-2.0.so.0", "libSDL2_image-2.0.so.0"
+  extern "void* IMG_Load(const char*)"
   extern "int SDL_Init(unsigned int)"
   extern "void SDL_Quit()"
   extern "void* SDL_CreateWindow(const char*, int, int, int, int, unsigned int)"
@@ -128,7 +130,18 @@ end
 class Bitmap
   attr_reader :width, :height, :font, :texture
   @@fonts = {}
-  def initialize(width, height)
+  def initialize(width, height = nil)
+    if width.is_a?(String)
+      surface = SDL.IMG_Load(width)
+      raise "Image load failed: #{SDL.SDL_GetError}" if surface.null?
+      @texture = SDL.SDL_CreateTextureFromSurface(Graphics.renderer, surface)
+      SDL.SDL_FreeSurface(surface)
+      raise SDL.SDL_GetError.to_s if @texture.null?
+      tw, th = "\0" * 4, "\0" * 4
+      SDL.SDL_QueryTexture(@texture, nil, nil, tw, th)
+      @width, @height, @font = tw.unpack1("i"), th.unpack1("i"), Font.new
+      return
+    end
     @width, @height, @font = width, height, Font.new
     @texture = SDL.SDL_CreateTexture(Graphics.renderer, SDL::RGBA32, 2, width, height)
     raise SDL.SDL_GetError.to_s if @texture.null?
@@ -196,6 +209,7 @@ module Input
       end
     end
     def trigger?(key); (@pressed || []).include?(key); end
+    def press?(key); trigger?(key); end
     def repeat?(key); trigger?(key); end
   end
 end

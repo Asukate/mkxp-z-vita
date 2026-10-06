@@ -1,9 +1,10 @@
 # HardRPG launcher
 
-`library.rb` and `picker.rb` are packaged as a VX Ace RGSS project. The red
-Games/Settings/About/Exit menu fills 960×544. Selecting a game restarts the engine
-into its folder. About displays **HardRPG 0.1 Alpha**, the author and the
-project repository.
+The red Games/Settings/About/Exit menu fills 960×544. The native
+**HardRPG 0.2.1 Alpha** uses a C++ launcher; games still run in the
+RGSS engine. The original `library.rb`/`picker.rb` launcher remains an
+alternative build. Selecting a game restarts the engine into its folder.
+About displays the version, author, repository and dated one-line release notes.
 
 ## Library
 
@@ -26,6 +27,14 @@ hides unavailable games without erasing their saved references.
 
 First launch creates `games/`, `rtp/`, `config/`, and `cache/`. Optional RTP
 goes under `rtp/Standard`, `rtp/RPGVX`, or `rtp/RPGVXAce`.
+
+In the native launcher, **Select** opens game-name search with the Vita
+keyboard. A blank search clears it; Circle cancels without changing it.
+**L/R** cycles engine filters, with an explicit active-filter label. Only
+the pane holding focus highlights a row. Drag the front touchscreen to scroll
+the list; tap to select, then tap again to launch. Full game locations appear
+above the list; **L+R** opens all paths if the header cannot fit them.
+**Square** changes only a game's display name, preserving its files and saves.
 
 ## Settings
 
@@ -79,6 +88,13 @@ Examples under `config/` and `shims/` are optional source material, not
 automatically installed or universal fixes. Rename a copied configuration
 example to its game's ID.
 
+**Game error history** in the native launcher retains handled game errors with
+the game name and UTC timestamp. Cross opens a trace; Square exports the
+selected report to `ux0:/data/hardrpg/reports/error-000001.txt` (numbered
+uniquely). Automatic history lives in `errors/` and is not deleted on update
+or overwritten by a later error. Older manual exports remain listed. Native
+crashes that do not produce a trace cannot be listed.
+
 ## Returning and updating
 
 Hold **L + R + Select for a second** while a game is running to restart
@@ -87,7 +103,9 @@ Cross selects, and the Exit menu returns to LiveArea.
 
 HardRPG uses Title ID `HARDRPG01` and data root `ux0:/data/hardrpg/`.
 Installing an updated VPK replaces the launcher app; games and saves in
-the data tree remain external. Older launcher IDs and the `mkxp-z-vita`
+the data tree remain external. The native launcher reads the existing library,
+RTP paths, display settings and per-game configurations without migration or
+manual rescanning. Older launcher IDs and the `mkxp-z-vita`
 data root remain separate; this build does not move or remove their data.
 Preserve backups of your saves.
 

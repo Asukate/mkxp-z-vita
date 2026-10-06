@@ -1,1 +1,3 @@
 LICENSES/** whitespace=-blank-at-eol,-blank-at-eof
+# Unified patches use a leading context space before source tabs and blank lines.
+*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

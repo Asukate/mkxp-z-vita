@@ -564,7 +564,10 @@ SDL_GLContext SDL_GL_CreateContext(SDL_Window *window) {
              * display resolution.  A false return therefore means that the
              * requested size was accepted; it is not an initialization error.
              */
-            GLboolean resolution_fallback = vglInit(8 * 1024 * 1024);
+            /* The renderer submits vertex arrays, not glBegin/glEnd calls.
+             * A legacy pool is reserved again each frame; keeping it disabled
+             * avoids oversized temporary allocations and forced-GC stalls. */
+            GLboolean resolution_fallback = vglInit(0);
             SDL_Log("vitaGL initialized (resolution fallback: %d)",
                     (int)resolution_fallback);
             vita_gl_initialized = 1;
@@ -1057,9 +1060,30 @@ int SDL_GetAudioDeviceStatus(SDL_AudioDeviceID dev) {
     return SDL_GetAudioStatus();
 }
 
+/* The event thread requests repair; only the audio-output thread touches the
+ * port, so waking cannot race a blocked sceAudioOutOutput call. */
+static unsigned audio_resume_pending;
+void SDL_VitaRequestAudioResume(void) {
+    __atomic_store_n(&audio_resume_pending, 1, __ATOMIC_RELEASE);
+}
+
+static int reopen_audio_port(void) {
+    if (sdl_state.audio_port >= 0)
+        sceAudioOutReleasePort(sdl_state.audio_port);
+    sdl_state.audio_port = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_BGM,
+        sdl_state.audio_samples, 48000,
+        sdl_state.audio_channels == 2 ? SCE_AUDIO_OUT_MODE_STEREO : SCE_AUDIO_OUT_MODE_MONO);
+    return sdl_state.audio_port;
+}
+
 int SDL_QueueAudio(SDL_AudioDeviceID dev, const void *data, Uint32 len) {
     (void)dev;
-    if (sdl_state.audio_paused || sdl_state.audio_port < 0) return 0;
+    if (sdl_state.audio_paused || !sdl_state.audio_initialized) return 0;
+    if (__atomic_exchange_n(&audio_resume_pending, 0, __ATOMIC_ACQ_REL) ||
+        sdl_state.audio_port < 0) {
+        if (reopen_audio_port() < 0)
+            return SDL_SetError("Unable to reopen audio after resume");
+    }
 
     const Uint8 *cursor = (const Uint8 *)data;
     Uint32 block_bytes = (Uint32)(sdl_state.audio_samples *
@@ -1070,6 +1094,8 @@ int SDL_QueueAudio(SDL_AudioDeviceID dev, const void *data, Uint32 len) {
         memset(block, 0, block_bytes);
         memcpy(block, cursor, take);
         int rc = sceAudioOutOutput(sdl_state.audio_port, block);
+        if (rc < 0 && reopen_audio_port() >= 0)
+            rc = sceAudioOutOutput(sdl_state.audio_port, block);
         if (rc < 0)
             return SDL_SetError("sceAudioOutOutput failed: %d", rc);
         cursor += take;

@@ -86,6 +86,12 @@ TexPool::TexPool(uint32_t maxMemSize)
 
 TexPool::~TexPool()
 {
+	clearCache();
+	delete p;
+}
+
+void TexPool::clearCache()
+{
 	std::list<TEXFBO>::iterator iter;
 
 	for (iter = p->priorityQueue.begin();
@@ -98,8 +104,9 @@ TexPool::~TexPool()
 	}
 
 	assert(p->objCount == 0);
-
-	delete p;
+	p->priorityQueue.clear();
+	p->poolHash.clear();
+	p->memSize = 0;
 }
 
 TEXFBO TexPool::request(int width, int height)
@@ -164,7 +171,13 @@ void TexPool::release(TEXFBO &obj)
 
 	/* If caching this object would spill over the allowed memory budget,
 	 * delete least used objects until we're good again */
+	// VitaGL has a fixed framebuffer table. Small cached textures can fill
+	// it long before reaching the byte budget, starving active windows.
+#ifdef __vita__
+	while (newMemSize > p->maxMemSize || p->objCount >= 64)
+#else
 	while (newMemSize > p->maxMemSize)
+#endif
 	{
 		if (p->objCount == 0)
 			break;

@@ -19,6 +19,9 @@ module HardRPG
       begin
         HardRPG.setup
         @library = Library.new
+        @error_report = HardRPG.take_error_report
+        @error_scroll = 0
+        @error_armed = false
       rescue SystemCallError => e
         @message = "Cannot create HardRPG folders: #{e.message}"
       end
@@ -29,6 +32,22 @@ module HardRPG
       @content.z = 1
       paint_background
       redraw
+      show_splash unless ARGV.include?("--hardrpg-return")
+    end
+
+    def show_splash
+      sprite = Sprite.new
+      begin
+        sprite.bitmap = Bitmap.new(SPLASH_PATH)
+        sprite.z = 100
+        60.times { Graphics.update; Input.update }
+      rescue StandardError
+        # Optional artwork must not prevent the browser or a game from opening.
+        @message = "Splash artwork could not be displayed."
+      ensure
+        sprite.bitmap.dispose if sprite.bitmap
+        sprite.dispose
+      end
     end
 
     def gradient(bitmap, x, y, width, height, top, bottom)
@@ -82,6 +101,7 @@ module HardRPG
 
     def redraw
       @content.bitmap.clear
+      return redraw_error_report if @error_report
       return redraw_missing_rtp if @missing_rtp
       return redraw_browser if @browser
       MENU.each_with_index do |name, i|
@@ -127,6 +147,15 @@ module HardRPG
       text(26, 487, 124, 22, "Cross: select", 15, [239, 188, 194])
       text(26, 508, 124, 17, "Circle: back", 14, [239, 188, 194])
       text(188, 505, 736, 18, "Up/Down: move   Cross: open/play   Circle: back   Triangle: refresh", 15, [239, 188, 194]) if @menu == 0
+    end
+
+    def redraw_error_report
+      text(31, 92, 117, 35, "Games")
+      text(190, 98, 724, 38, "The game ended with an error", 27)
+      @error_report[@error_scroll, 12].each_with_index do |line, index|
+        text(190, 147 + index * 27, 730, 27, line, 18)
+      end
+      text(190, 487, 730, 30, "Up/Down: scroll   Cross/Circle: game list", 20)
     end
 
     def redraw_settings
@@ -393,6 +422,18 @@ module HardRPG
     end
 
     def update
+      if @error_report
+        @error_armed = true unless Input.press?(:C) || Input.press?(:B)
+        if @error_armed && (Input.trigger?(:C) || Input.trigger?(:B))
+          @error_report = nil
+          redraw
+        elsif Input.repeat?(:UP) || Input.repeat?(:DOWN)
+          step = Input.repeat?(:UP) ? -1 : 1
+          @error_scroll = [[@error_scroll + step, 0].max, [@error_report.size - 12, 0].max].min
+          redraw
+        end
+        return
+      end
       if @missing_rtp
         if Input.trigger?(:C)
           @rtp_selected = Rtp::PACKS.index(@missing_rtp) || 0

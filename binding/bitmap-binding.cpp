@@ -39,6 +39,36 @@ static const char *objAsStringPtr(VALUE obj) {
     return RSTRING_PTR(str);
 }
 
+static Bitmap *bitmapFromFile(int argc, VALUE *argv) {
+    char *filename;
+    rb_get_args(argc, argv, "z", &filename RB_ARG_END);
+    Bitmap *bitmap = 0;
+#ifdef __vita__
+    bool retry = false;
+    try {
+        GFX_GUARD_EXC(bitmap = new Bitmap(filename);)
+    } catch (const Exception &error) {
+        if (error.type != Exception::SDLError ||
+            error.msg.find(": out of memory ") == std::string::npos)
+            throw;
+        retry = true;
+    }
+    if (retry) {
+        // Native image storage can run out before Ruby schedules a full GC.
+        // Collect with the VM lock held, outside the graphics lock and catch.
+        // The explicit Ruby method also collects when a game disables auto GC.
+        VALUE gc = rb_const_get(rb_cObject, rb_intern("GC"));
+        rb_funcall(gc, rb_intern("start"), 0);
+        // A compaction may move the string; obtain its pointer again.
+        rb_get_args(argc, argv, "z", &filename RB_ARG_END);
+        GFX_GUARD_EXC(bitmap = new Bitmap(filename);)
+    }
+#else
+    GFX_GUARD_EXC(bitmap = new Bitmap(filename);)
+#endif
+    return bitmap;
+}
+
 void bitmapInitProps(Bitmap *b, VALUE self) {
     /* Wrap properties */
     VALUE fontKlass = rb_const_get(rb_cObject, rb_intern("Font"));
@@ -69,10 +99,7 @@ RB_METHOD_GUARD(bitmapInitialize) {
     Bitmap *b = 0;
     
     if (argc == 1) {
-        char *filename;
-        rb_get_args(argc, argv, "z", &filename RB_ARG_END);
-        
-        GFX_GUARD_EXC(b = new Bitmap(filename);)
+        b = bitmapFromFile(argc, argv);
     } else {
         int width, height;
         rb_get_args(argc, argv, "ii", &width, &height RB_ARG_END);

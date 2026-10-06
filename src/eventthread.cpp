@@ -48,6 +48,9 @@
 #include "al-util.h"
 #include "debugwriter.h"
 #include "vita_diagnostic.h"
+#ifdef __vita__
+#include "vita_resume.h"
+#endif
 
 #ifndef __APPLE__
 #include "util/string-util.h"
@@ -247,6 +250,15 @@ void EventThread::process(RGSSThreadData &rtData)
     while (true)
     {
         vitaDiagPollTrigger();
+#ifdef __vita__
+        if (vitaPollResume()) {
+            resetInputStates();
+            rtData.rqFrameReset.set();
+#ifdef MKXPZ_PROTO_LAUNCHER
+            returnHoldActive = false;
+#endif
+        }
+#endif
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
         if (playingGame) {
             SceCtrlData pad = {};
@@ -265,17 +277,18 @@ void EventThread::process(RGSSThreadData &rtData)
             }
         }
         /* Wake while no game events arrive so the hold completes on time. */
-        const bool receivedEvent = playingGame
-            ? SDL_WaitEventTimeout(&event, 50)
-            : SDL_WaitEvent(&event);
+        const bool receivedEvent = SDL_WaitEventTimeout(&event, 50);
+#else
+#ifdef __vita__
+        const bool receivedEvent = SDL_WaitEventTimeout(&event, 50);
 #else
         const bool receivedEvent = SDL_WaitEvent(&event);
 #endif
+#endif
         if (!receivedEvent)
         {
-#if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
-            if (playingGame)
-                continue;
+#ifdef __vita__
+            continue;
 #endif
             Debug() << "EventThread: Event error";
             break;

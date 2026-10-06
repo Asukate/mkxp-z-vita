@@ -1,5 +1,11 @@
 # Iterating the launcher on a PC
 
+The native launcher is the default. Its production C++ model, UI and FreeType
+canvas run on a PC through the [native preview](NATIVE-LAUNCHER.md#desktop-iteration).
+The Ruby preview below is available for the alternative RGSS picker.
+
+## Alternative RGSS preview
+
 The desktop preview executes the production `launcher/library.rb` and
 `launcher/picker.rb`, with a small SDL adapter for their RGSS drawing/input
 calls. It compiles the exact native PhysicsFS ZIP bridge as a host Ruby
@@ -49,6 +55,17 @@ The tests use temporary synthetic metadata/ZIP payloads and remove their
 test library afterward. They exercise the production PhysicsFS backend,
 nested paths, game versions, JSON handoff, persistent saves, changed ZIPs,
 cancellation, traversal rejection, and corrupt archives.
+
+## Native launcher preview
+
+The default launcher has a preview using the production C++ menu and
+FreeType canvas. It does not use the RGSS adapter. See
+[native launcher details](NATIVE-LAUNCHER.md) for controls,
+build options, prerequisites and hardware acceptance checks.
+
+```bash
+python3 scripts/preview-native-launcher.py --work /path/to/native-preview --demo
+```
 
 ## Vita3K
 

@@ -35,6 +35,8 @@ public:
 	TEXFBO request(int width, int height);
 	void release(TEXFBO &obj);
 
+	// Release only unused textures retained by the pool.
+	void clearCache();
 	void disable();
 
 private:

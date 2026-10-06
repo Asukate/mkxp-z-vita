@@ -59,7 +59,7 @@ int main(int argc,char **argv){
    if(actual->w!=expected->w||actual->h!=expected->h||!(a==b)){
     printf("LAYOUT size=%d outline=%d text=%s actual=%dx%d ink=%d,%d..%d,%d expected=%dx%d ink=%d,%d..%d,%d\n",size,grow,text,actual->w,actual->h,a.x0,a.y0,a.x1,a.y1,expected->w,expected->h,b.x0,b.y0,b.x1,b.y1);++failures;
    }++cases;SDL_FreeSurface(actual);SDL_FreeSurface(expected);
-  }close(reference);FT_Done_Face(f.face);
+  }close(reference);vita_ttf_forget_glyphs(&f);FT_Done_Face(f.face);
  }printf("cases=%d layout_mismatches=%d\n",cases,failures);return failures?1:0;
 }
 '''

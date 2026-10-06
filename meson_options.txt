@@ -12,5 +12,6 @@ option('vita_diagnostics', type: 'boolean', value: false, description: 'Enable V
 option('vita_skip_event_mutex', type: 'boolean', value: false, description: 'Diagnostic-only: bypass EventThread SDL mutex construction')
 option('vita_skip_post_event_log', type: 'boolean', value: false, description: 'Diagnostic-only: bypass the first caller log after EventThread construction')
 option('proto_launcher', type: 'boolean', value: true, description: 'Enable the RGSS game picker and handoff on Vita')
+option('native_launcher', type: 'boolean', value: true, description: 'Use the native HardRPG menu instead of the RGSS picker')
 option('vita_libdir', type: 'string', value: '', description: 'Workspace dependency archive directory for Vita')
 option('vita_sdk_libdir', type: 'string', value: '', description: 'VitaSDK stub library directory')

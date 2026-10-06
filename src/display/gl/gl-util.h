@@ -168,13 +168,7 @@ namespace FBO
 
 	extern ID boundFramebufferID;
 
-	inline ID gen()
-	{
-		ID id;
-		gl.GenFramebuffers(1, &id.gl);
-
-		return id;
-	}
+	ID gen();
 
 	static inline void del(ID id)
 	{
@@ -321,10 +315,13 @@ struct TEXFBO
 	{
 		FrameProfile::Scope profile(FrameProfile::RenderTargetAlloc);
 		vitaFboDiag("init_begin");
-		obj.tex = TEX::gen();
-		vitaFboDiag("init_tex_generated", obj.tex.gl);
+		// Acquire the framebuffer first so a failed allocation leaks no texture.
+		obj.tex = TEX::ID(0);
+		obj.fbo = FBO::ID(0);
 		obj.fbo = FBO::gen();
-		vitaFboDiag("init_fbo_generated", obj.tex.gl, obj.fbo.gl);
+		vitaFboDiag("init_fbo_generated", 0, obj.fbo.gl);
+		obj.tex = TEX::gen();
+		vitaFboDiag("init_tex_generated", obj.tex.gl, obj.fbo.gl);
 		TEX::bind(obj.tex);
 		vitaFboDiag("init_texture_bound", obj.tex.gl, obj.fbo.gl);
 		TEX::setRepeat(false);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Package HardRPG's RGSS picker with the Vita engine built from this tree.
+# Package the launcher backend recorded in the verified engine build.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,8 +43,28 @@ trap 'rm -rf -- "$STAGE"' EXIT
 "$BIN/arm-vita-eabi-strip" --strip-debug "$ELF" -o "$STAGE/eboot-stripped.elf"
 "$BIN/vita-elf-create" "$STAGE/eboot-stripped.elf" "$STAGE/eboot.velf"
 "$BIN/vita-make-fself" "$STAGE/eboot.velf" "$STAGE/eboot.bin"
-"$BIN/vita-mksfoex" -s "TITLE_ID=$TITLE_ID" -s 'APP_VER=00.10' 'HardRPG' "$STAGE/param.sfo"
-ruby "$ROOT/scripts/build-picker.rb" "$STAGE/stub"
+NATIVE="$(python3 -c 'import json,sys; print("true" if json.load(open(sys.argv[1]))["native_launcher"] else "false")' "$WS/engine-state.json")"
+APP_VER="$(python3 - "$ROOT/src/native_launcher/release.h" "$NATIVE" <<'PY2'
+import re,sys
+if sys.argv[2] == 'false':
+    print('00.20') # The alternative RGSS launcher remains at 0.2 Alpha.
+    raise SystemExit(0)
+text=open(sys.argv[1]).read()
+match=re.search(r'^#define HARDRPG_APP_VER "([0-9]{2}\.[0-9]{2})"$',text,re.M)
+if not match: raise SystemExit('missing release app version')
+print(match[1])
+PY2
+)"
+"$BIN/vita-mksfoex" -s "TITLE_ID=$TITLE_ID" -s "APP_VER=$APP_VER" 'HardRPG' "$STAGE/param.sfo"
+PICKER_ARGS=()
+if [[ "$NATIVE" == true ]]; then
+    PICKER_ARGS=(-a "$ROOT/launcher/native-backend.txt=launcher-backend.txt")
+    FONT="$ROOT/assets/liberation.ttf"
+else
+    FONT="$ROOT/launcher/font.ttf"
+    ruby "$ROOT/scripts/build-picker.rb" "$STAGE/stub"
+    PICKER_ARGS=(-a stub/Game.ini=stub/Game.ini -a stub/Data/Scripts.rvdata2=stub/Data/Scripts.rvdata2)
+fi
 
 VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
 (cd "$STAGE" && "$BIN/vita-pack-vpk" \
@@ -57,7 +77,8 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/launcher/mkxp.json=mkxp.json" \
     -a "$ROOT/launcher/time_strftime_guard.rb=time_strftime_guard.rb" \
     -a "$ROOT/launcher/performance_patch.rb=performance_patch.rb" \
-    -a "$ROOT/launcher/font.ttf=font.ttf" \
+    -a "$FONT=font.ttf" \
+    -a "$ROOT/launcher/assets/hardrpg-splash.png=stub/Graphics/Pictures/hardrpg-splash.png" \
     -a "$ROOT/THIRD-PARTY-NOTICES.md=THIRD-PARTY-NOTICES.md" \
     -a "$ROOT/COPYING=licenses/GPL-2.0.txt" \
     -a "$ROOT/LICENSES/GPL-3.0.txt=licenses/GPL-3.0.txt" \
@@ -65,8 +86,7 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/LICENSES/Liberation.txt=licenses/Liberation.txt" \
     -a "$ROOT/LICENSES/math-neon.txt=licenses/math-neon.txt" \
     -a "$ROOT/src/display/libnsgif/COPYING=licenses/libnsgif.txt" \
-    -a stub/Game.ini=stub/Game.ini \
-    -a stub/Data/Scripts.rvdata2=stub/Data/Scripts.rvdata2 \
+    "${PICKER_ARGS[@]}" \
     "$VPK")
 python3 "$ROOT/scripts/verify-launcher-payload.py" "$VPK" "$TITLE_ID"
 sha256sum "$VPK"

@@ -45,10 +45,15 @@
 #include "display/gl/gl-fun.h"
 
 #include "vita_diagnostic.h"
+#ifdef MKXPZ_NATIVE_LAUNCHER
+#include "native_launcher/runtime.h"
+#endif
 #include "vita_uid_auditor_api.h"
 #ifdef __vita__
 #include "vita_startup_timer.h"
 #include "vita_livearea.h"
+#include "vita_error_report.h"
+#include "vita_runtime_log.h"
 #endif
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
 #include <cstdio>
@@ -250,6 +255,9 @@ static void rgssThreadError(RGSSThreadData *rtData, const std::string &msg) {
 }
 
 static void showInitError(const std::string &msg) {
+#ifdef __vita__
+  vitaWriteErrorReport("Startup error\n\n" + msg);
+#endif
   vitaDiagLog("ERROR", "%s", msg.c_str());
   Debug() << msg;
   SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "mkxp-z", msg.c_str(), 0);
@@ -284,6 +292,8 @@ int main(int argc, char *argv[]) {
     if (vitaHandleLiveAreaLaunch())
         return 0;
     vitaStartupTimerInit();
+    vitaRuntimeLogInit();
+    fprintf(stderr, "HardRPG runtime %s started\n", MKXPZ_GIT_HASH);
 #endif
     vitaDiagInit(argc > 0 ? argv[0] : "mkxp-z");
     vitaDiagLog("MAIN", "startup argc=%d", argc);
@@ -316,6 +326,20 @@ int main(int argc, char *argv[]) {
       return 0;
     }
 
+#ifdef MKXPZ_NATIVE_LAUNCHER
+    if (nativeLauncherRequested(argc, argv)) {
+        bool returning = false;
+        for (int i = 1; i < argc; ++i)
+            returning = returning || !strcmp(argv[i], "--hardrpg-return") ||
+                        !strcmp(argv[i], "--hardrpg-play");
+        int rc = runNativeLauncher(returning);
+        SDL_Quit();
+        vitaDiagShutdown();
+        vitaStartupTimerShutdown();
+        return rc;
+    }
+#endif
+
 #ifndef WORKDIR_CURRENT
     char dataDir[512]{};
 #if defined(__linux__)
@@ -334,7 +358,24 @@ int main(int argc, char *argv[]) {
     /* now we load the config */
     vitaDiagLog("BOOTPERF", "config_begin");
     Config conf;
+#ifdef MKXPZ_NATIVE_LAUNCHER
+    std::string configError;
+    try { conf.read(argc, argv); }
+    catch (const Exception &e) { configError = e.msg.c_str(); }
+    catch (const std::exception &e) { configError = e.what(); }
+    if (!configError.empty()) {
+        vitaWriteErrorReport("Unable to start game\n" + configError);
+        // Configuration can fail before a game GL context exists. The native
+        // menu can show that error directly, without starting Ruby.
+        int rc = runNativeLauncher(true);
+        SDL_Quit();
+        vitaDiagShutdown();
+        vitaStartupTimerShutdown();
+        return rc;
+    }
+#else
     conf.read(argc, argv);
+#endif
     vitaDiagLog("BOOTPERF", "config_ready rgss=%d", conf.rgssVersion);
 #ifdef __vita__
     vitaStartupTimerMark("config_ready");
@@ -614,13 +655,21 @@ int main(int argc, char *argv[]) {
      * otherwise abandon hope and just end the process as is. */
     if (rtData.rqTermAck)
       SDL_WaitThread(rgssThread, 0);
-    else
+    else {
+#ifdef __vita__
+      vitaWriteErrorReport("The game stopped responding and had to close.\n"
+                           "A backtrace could not be retrieved from its active script thread.");
+#endif
       SDL_ShowSimpleMessageBox(
           SDL_MESSAGEBOX_ERROR, conf.game.title.c_str(),
           std::string("The RGSS script seems to be stuck. "+conf.game.title+" will now force quit.").c_str(),
           win);
+    }
 
     if (!rtData.rgssErrorMsg.empty()) {
+#ifdef __vita__
+      vitaWriteErrorReport("Engine error\n\n" + rtData.rgssErrorMsg);
+#endif
       Debug() << rtData.rgssErrorMsg;
       vitaDiagLog("ERROR", "rgss_shutdown_error: %s", rtData.rgssErrorMsg.c_str());
       SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, conf.game.title.c_str(),
@@ -650,19 +699,25 @@ int main(int argc, char *argv[]) {
     STEAMSHIM_deinit();
 #endif
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
-    /* Prototype launcher: the stub picker wrote a pick file and exited.
-     * Reboot into the picked game. A consumed pick is deleted at startup,
-     * so a plain game exit (or a picker quit) falls through to LiveArea.
-     * The reserved return chord reboots into the picker without a pick. */
+    /* The picker hands off its selection; completed games return to the
+     * picker. Restart only after the RGSS thread has acknowledged shutdown.
+     * A picker exit without a selection returns to LiveArea. */
     {
         FILE *protoPick = std::fopen("ux0:/data/hardrpg/selection.json", "rb");
-        if (protoPick || eventThread.returnToLauncherRequested()) {
+        const bool playingGame = conf.gameFolder != "app0:/stub";
+        if (rtData.rqTermAck && (protoPick || playingGame || eventThread.returnToLauncherRequested())) {
             if (protoPick)
                 std::fclose(protoPick);
             if (eventThread.returnToLauncherRequested())
                 std::remove("ux0:/data/hardrpg/selection.json");
-            sceAppMgrLoadExec("app0:/eboot.bin", nullptr, nullptr);
+            // An internal return must not replay the cold-start splash.
+            char returnArg[] = "--hardrpg-return";
+            char *returnArgs[] = {returnArg, nullptr};
+            const bool returningToPicker = playingGame || eventThread.returnToLauncherRequested();
+            sceAppMgrLoadExec("app0:/eboot.bin", returningToPicker ? returnArgs : nullptr, nullptr);
         }
+        else if (protoPick)
+            std::fclose(protoPick);
     }
 #endif
     Sound_Quit();
@@ -692,14 +747,16 @@ static SDL_GLContext initGL(SDL_Window *win, Config &conf,
   vitaDiagLog("BOOTPERF", "gl_init_begin");
 #ifdef __vita__
   /* Generic Vita memory fix: pre-init vitaGL with MSAA disabled before
-   * SDL's hardcoded vglInit(8MB) runs (that path forces 4X MSAA, which
+   * SDL's fallback init runs (that path forces 4X MSAA, which
    * quadruples every display surface and drains the shared VRAM/RAM pools
    * until textures can no longer allocate). vitaGL suppresses SDL's later
    * init call, so this single pre-init governs all games. Sprite-edge
-   * pixels are NEAREST-filtered 2D art; MSAA buys nothing visible here. */
+   * pixels are NEAREST-filtered 2D art; MSAA buys nothing visible here.
+   * Vertex arrays also need no legacy glBegin/glEnd pool; reserving one
+   * repeatedly overflows temporary storage and forces allocation waits. */
   {
     vitaDiagLog("GL", "vgl_preinit_begin msaa=none ram64 phycont1m");
-    vglInitWithCustomThreshold(8 * 1024 * 1024, 960, 544,
+    vglInitWithCustomThreshold(0, 960, 544,
                                28 * 1024 * 1024, 0, 25 * 1024 * 1024,
                                0x8C6000, 0);
     vitaDiagLog("GL", "vgl_preinit_done");

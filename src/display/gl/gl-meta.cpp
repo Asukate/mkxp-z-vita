@@ -26,10 +26,30 @@
 #include "quad.h"
 #include "config.h"
 #include "etc.h"
+#include "exception.h"
+#include "texpool.h"
 
 namespace FBO
 {
 	ID boundFramebufferID;
+
+	ID gen()
+	{
+		ID id;
+		gl.GenFramebuffers(1, &id.gl);
+#ifdef __vita__
+		if (!id.gl)
+		{
+			// Cached textures must not consume the slots needed by live windows.
+			shState->texPool().clearCache();
+			gl.GenFramebuffers(1, &id.gl);
+		}
+#endif
+		if (!id.gl)
+			throw Exception(Exception::MKXPError,
+			                "Unable to allocate framebuffer: renderer object limit reached");
+		return id;
+	}
 }
 
 namespace GLMeta
