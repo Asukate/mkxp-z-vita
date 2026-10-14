@@ -28,9 +28,12 @@
 #include "sharedstate.h"
 #include "global-ibo.h"
 #include "shader.h"
+#include "exception.h"
 
 #include <vector>
 #include <stdint.h>
+
+enum { QuadArrayMaxQuads = 1 << 16 };
 
 template<class VertexType>
 struct QuadArray
@@ -64,6 +67,11 @@ struct QuadArray
 
 	void resize(size_t size)
 	{
+		/* A 32-bit size_t wraps `size * 4` for a huge count and the geometry
+		 * builders would then write past a tiny vector. */
+		if (size > QuadArrayMaxQuads)
+			throw Exception(Exception::MKXPError, "Quad array too large");
+
 		vertices.resize(size * 4);
 		quadCount = size;
 	}

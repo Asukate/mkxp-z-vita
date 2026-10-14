@@ -35,6 +35,9 @@
 #include "config.h"
 
 #include "binding-util.h"
+#ifdef __vita__
+#include "input/vita_input.h"
+#endif
 #include "binding.h"
 
 #include "sharedstate.h"
@@ -198,6 +201,9 @@ RB_METHOD(mkxpDelta);
 RB_METHOD(mriPrint);
 RB_METHOD(mriP);
 RB_METHOD(mkxpDataDirectory);
+#ifdef __vita__
+RB_METHOD(mkxpGameDataDirectory);
+#endif
 RB_METHOD(mkxpSetTitle);
 RB_METHOD(mkxpGetTitle);
 RB_METHOD(mkxpDesensitize);
@@ -220,6 +226,7 @@ RB_METHOD(mkxpPowerState);
 RB_METHOD(mkxpSettingsMenu);
 RB_METHOD(mkxpCpuCount);
 RB_METHOD(mkxpSystemMemory);
+RB_METHOD(mkxpVitaMemorySnapshot);
 RB_METHOD(mkxpReloadPathCache);
 RB_METHOD(mkxpAddPath);
 RB_METHOD(mkxpRemovePath);
@@ -365,6 +372,13 @@ static void mriBindingInit() {
     _rb_define_module_function(mod, "delta", mkxpDelta);
     _rb_define_module_function(mod, "uptime", mkxpDelta);
     _rb_define_module_function(mod, "data_directory", mkxpDataDirectory);
+#ifdef __vita__
+    /* Desktop mkxp called this module MKXP. Games released on it (To the
+     * Moon) ask MKXP.data_directory where their settings and saves go. */
+    VALUE desktopMkxp = rb_define_module("MKXP");
+    _rb_define_module_function(desktopMkxp, "data_directory", mkxpGameDataDirectory);
+    _rb_define_module_function(desktopMkxp, "puts", mkxpPuts);
+#endif
     _rb_define_module_function(mod, "set_window_title", mkxpSetTitle);
     _rb_define_module_function(mod, "window_title", mkxpGetTitle);
     _rb_define_module_function(mod, "window_title=", mkxpSetTitle);
@@ -391,6 +405,7 @@ static void mriBindingInit() {
     _rb_define_module_function(mod, "power_state", mkxpPowerState);
     _rb_define_module_function(mod, "nproc", mkxpCpuCount);
     _rb_define_module_function(mod, "memory", mkxpSystemMemory);
+    _rb_define_module_function(mod, "vita_memory_snapshot", mkxpVitaMemorySnapshot);
     _rb_define_module_function(mod, "reload_cache", mkxpReloadPathCache);
     _rb_define_module_function(mod, "mount", mkxpAddPath);
     _rb_define_module_function(mod, "unmount", mkxpRemovePath);
@@ -411,6 +426,15 @@ static void mriBindingInit() {
     
     /* Load global constants */
     rb_gv_set("MKXP", Qtrue);
+#ifdef __vita__
+    /* The rest of what games ask of desktop mkxp's module; resolved when
+     * called, after the Input binding exists. */
+    rb_eval_string(
+        "module MKXP\n"
+        "  def self.raw_key_states; Input.raw_key_states; end\n"
+        "  def self.mouse_in_window; Input.mouse_in_window; end\n"
+        "end\n");
+#endif
     
     VALUE debug = rb_bool_new(shState->config().editor.debug);
     if (rgssVer == 1)
@@ -515,6 +539,21 @@ RB_METHOD(mkxpDataDirectory) {
     
     return ret;
 }
+
+#ifdef __vita__
+/* Beside the game, with the trailing separator desktop mkxp returned: the
+ * games join file names straight onto it. */
+RB_METHOD(mkxpGameDataDirectory) {
+    RB_UNUSED_PARAM;
+
+    std::string path = shState->config().gameFolder;
+    if (path.empty())
+        path = ".";
+    if (path.back() != '/')
+        path += '/';
+    return rb_utf8_str_new_cstr(path.c_str());
+}
+#endif
 
 RB_METHOD(mkxpSetTitle) {
     RB_UNUSED_PARAM;
@@ -688,6 +727,14 @@ RB_METHOD(mkxpCpuCount) {
     RB_UNUSED_PARAM;
     
     return INT2NUM(SDL_GetCPUCount());
+}
+
+RB_METHOD(mkxpVitaMemorySnapshot) {
+    RB_UNUSED_PARAM;
+    rb_check_arity(argc, 0, 0);
+    char snapshot[1280];
+    const size_t size = vitaMemorySnapshot(snapshot, sizeof(snapshot));
+    return rb_utf8_str_new(snapshot, size);
 }
 
 RB_METHOD(mkxpSystemMemory) {
@@ -1027,6 +1074,52 @@ static void runCustomScript(const std::string &filename) {
                newStringUTF8(filename.c_str(), filename.size()), &state);
 }
 
+#ifdef __vita__
+/* Tap-to-walk is a script that hooks the game's own player and map classes,
+ * so it can only be loaded once they exist, and RGSS1 and RGSS2 offer no
+ * point between loading scripts and running them. Graphics.update calls this
+ * every frame until the classes are there (the first frame of the title in
+ * practice), then never again. A game whose movement is not the stock tile
+ * movement is left alone. */
+void vitaTapToWalkTick() {
+    static bool settled = false;
+    static unsigned tries = 0;
+    if (settled || !vitaControlProfile().tapToWalk)
+        return;
+    if (++tries > 1800) {
+        settled = true;
+        return;
+    }
+    int state = 0;
+    VALUE ready = rb_eval_string_protect(
+        "Object.const_defined?(:Game_Player) && Object.const_defined?(:Scene_Map)", &state);
+    if (state) {
+        rb_set_errinfo(Qnil);
+        return;
+    }
+    if (ready != Qtrue)
+        return;
+    settled = true;
+    VALUE problem = rb_eval_string_protect(
+        "begin\n"
+        "  eval(File.binread('app0:/vita_tap_to_walk.rb').force_encoding('UTF-8'),\n"
+        "       TOPLEVEL_BINDING, 'vita_tap_to_walk.rb')\n"
+        "  HardRPGTapWalk.install!\n"
+        "  nil\n"
+        "rescue Exception => e\n"
+        "  \"#{e.class}: #{e.message}\"\n"
+        "end\n", &state);
+    if (state) {
+        rb_set_errinfo(Qnil);
+        fprintf(stderr, "Tap to walk could not be loaded\n");
+    } else if (RB_TYPE_P(problem, RUBY_T_STRING)) {
+        fprintf(stderr, "Tap to walk is off for this game: %s\n", StringValueCStr(problem));
+    } else {
+        fprintf(stderr, "Tap to walk is on\n");
+    }
+}
+#endif
+
 RB_METHOD_GUARD(mriRgssMain) {
     RB_UNUSED_PARAM;
 
@@ -1346,32 +1439,146 @@ static void runRMXPScripts(BacktraceData &btData) {
     }
 }
 
-static void showExc(VALUE exc, const BacktraceData &btData) {
 #ifdef __vita__
+static VALUE reportIvar(VALUE object, const char *name) {
+    return NIL_P(object) ? Qnil : rb_iv_get(object, name);
+}
+static void reportValue(const char *label, VALUE value) {
+    if (NIL_P(value)) return;
+    if (RB_TYPE_P(value, RUBY_T_STRING)) {
+        vitaErrorReportFormat("%s=", label);
+        vitaErrorReportAppend(RSTRING_PTR(value), std::min<long>(RSTRING_LEN(value), 256));
+        vitaErrorReportFormat("\n");
+    } else if (RB_INTEGER_TYPE_P(value)) {
+        vitaErrorReportFormat("%s=%ld\n", label, NUM2LONG(value));
+    } else if (RB_TYPE_P(value, RUBY_T_CLASS) || RB_TYPE_P(value, RUBY_T_MODULE)) {
+        vitaErrorReportFormat("%s=%s\n", label, rb_class2name(value));
+    } else if (SYMBOL_P(value)) {
+        vitaErrorReportFormat("%s=%s\n", label, rb_id2name(SYM2ID(value)));
+    } else {
+        vitaErrorReportFormat("%s.class=%s\n", label, rb_obj_classname(value));
+    }
+}
+static void reportFields(VALUE object, const char *fields[], size_t count) {
+    for (size_t i = 0; i < count; ++i) reportValue(fields[i], reportIvar(object, fields[i]));
+}
+static VALUE reportGameContext(VALUE) {
+    vitaErrorReportFormat("\nGame state at exception (unavailable fields omitted):\n");
+    VALUE scene = rb_gv_get("$scene");
+    if (rb_const_defined(rb_cObject, rb_intern("SceneManager")))
+        scene = reportIvar(rb_const_get(rb_cObject, rb_intern("SceneManager")), "@scene");
+    reportValue("scene", scene);
+    const char *mapFields[] = {"@map_id"};
+    reportFields(rb_gv_get("$game_map"), mapFields, 1);
+    const char *playerFields[] = {"@x", "@y", "@direction"};
+    reportFields(rb_gv_get("$game_player"), playerFields, 3);
+    const char *troopFields[] = {"@troop_id", "@turn_count"};
+    reportFields(rb_gv_get("$game_troop"), troopFields, 2);
+    const char *systemFields[] = {"@save_count", "@battle_count"};
+    reportFields(rb_gv_get("$game_system"), systemFields, 2);
+    VALUE subject = reportIvar(scene, "@subject");
+    reportValue("subject", subject);
+    const char *actorFields[] = {"@actor_id", "@enemy_id", "@class_id", "@level", "@hp", "@mp"};
+    reportFields(subject, actorFields, 6);
+    VALUE equips = reportIvar(subject, "@equips");
+    const char *itemFields[] = {"@class", "@item_id"};
+    if (RB_TYPE_P(equips, RUBY_T_ARRAY))
+        for (long i = 0; i < RARRAY_LEN(equips) && i < 16; ++i) {
+            vitaErrorReportFormat("equipment[%ld]:\n", i);
+            reportFields(rb_ary_entry(equips, i), itemFields, 2);
+        }
+    VALUE actions = reportIvar(subject, "@actions");
+    if (RB_TYPE_P(actions, RUBY_T_ARRAY))
+        for (long i = 0; i < RARRAY_LEN(actions) && i < 8; ++i) {
+            VALUE item = reportIvar(rb_ary_entry(actions, i), "@item");
+            vitaErrorReportFormat("action[%ld]:\n", i);
+            reportFields(item, itemFields, 2);
+        }
+    VALUE spriteset = reportIvar(scene, "@spriteset");
+    const char *spriteLists[] = {"@actor_sprites", "@enemy_sprites"};
+    const char *animationFields[] = {"@id", "@name", "@animation1_name", "@animation2_name", "@frame_max"};
+    for (const char *list : spriteLists) {
+        VALUE sprites = reportIvar(spriteset, list);
+        if (!RB_TYPE_P(sprites, RUBY_T_ARRAY)) continue;
+        for (long i = 0; i < RARRAY_LEN(sprites) && i < 32; ++i) {
+            VALUE sprite = rb_ary_entry(sprites, i);
+            VALUE animation = reportIvar(sprite, "@animation");
+            if (NIL_P(animation)) continue;
+            vitaErrorReportFormat("%s[%ld] animation:\n", list, i);
+            reportFields(animation, animationFields, 5);
+            const char *spriteFields[] = {"@ani_duration", "@animation_mirror"};
+            reportFields(sprite, spriteFields, 2);
+        }
+    }
+    if (rb_const_defined(rb_cObject, rb_intern("Cache"))) {
+        VALUE cache = reportIvar(rb_const_get(rb_cObject, rb_intern("Cache")), "@cache");
+        if (RB_TYPE_P(cache, RUBY_T_HASH)) vitaErrorReportFormat("Cache entries=%ld\n", RHASH_SIZE(cache));
+    }
+    VALUE gc = rb_const_get(rb_cObject, rb_intern("GC"));
+    const char *stats[] = {"count", "heap_live_slots", "heap_free_slots", "total_allocated_objects", "malloc_increase_bytes", "oldmalloc_increase_bytes"};
+    for (const char *key : stats) {
+        VALUE value = rb_funcall(gc, rb_intern("stat"), 1, ID2SYM(rb_intern(key)));
+        reportValue(key, value);
+    }
+    return Qnil;
+}
+struct ErrorCapture { VALUE exc; const BacktraceData *backtrace; };
+static VALUE reportException(VALUE argument) {
+    const ErrorCapture &capture = *reinterpret_cast<ErrorCapture *>(argument);
+    VALUE exc = capture.exc;
+    vitaErrorReportFormat("Exception: %s\n\n", rb_obj_classname(exc));
     VALUE message = rb_funcall2(exc, rb_intern("message"), 0, NULL);
-    VALUE trace = rb_funcall2(exc, rb_intern("backtrace"), 0, NULL);
-    std::string report = std::string(rb_obj_classname(exc)) + "\n\n";
     if (RB_TYPE_P(message, RUBY_T_STRING))
-        report.append(RSTRING_PTR(message), std::min<long>(RSTRING_LEN(message), 8192));
-    else
-        report += "Exception message unavailable.";
-    report += "\n\nBacktrace:\n";
-    if (RB_TYPE_P(trace, RUBY_T_ARRAY) && RARRAY_LEN(trace) > 0) {
+        vitaErrorReportAppend(RSTRING_PTR(message), std::min<long>(RSTRING_LEN(message), 8192));
+    vitaErrorReportFormat("\n\nBacktrace:\n");
+    VALUE trace = rb_funcall2(exc, rb_intern("backtrace"), 0, NULL);
+    if (RB_TYPE_P(trace, RUBY_T_ARRAY)) {
+        size_t traceBytes = 0;
         for (long i = 0; i < RARRAY_LEN(trace) && i < 32; ++i) {
             VALUE entry = rb_ary_entry(trace, i);
             if (!RB_TYPE_P(entry, RUBY_T_STRING)) continue;
-            std::string line(RSTRING_PTR(entry), std::min<long>(RSTRING_LEN(entry), 1024));
-            const size_t colon = line.find(':');
-            if (colon != std::string::npos) {
-                const std::string name = line.substr(0, colon);
-                line.replace(0, colon, btData.scriptNames.value(name, name));
+            const char *line = RSTRING_PTR(entry);
+            const size_t size = std::min<long>(RSTRING_LEN(entry), 1024);
+            const char *colon = static_cast<const char *>(memchr(line, ':', size));
+            const std::string *mapped = nullptr;
+            if (colon) {
+                const size_t prefix = colon - line;
+                for (auto it = capture.backtrace->scriptNames.cbegin(); it != capture.backtrace->scriptNames.cend(); ++it)
+                    if (it->first.size() == prefix && !memcmp(it->first.data(), line, prefix)) { mapped = &it->second; break; }
             }
-            report += line + "\n";
+            // Reserve space for game context even with unusually long traces.
+            const size_t outputSize = mapped ? std::min<size_t>(mapped->size(), 512) + size - (colon - line) : size;
+            if (traceBytes + outputSize + 1 > 8192) {
+                vitaErrorReportFormat("[Backtrace truncated]\n");
+                break;
+            }
+            traceBytes += outputSize + 1;
+            if (mapped) {
+                vitaErrorReportAppend(mapped->data(), std::min<size_t>(mapped->size(), 512));
+                vitaErrorReportAppend(colon, size - (colon - line));
+            } else vitaErrorReportAppend(line, size);
+            vitaErrorReportFormat("\n");
         }
-    } else {
-        report += "No backtrace was supplied by the game.\n";
-    }
-    vitaWriteErrorReport(report);
+    } else vitaErrorReportFormat("No backtrace supplied.\n");
+    return Qnil;
+}
+#endif
+
+static void showExc(VALUE exc, const BacktraceData &btData) {
+#ifdef __vita__
+    vitaErrorReportBegin();
+    vitaErrorReportFormat("Graphics frame: %d\n", shState->graphics().getFrameCount());
+    ErrorCapture capture = {exc, &btData};
+    int state = 0;
+    rb_protect(reportException, reinterpret_cast<VALUE>(&capture), &state);
+    if (state) vitaErrorReportFormat("\nException details could not be fully read.\n");
+    rb_set_errinfo(exc);
+    state = 0;
+    rb_protect(reportGameContext, Qnil, &state);
+    if (state) vitaErrorReportFormat("\nAdditional game context unavailable (Ruby raised while collecting it).\n");
+    rb_set_errinfo(exc);
+    vitaErrorReportSave();
+    RB_GC_GUARD(exc);
     return;
 #endif
 #ifdef MKXPZ_VITA_DIAGNOSTICS
@@ -1397,7 +1604,7 @@ static void showExc(VALUE exc, const BacktraceData &btData) {
         VALUE nameString = rb_obj_as_string(name);
         vitaDiagLog("RUBY", "show_exc_without_backtrace class=%s message=%s",
                     StringValueCStr(nameString), StringValueCStr(msgString));
-        std::string fallback(768, '\0');
+        std::string fallback(1280, '\0');
         snprintf(&fallback[0], fallback.size(), "%s occurred.\n\n%s",
                  RSTRING_PTR(nameString), RSTRING_PTR(msgString));
         fallback.resize(strlen(fallback.c_str()));
@@ -1477,6 +1684,9 @@ static void showExc(VALUE exc, const BacktraceData &btData) {
 
 static void mriBindingExecute() {
     Config &conf = shState->rtData().config;
+#ifdef __vita__
+    vitaErrorSessionStart(conf.gameFolder.c_str(), conf.rgssVersion);
+#endif
     vitaDiagLogThread("ruby_thread_enter");
     
 #if RAPI_MAJOR >= 2
@@ -1632,6 +1842,7 @@ static void mriBindingExecute() {
     vitaDiagLog("RUBY", "game_error nil=%d system_exit=%d",
                 NIL_P(exc) ? 1 : 0,
                 (!NIL_P(exc) && rb_obj_is_kind_of(exc, rb_eSystemExit)) ? 1 : 0);
+#ifdef MKXPZ_VITA_DIAGNOSTICS
     if (!NIL_P(exc) && !rb_obj_is_kind_of(exc, rb_eSystemExit)) {
         VALUE message = rb_funcall2(exc, rb_intern("message"), 0, NULL);
         vitaDiagLog("RUBY", "game_error_detail class=%s message=%s",
@@ -1646,6 +1857,7 @@ static void mriBindingExecute() {
                             StringValueCStr(entry));
         }
     }
+#endif
     if (!NIL_P(exc) && !rb_obj_is_kind_of(exc, rb_eSystemExit))
         showExc(exc, btData);
     

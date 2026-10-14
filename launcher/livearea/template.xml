@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<livearea style="a1" format-ver="01.00" content-rev="5">
+<livearea style="a1" format-ver="01.00" content-rev="6">
     <livearea-background>
         <image>bg0.png</image>
     </livearea-background>
@@ -8,5 +8,13 @@
     <gate>
         <startup-image>startup.png</startup-image>
     </gate>
+
+    <frame id="frame3">
+        <liveitem>
+            <text origin="background" align="right" y="-250" margin-right="12">
+                <str size="18" shadow="on" color="#ffffff">@HARDRPG_VERSION@</str>
+            </text>
+        </liveitem>
+    </frame>
 
 </livearea>

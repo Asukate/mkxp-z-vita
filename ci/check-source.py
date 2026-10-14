@@ -40,6 +40,8 @@ with tempfile.TemporaryDirectory() as temp:
                 path = ROOT / 'src/display/libnsgif/COPYING'
             else:
                 path = ROOT / 'LICENSES' / Path(name).name
+        elif name in ('ca-certificates.crt', 'TimGM6mb.sf2'):
+            path = ROOT / 'assets' / name
         elif name == 'THIRD-PARTY-NOTICES.md':
             path = ROOT / name
         else:

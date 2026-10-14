@@ -40,6 +40,155 @@
 #ifdef __vita__
 #define STBI_NO_THREAD_LOCALS
 #endif
+/* Large pixel buffers do not come from the C heap.
+ *
+ * A game that keeps creating and dropping bitmaps leaves the heap full of
+ * small live blocks, and every large free region is soon split by them. To
+ * the Moon ran out of room for a 3.7 MiB sprite sheet with 81 MiB free in
+ * 4,400 pieces, then for a JPEG with 95 MiB free. Decoded images and large
+ * bitmaps (128 KiB and more) therefore each get their own kernel memory
+ * block: the kernel hands out pages, so there is nothing to fragment, and a
+ * freed block goes straight back. The heap is left with small allocations.
+ *
+ * The blocks come from main memory that vitaGL is told to leave alone (see
+ * the threshold in main.cpp), under a budget that keeps the rest for thread
+ * stacks and the system. Past the budget, or if the kernel refuses, the heap
+ * is used, and vitaGL's own pool after that. */
+#ifdef __vita__
+#include <psp2/kernel/sysmem.h>
+#define VITA_BLOCK_MIN (128u * 1024u)
+#define VITA_BLOCK_BUDGET (56u * 1024u * 1024u)
+#define VITA_BLOCK_SLOTS 1024
+extern void *vglMalloc(uint32_t size) __attribute__((weak));
+extern void vglFree(void *addr) __attribute__((weak));
+static struct {
+    void *ptr;
+    int uid; /* kernel block, or -1 for vitaGL's pool */
+    uint32_t size;
+} vita_blocks[VITA_BLOCK_SLOTS];
+static uint32_t vita_block_bytes;
+static volatile int vita_block_lock;
+static void vita_blocks_enter(void) { while (__sync_lock_test_and_set(&vita_block_lock, 1)) {} }
+static void vita_blocks_leave(void) { __sync_lock_release(&vita_block_lock); }
+static int vita_block_register(void *ptr, int uid, uint32_t size) {
+    int i;
+    for (i = 0; i < VITA_BLOCK_SLOTS; ++i)
+        if (!vita_blocks[i].ptr) {
+            vita_blocks[i].ptr = ptr;
+            vita_blocks[i].uid = uid;
+            vita_blocks[i].size = size;
+            if (uid >= 0)
+                vita_block_bytes += size;
+            return 1;
+        }
+    return 0;
+}
+/* Figures for the engine's memory snapshot: live blocks and their bytes. */
+void vitaPixelBlockFigures(uint32_t *count, uint32_t *bytes) {
+    int i;
+    uint32_t n = 0;
+    vita_blocks_enter();
+    for (i = 0; i < VITA_BLOCK_SLOTS; ++i)
+        if (vita_blocks[i].ptr && vita_blocks[i].uid >= 0)
+            ++n;
+    *count = n;
+    *bytes = vita_block_bytes;
+    vita_blocks_leave();
+}
+#endif
+
+/* outside is set when the buffer must be released with vita_big_free. */
+static void *vita_big_alloc(size_t size, int zero, int *outside) {
+    void *ptr;
+    if (outside)
+        *outside = 0;
+#ifdef __vita__
+    if (size >= VITA_BLOCK_MIN && size < 0x40000000u) {
+        const uint32_t whole = ((uint32_t)size + 4095u) & ~4095u;
+        vita_blocks_enter();
+        if (vita_block_bytes + whole <= VITA_BLOCK_BUDGET) {
+            void *base = NULL;
+            int uid = sceKernelAllocMemBlock("hardrpg_pixels", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, whole, NULL);
+            if (uid >= 0 && sceKernelGetMemBlockBase(uid, &base) >= 0 && base &&
+                vita_block_register(base, uid, whole)) {
+                vita_blocks_leave();
+                if (zero)
+                    memset(base, 0, size);
+                if (outside)
+                    *outside = 1;
+                return base;
+            }
+            if (uid >= 0)
+                sceKernelFreeMemBlock(uid);
+        }
+        vita_blocks_leave();
+    }
+#endif
+    ptr = zero ? calloc(1, size) : malloc(size);
+#ifdef __vita__
+    if (!ptr && size >= 64u * 1024u && size < 0x40000000u && vglMalloc && vglFree) {
+        ptr = vglMalloc((uint32_t)size);
+        if (ptr) {
+            int kept;
+            vita_blocks_enter();
+            kept = vita_block_register(ptr, -1, (uint32_t)size);
+            vita_blocks_leave();
+            if (!kept) {
+                vglFree(ptr);
+                return NULL;
+            }
+            if (zero)
+                memset(ptr, 0, size);
+            if (outside)
+                *outside = 1;
+        }
+    }
+#endif
+    return ptr;
+}
+
+static void vita_big_free(void *ptr) {
+#ifdef __vita__
+    int i, uid = 0, found = 0;
+    if (!ptr)
+        return;
+    vita_blocks_enter();
+    for (i = 0; i < VITA_BLOCK_SLOTS; ++i)
+        if (vita_blocks[i].ptr == ptr) {
+            uid = vita_blocks[i].uid;
+            if (uid >= 0)
+                vita_block_bytes -= vita_blocks[i].size;
+            vita_blocks[i].ptr = NULL;
+            found = 1;
+            break;
+        }
+    vita_blocks_leave();
+    if (found) {
+        if (uid >= 0)
+            sceKernelFreeMemBlock(uid);
+        else
+            vglFree(ptr);
+        return;
+    }
+#endif
+    free(ptr);
+}
+
+/* stb_image (JPEG) allocates its output and working buffers through these. */
+static void *vita_stbi_malloc(size_t size) { return vita_big_alloc(size, 0, NULL); }
+static void *vita_stbi_realloc(void *old, size_t old_size, size_t size) {
+    void *ptr = vita_big_alloc(size, 0, NULL);
+    if (ptr && old)
+        memcpy(ptr, old, old_size < size ? old_size : size);
+    if (ptr || !size)
+        vita_big_free(old);
+    return ptr;
+}
+#define STBI_MALLOC(size) vita_stbi_malloc(size)
+#define STBI_REALLOC_SIZED(ptr, old_size, size) vita_stbi_realloc(ptr, old_size, size)
+#define STBI_FREE(ptr) vita_big_free(ptr)
+
+#define VITA_SURFACE_POOL_PIXELS 0x40000000u
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -135,6 +284,13 @@ static int vita_utf8_metrics(TTF_Font *font, const char *text, int *width, int *
     return 0;
 }
 
+static void *vita_alloc_pixels(size_t rows, size_t pitch, int *from_pool) {
+    *from_pool = 0;
+    if (pitch && rows > 0x7fffffffu / pitch)
+        return NULL;
+    return vita_big_alloc(rows * pitch, 1, from_pool);
+}
+
 static SDL_Surface *vita_make_surface(int width, int height) {
     SDL_PixelFormat *format;
     SDL_Surface *surface;
@@ -154,7 +310,12 @@ static SDL_Surface *vita_make_surface(int width, int height) {
     surface->w = width;
     surface->h = height;
     surface->pitch = width * 4;
-    surface->pixels = calloc((size_t)height, (size_t)surface->pitch);
+    {
+        int from_pool;
+        surface->pixels = vita_alloc_pixels((size_t)height, (size_t)surface->pitch, &from_pool);
+        if (from_pool)
+            surface->flags |= VITA_SURFACE_POOL_PIXELS;
+    }
     if (!surface->pixels) {
         SDL_FreeSurface(surface);
         return NULL;
@@ -487,6 +648,11 @@ static unsigned char *vita_read_rw(SDL_RWops *src, size_t *size_out, int freesrc
     return data;
 }
 
+extern void vitaImageFailure(const char *, unsigned, unsigned, size_t) __attribute__((weak));
+static void vita_image_failure(const char *stage, unsigned width, unsigned height, size_t size) {
+    if (vitaImageFailure) vitaImageFailure(stage, width, height, size);
+}
+
 static SDL_Surface *vita_png_decode(const unsigned char *data, size_t size) {
     png_structp png = NULL;
     png_infop info = NULL;
@@ -534,6 +700,7 @@ static SDL_Surface *vita_png_decode(const unsigned char *data, size_t size) {
     rowbytes = png_get_rowbytes(png, info);
     surface = vita_make_surface((int)width, (int)height);
     if (!surface) {
+        vita_image_failure("PNG surface/pixels", width, height, size);
         vita_img_set_error("out of memory allocating PNG pixels");
         png_destroy_read_struct(&png, &info, NULL);
         return NULL;
@@ -546,6 +713,7 @@ static SDL_Surface *vita_png_decode(const unsigned char *data, size_t size) {
     }
     rows = (png_bytep *)calloc(height, sizeof(*rows));
     if (!rows) {
+        vita_image_failure("PNG row pointers", width, height, size);
         vita_img_set_error("out of memory allocating PNG rows");
         SDL_FreeSurface(surface);
         png_destroy_read_struct(&png, &info, NULL);
@@ -839,7 +1007,8 @@ SDL_Surface *SDL_CreateRGBSurface(Uint32 flags, int width, int height, int depth
     surface->w = width;
     surface->h = height;
     surface->pitch = width * bytes;
-    surface->pixels = calloc((size_t)height, (size_t)surface->pitch);
+    int from_pool;
+    surface->pixels = vita_alloc_pixels((size_t)height, (size_t)surface->pitch, &from_pool);
     if (!surface->pixels) {
         SDL_SetError("surface pixel allocation failed: %dx%d", width, height);
         SDL_FreeSurface(surface);
@@ -849,13 +1018,16 @@ SDL_Surface *SDL_CreateRGBSurface(Uint32 flags, int width, int height, int depth
     surface->clip_rect.y = 0;
     surface->clip_rect.w = width;
     surface->clip_rect.h = height;
-    surface->flags = flags;
+    surface->flags = (flags & ~VITA_SURFACE_POOL_PIXELS) | (from_pool ? VITA_SURFACE_POOL_PIXELS : 0);
     return surface;
 }
 
 void SDL_FreeSurface(SDL_Surface *surface) {
     if (!surface) return;
-    if (!(surface->flags & SDL_PREALLOC)) free(surface->pixels);
+    if (surface->flags & VITA_SURFACE_POOL_PIXELS)
+        vita_big_free(surface->pixels);
+    else if (!(surface->flags & SDL_PREALLOC))
+        free(surface->pixels);
     SDL_FreeFormat(surface->format);
     free(surface);
 }

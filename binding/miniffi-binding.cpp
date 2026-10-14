@@ -311,6 +311,32 @@ static int vitaVKScancode(unsigned int key) {
         case 0x10: case 0xa0: return SDL_SCANCODE_LSHIFT;
         case 0x11: case 0xa2: return SDL_SCANCODE_LCTRL;
         case 0x12: case 0xa4: return SDL_SCANCODE_LALT;
+        case 0xa1: return SDL_SCANCODE_RSHIFT;
+        case 0xa3: return SDL_SCANCODE_RCTRL;
+        case 0xa5: return SDL_SCANCODE_RALT;
+        case 0x14: return SDL_SCANCODE_CAPSLOCK;
+        case 0x21: return SDL_SCANCODE_PAGEUP;
+        case 0x22: return SDL_SCANCODE_PAGEDOWN;
+        case 0x23: return SDL_SCANCODE_END;
+        case 0x24: return SDL_SCANCODE_HOME;
+        case 0x2d: return SDL_SCANCODE_INSERT;
+        case 0x2e: return SDL_SCANCODE_DELETE;
+        case 0x6a: return SDL_SCANCODE_KP_MULTIPLY;
+        case 0x6b: return SDL_SCANCODE_KP_PLUS;
+        case 0x6d: return SDL_SCANCODE_KP_MINUS;
+        case 0x6e: return SDL_SCANCODE_KP_PERIOD;
+        case 0x6f: return SDL_SCANCODE_KP_DIVIDE;
+        case 0xba: return SDL_SCANCODE_SEMICOLON;
+        case 0xbb: return SDL_SCANCODE_EQUALS;
+        case 0xbc: return SDL_SCANCODE_COMMA;
+        case 0xbd: return SDL_SCANCODE_MINUS;
+        case 0xbe: return SDL_SCANCODE_PERIOD;
+        case 0xbf: return SDL_SCANCODE_SLASH;
+        case 0xc0: return SDL_SCANCODE_GRAVE;
+        case 0xdb: return SDL_SCANCODE_LEFTBRACKET;
+        case 0xdc: return SDL_SCANCODE_BACKSLASH;
+        case 0xdd: return SDL_SCANCODE_RIGHTBRACKET;
+        case 0xde: return SDL_SCANCODE_APOSTROPHE;
         case 0x1b: return SDL_SCANCODE_ESCAPE;
         case 0x20: return SDL_SCANCODE_SPACE;
         case 0x25: return SDL_SCANCODE_LEFT;
@@ -321,11 +347,23 @@ static int vitaVKScancode(unsigned int key) {
     }
 }
 
+/* Set by the input code: keys held through a key mapping in the profile. */
+bool vitaMappedKey(int scancode);
+
 static bool vitaVKPressed(unsigned int key) {
     int count = 0;
     const Uint8 *state = SDL_GetKeyboardState(&count);
     int scancode = vitaVKScancode(key);
-    return state && scancode > SDL_SCANCODE_UNKNOWN && scancode < count && state[scancode] != 0;
+    if (scancode <= SDL_SCANCODE_UNKNOWN)
+        return false;
+    /* The generic Shift, Ctrl and Alt codes answer for either side. */
+    if (vitaMappedKey(scancode) ||
+        (key == 0x10 && vitaMappedKey(SDL_SCANCODE_RSHIFT)) ||
+        (key == 0x11 && vitaMappedKey(SDL_SCANCODE_RCTRL)) ||
+        (key == 0x12 && vitaMappedKey(SDL_SCANCODE_RALT)) ||
+        (key == 0x0d && vitaMappedKey(SDL_SCANCODE_KP_ENTER)))
+        return true;
+    return state && scancode < count && state[scancode] != 0;
 }
 
 static bool vitaUser32Call(VALUE function, VALUE args, VALUE *result) {
@@ -336,9 +374,18 @@ static bool vitaUser32Call(VALUE function, VALUE args, VALUE *result) {
         return true;
     }
     if (std::strcmp(name, "GetKeyboardState") == 0) {
-        uintptr_t address = static_cast<uintptr_t>(NUM2ULL(rb_ary_entry(args, 0)));
-        if (!address) rb_raise(rb_eArgError, "GetKeyboardState needs a buffer");
-        unsigned char *buffer = reinterpret_cast<unsigned char *>(address);
+        VALUE argument = rb_ary_entry(args, 0);
+        unsigned char *buffer;
+        if (RB_TYPE_P(argument, RUBY_T_STRING)) {
+            if (RSTRING_LEN(argument) < 256)
+                rb_raise(rb_eArgError, "GetKeyboardState needs a 256-byte buffer");
+            rb_str_modify(argument);
+            buffer = reinterpret_cast<unsigned char *>(RSTRING_PTR(argument));
+        } else {
+            uintptr_t address = static_cast<uintptr_t>(NUM2ULL(argument));
+            if (!address) rb_raise(rb_eArgError, "GetKeyboardState needs a buffer");
+            buffer = reinterpret_cast<unsigned char *>(address);
+        }
         for (unsigned int key = 0; key < 256; ++key)
             buffer[key] = vitaVKPressed(key) ? 0x80 : 0;
         *result = INT2NUM(1);
@@ -366,6 +413,10 @@ RB_METHOD_GUARD(MiniFFI_call) {
     VALUE own_imports = rb_iv_get(self, "_imports");
     VALUE own_exports = rb_iv_get(self, "_exports");
     MINIFFI_FUNC ApiFunction = (MINIFFI_FUNC)RB2MVAL(func);
+    /* `_imports` is set by initialize: an object whose initialize raised or
+     * was skipped has none, and params[] holds MINIFFI_MAX_ARGS. */
+    if (TYPE(own_imports) != T_ARRAY || RARRAY_LEN(own_imports) > MINIFFI_MAX_ARGS)
+        throw Exception(Exception::RuntimeError, "MiniFFI function was not initialized");
     VALUE args;
     int items = rb_scan_args(argc, argv, "0*", &args);
     int nimport = RARRAY_LEN(own_imports);
@@ -377,7 +428,13 @@ RB_METHOD_GUARD(MiniFFI_call) {
     {
 #if defined(__vita__) || defined(__psp2__)
         VALUE libv = rb_iv_get(self, "_libname");
-        if (std::strcmp(StringValueCStr(libv), "user32.dll") == 0) {
+        std::string library = StringValueCStr(libv);
+        auto slash = library.find_last_of("/\\");
+        if (slash != std::string::npos) library.erase(0, slash + 1);
+        for (char &character : library)
+            if (character >= 'A' && character <= 'Z')
+                character += 'a' - 'A';
+        if (library == "user32.dll" || library == "user32") {
             VALUE handled;
             if (vitaUser32Call(rb_iv_get(self, "_funcname"), args, &handled))
                 return handled;

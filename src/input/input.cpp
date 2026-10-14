@@ -26,6 +26,7 @@
 #include "input/keybindings.h"
 #ifdef __vita__
 #include "input/vita_input.h"
+#include "display/graphics.h"
 #endif
 #include "util/exception.h"
 #include "util/util.h"
@@ -518,6 +519,14 @@ struct KbBinding : public Binding
     
     bool sourceActive() const
     {
+#ifdef __vita__
+        /* A Vita input mapped to this keyboard key holds it down. */
+        if (vitaMappedKey(source) ||
+            (source == SDL_SCANCODE_LSHIFT && vitaMappedKey(SDL_SCANCODE_RSHIFT)) ||
+            (source == SDL_SCANCODE_RETURN && vitaMappedKey(SDL_SCANCODE_KP_ENTER)))
+            return true;
+        if (vitaControlProfile().enabled && vitaControlScancode(source)) return false;
+#endif
         /* Special case aliases */
         if (source == SDL_SCANCODE_LSHIFT)
             return EventThread::keyStates[source]
@@ -549,6 +558,9 @@ struct CtrlButtonBinding : public Binding
     
     bool sourceActive() const
     {
+        #ifdef __vita__
+        if (vitaControlProfile().enabled) return false;
+#endif
         return EventThread::controllerState.buttons[source];
     }
     
@@ -569,6 +581,9 @@ struct CtrlAxisBinding : public Binding
     
     bool sourceActive() const
     {
+        #ifdef __vita__
+        if (vitaControlProfile().enabled) return false;
+#endif
         float val = EventThread::controllerState.axes[source];
         
         if (dir == Negative)
@@ -723,6 +738,9 @@ struct InputPrivate
     unsigned int repeatDelay;
     
     double last_update;
+#ifdef __vita__
+    hardrpg::ControlResult vitaResult;
+#endif
 
     int vScrollDistance;
     
@@ -758,6 +776,9 @@ struct InputPrivate
     InputPrivate(const RGSSThreadData &rtData)
     {
         last_update = 0;
+#ifdef __vita__
+        vitaLoadControls(rtData.config.vitaConfigPath);
+#endif
         
         initStaticKbBindings();
         initMsBindings();
@@ -1061,6 +1082,21 @@ struct InputPrivate
     {
         
         memcpy(rawStates, shState->eThread().keyStates, SDL_NUM_SCANCODES);
+#ifdef __vita__
+        if(vitaControlProfile().enabled) {
+            for(int i=0;i<SDL_NUM_SCANCODES;++i)if(vitaControlScancode(i))rawStates[i]=0;
+            const int actions[]={2,4,6,8,11,12,13,14,15,16,17,18,21,22,23,25,26,27,28,29};
+            const int scans[]={SDL_SCANCODE_DOWN,SDL_SCANCODE_LEFT,SDL_SCANCODE_RIGHT,SDL_SCANCODE_UP,
+              SDL_SCANCODE_LSHIFT,SDL_SCANCODE_ESCAPE,SDL_SCANCODE_RETURN,SDL_SCANCODE_A,
+              SDL_SCANCODE_S,SDL_SCANCODE_D,SDL_SCANCODE_Q,SDL_SCANCODE_W,SDL_SCANCODE_LSHIFT,
+              SDL_SCANCODE_LCTRL,SDL_SCANCODE_LALT,SDL_SCANCODE_F5,SDL_SCANCODE_F6,
+              SDL_SCANCODE_F7,SDL_SCANCODE_F8,SDL_SCANCODE_F9};
+            for(size_t i=0;i<sizeof(actions)/sizeof(*actions);++i)
+                if(vitaResult.actions[actions[i]])rawStates[scans[i]]=1;
+            for(size_t i=0;i<vitaResult.keys.size() && i<SDL_NUM_SCANCODES;++i)
+                if(vitaResult.keys[i])rawStates[i]=1;
+        }
+#endif
         
         for (int i = 0; i < SDL_NUM_SCANCODES; i++)
         {
@@ -1225,8 +1261,71 @@ void Input::update()
     
     ButtonCode repeatCand = None;
     
+    #ifdef __vita__
+    p->vitaResult = {};
+    if (vitaControlProfile().enabled) {
+        auto sample = vitaReadControls(vitaControlProfile().front != 0,
+                                       vitaControlProfile().rear != 0);
+        const auto &rt = shState->rtData();
+        float scale = shState->config().enableHires ?
+                      shState->config().framebufferScalingFactor : 1.f;
+        float w = shState->graphics().width() * scale;
+        float h = shState->graphics().height() * scale;
+        /* The pointer and the drawn buttons live in the game picture; the
+         * invisible zones (front 4 and up) cover the whole physical screen,
+         * black borders included, so they keep the panel's coordinates. */
+        if (vitaControlProfile().front < 4)
+        for (auto &contact : sample.front) {
+            contact.x = (contact.x * 960 - rt.screenOffset.x) * rt.sizeResoRatio.x / w;
+            contact.y = (contact.y * 544 - rt.screenOffset.y) * rt.sizeResoRatio.y / h;
+        }
+        p->vitaResult = vitaProcessControls(std::move(sample));
+    } else if (vitaControlProfile().tapToWalk) {
+        /* No custom mappings: only the front screen is read, as the pointer
+         * and its left button, which is all tap-to-walk needs. */
+        auto sample = vitaReadControls(true, false);
+        const auto &rt = shState->rtData();
+        float scale = shState->config().enableHires ?
+                      shState->config().framebufferScalingFactor : 1.f;
+        float w = shState->graphics().width() * scale;
+        float h = shState->graphics().height() * scale;
+        for (auto &contact : sample.front) {
+            float x = (contact.x * 960 - rt.screenOffset.x) * rt.sizeResoRatio.x / w;
+            float y = (contact.y * 544 - rt.screenOffset.y) * rt.sizeResoRatio.y / h;
+            if (x < 0 || x > 1 || y < 0 || y > 1)
+                continue;
+            p->vitaResult.pointer = true;
+            p->vitaResult.x = x;
+            p->vitaResult.y = y;
+            p->vitaResult.actions[Input::MouseLeft] = true;
+            break;
+        }
+    }
+    vitaSetMappedKeys(p->vitaResult.keys);
+#endif
     /* Poll all bindings */
     p->pollBindings(repeatCand);
+#ifdef __vita__
+    if (vitaControlProfile().enabled) {
+        for (const auto &action : hardrpg::controlActions) {
+            if (!action.code) continue;
+            auto code = static_cast<ButtonCode>(action.code);
+            auto &state = p->getState(code);
+            auto &old = p->getOldState(code);
+            state.pressed |= p->vitaResult.actions[action.code];
+            state.released = old.pressed && !state.pressed;
+            state.triggered = state.pressed && !old.pressed;
+            if (state.triggered && repeatCand == None) repeatCand = code;
+        }
+        p->updateDir4(); p->updateDir8();
+    } else if (vitaControlProfile().tapToWalk) {
+        auto &state = p->getState(Input::MouseLeft);
+        auto &old = p->getOldState(Input::MouseLeft);
+        state.pressed |= p->vitaResult.actions[Input::MouseLeft];
+        state.released = old.pressed && !state.pressed;
+        state.triggered = state.pressed && !old.pressed;
+    }
+#endif
     
     // Update raw keys, controller buttons and axes
     p->updateRaw();
@@ -1236,6 +1335,16 @@ void Input::update()
     p->mousePos[0] = shState->eThread().mouseState.x;
     p->mousePos[1] = shState->eThread().mouseState.y;
     p->mouseInWindow = shState->eThread().mouseState.inWindow;
+#ifdef __vita__
+    if (p->vitaResult.pointer) {
+        auto &rt = shState->rtData();
+        float scale = shState->config().enableHires ?
+                      shState->config().framebufferScalingFactor : 1.f;
+        p->mousePos[0] = rt.screenOffset.x + int(p->vitaResult.x * (shState->graphics().width()-1) * scale / rt.sizeResoRatio.x);
+        p->mousePos[1] = rt.screenOffset.y + int(p->vitaResult.y * (shState->graphics().height()-1) * scale / rt.sizeResoRatio.y);
+        p->mouseInWindow = true;
+    }
+#endif
     
     
     /* Check for new repeating key */

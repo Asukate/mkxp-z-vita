@@ -28,6 +28,9 @@
 #include "binding-util.h"
 #include "util/exception.h"
 #include "input/input.h"
+#ifdef __vita__
+#include "input/vita_input.h"
+#endif
 #include "sharedstate.h"
 #include "src/util/util.h"
 
@@ -569,8 +572,26 @@ struct {
 
 static elementsN(buttonCodes);
 
+#ifdef __vita__
+RB_METHOD(inputVitaControls) {
+    RB_UNUSED_PARAM;
+    const auto &p=vitaControlProfile();
+    VALUE out=rb_ary_new();
+    rb_ary_push(out,rb_bool_new(p.enabled));
+    rb_ary_push(out,INT2FIX(p.front));
+    rb_ary_push(out,INT2FIX(p.rear));
+    rb_ary_push(out,rb_bool_new(p.rightPointer || p.rear==2 || p.front==2));
+    rb_ary_push(out,rb_utf8_str_new_cstr(hardrpg::controlName(p.frontLeft).c_str()));
+    rb_ary_push(out,rb_utf8_str_new_cstr(hardrpg::controlName(p.frontRight).c_str()));
+    rb_ary_push(out,rb_bool_new(p.tapToWalk));
+    return out;
+}
+#endif
 void inputBindingInit() {
     VALUE module = rb_define_module("Input");
+#ifdef __vita__
+    _rb_define_module_function(module,"vita_controls",inputVitaControls);
+#endif
     
     _rb_define_module_function(module, "delta", inputDelta);
     _rb_define_module_function(module, "update", inputUpdate);

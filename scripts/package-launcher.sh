@@ -7,13 +7,15 @@ WS=""
 OUT=""
 TITLE_ID="HARDRPG01"
 PROFILE="real-vita"
+EASY_WS=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [--out DIR] [--title-id ID]\n' "$0"; exit 0;;
-        --ws|--profile|-j|--out|--title-id)
+        -h|--help) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [--out DIR] [--title-id ID] [--easyrpg-ws DIR]\n' "$0"; exit 0;;
+        --ws|--profile|-j|--out|--title-id|--easyrpg-ws)
             [[ $# -ge 2 && "$2" != --* && -n "$2" ]] || { printf 'missing value for %s\n' "$1" >&2; exit 2; } ;;
     esac
     case "$1" in
+        --easyrpg-ws) EASY_WS="$2"; shift 2;;
         --ws) WS="$2"; shift 2;;
         --out) OUT="$2"; shift 2;;
         --title-id) TITLE_ID="$2"; shift 2;;
@@ -55,15 +57,35 @@ if not match: raise SystemExit('missing release app version')
 print(match[1])
 PY2
 )"
-"$BIN/vita-mksfoex" -s "TITLE_ID=$TITLE_ID" -s "APP_VER=$APP_VER" 'HardRPG' "$STAGE/param.sfo"
+# Extended memory mode. The engine's 160 MiB heap, the Fiber stacks inside the
+# RGSS thread and vitaGL's pools do not fit the default budget (about 109 MiB
+# less); EasyRPG's Vita package needs the same mode.
+MEMORY_ARGS=(-d ATTRIBUTE2=12)
+"$BIN/vita-mksfoex" "${MEMORY_ARGS[@]}" -s "TITLE_ID=$TITLE_ID" -s "APP_VER=$APP_VER" 'HardRPG' "$STAGE/param.sfo"
 PICKER_ARGS=()
 if [[ "$NATIVE" == true ]]; then
+    python3 "$ROOT/scripts/build-livearea.py" "$ROOT/launcher/livearea/template.xml" \
+        "$STAGE/template.xml" --release "$ROOT/src/native_launcher/release.h"
     PICKER_ARGS=(-a "$ROOT/launcher/native-backend.txt=launcher-backend.txt")
     FONT="$ROOT/assets/liberation.ttf"
 else
+    python3 "$ROOT/scripts/build-livearea.py" "$ROOT/launcher/livearea/template.xml" \
+        "$STAGE/template.xml" --version '0.2.0 Alpha'
     FONT="$ROOT/launcher/font.ttf"
     ruby "$ROOT/scripts/build-picker.rb" "$STAGE/stub"
     PICKER_ARGS=(-a stub/Game.ini=stub/Game.ini -a stub/Data/Scripts.rvdata2=stub/Data/Scripts.rvdata2)
+fi
+
+EASY_ARGS=()
+if [[ -n "$EASY_WS" ]]; then
+    [[ "$NATIVE" == true ]] || { echo 'EasyRPG requires the native launcher' >&2; exit 1; }
+    EASY_WS="$(realpath "$EASY_WS")"
+    python3 "$ROOT/scripts/easyrpg-state.py" verify "$EASY_WS"
+    EASY_ARGS=(-a "$EASY_WS/runtime/easyrpg.bin=easyrpg.self"
+               -a "$EASY_WS/runtime/manifest.json=runtime/easyrpg-manifest.json")
+    for notice in "$EASY_WS"/runtime/licenses/*; do
+        EASY_ARGS+=(-a "$notice=licenses/easyrpg/$(basename "$notice")")
+    done
 fi
 
 VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
@@ -73,10 +95,16 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/launcher/livearea/pic0.png=sce_sys/pic0.png" \
     -a "$ROOT/launcher/livearea/bg0.png=sce_sys/livearea/contents/bg0.png" \
     -a "$ROOT/launcher/livearea/startup.png=sce_sys/livearea/contents/startup.png" \
-    -a "$ROOT/launcher/livearea/template.xml=sce_sys/livearea/contents/template.xml" \
+    -a template.xml=sce_sys/livearea/contents/template.xml \
     -a "$ROOT/launcher/mkxp.json=mkxp.json" \
     -a "$ROOT/launcher/time_strftime_guard.rb=time_strftime_guard.rb" \
     -a "$ROOT/launcher/performance_patch.rb=performance_patch.rb" \
+    -a "$ROOT/launcher/vita_controls.rb=vita_controls.rb" \
+    -a "$ROOT/launcher/vita_tap_to_walk.rb=vita_tap_to_walk.rb" \
+    -a "$ROOT/assets/ca-certificates.crt=ca-certificates.crt" \
+    -a "$ROOT/assets/TimGM6mb.sf2=TimGM6mb.sf2" \
+    -a "$ROOT/LICENSES/FluidLite.txt=licenses/FluidLite.txt" \
+    -a "$ROOT/LICENSES/TimGM6mb.txt=licenses/TimGM6mb.txt" \
     -a "$FONT=font.ttf" \
     -a "$ROOT/launcher/assets/hardrpg-splash.png=stub/Graphics/Pictures/hardrpg-splash.png" \
     -a "$ROOT/THIRD-PARTY-NOTICES.md=THIRD-PARTY-NOTICES.md" \
@@ -85,8 +113,11 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/LICENSES/LGPL-3.0.txt=licenses/LGPL-3.0.txt" \
     -a "$ROOT/LICENSES/Liberation.txt=licenses/Liberation.txt" \
     -a "$ROOT/LICENSES/math-neon.txt=licenses/math-neon.txt" \
+    -a "$ROOT/LICENSES/curl.txt=licenses/curl.txt" \
+    -a "$ROOT/LICENSES/MPL-2.0.txt=licenses/MPL-2.0.txt" \
     -a "$ROOT/src/display/libnsgif/COPYING=licenses/libnsgif.txt" \
     "${PICKER_ARGS[@]}" \
+    "${EASY_ARGS[@]}" \
     "$VPK")
 python3 "$ROOT/scripts/verify-launcher-payload.py" "$VPK" "$TITLE_ID"
 sha256sum "$VPK"

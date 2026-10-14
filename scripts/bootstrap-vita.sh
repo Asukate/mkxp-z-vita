@@ -313,11 +313,11 @@ PYEOF
             --disable-install-doc --disable-install-rdoc --disable-install-capi \
             --disable-rubygems --with-static-linked-ext --without-gmp \
             --with-out-ext=readline,dbm,gdbm,win32,win32ole,fiddle,bigdecimal,etc,fcntl,json,monitor,nkf,objspace,openssl,pathname,psych,pty,ripper,socket,stringio,strscan,syslog,sdbm,io/console,io/nonblock,io/wait,racc/cparse,rbconfig/sizeof,rubyvm,digest/bubblebabble,digest/md5,digest/rmd160,digest/sha1,digest/sha2 \
-            --disable-jit-support --without-git \
+            --disable-jit-support --without-git --with-coroutine=arm32 \
             host_alias=arm-vita-eabi target_alias=arm-vita-eabi \
             AR="$VITABIN/arm-vita-eabi-ar" CC="$VITABIN/arm-vita-eabi-gcc" \
             CXX="$VITABIN/arm-vita-eabi-g++" RANLIB="$VITABIN/arm-vita-eabi-ranlib" \
-            "CFLAGS=$ARCH_FLAGS -O2 -fno-strict-aliasing -Wno-error=incompatible-pointer-types -std=gnu99 -D__vita__ -I$PREFIX/include" \
+            "CFLAGS=$ARCH_FLAGS -O3 -fno-strict-aliasing -Wno-error=incompatible-pointer-types -std=gnu99 -D__vita__ -I$PREFIX/include" \
             "LDFLAGS=-L$PREFIX/lib -Wl,-q" LIBS=-lm \
             "CPPFLAGS=-include $RUBY_SRC_DIR/vita-compat.h -I$PREFIX/include" \
             "CXXFLAGS=$ARCH_FLAGS -O2 -fno-strict-aliasing" >/dev/null && \

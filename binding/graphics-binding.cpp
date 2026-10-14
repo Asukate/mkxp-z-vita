@@ -1082,9 +1082,16 @@ static inline bool vitaDiagS42LTakeBindingTrace() { return false; }
 static inline void s42lBindingMark(const char *) {}
 #endif
 
+#ifdef __vita__
+void vitaTapToWalkTick();
+#endif
+
 RB_METHOD_GUARD(graphicsUpdate)
 {
     vitaGpuPressureSafePoint("graphics_update");
+#ifdef __vita__
+    vitaTapToWalkTick();
+#endif
     RB_UNUSED_PARAM;
 #if RAPI_MAJOR >= 2
 #ifdef MKXPZ_VITA_DIAGNOSTICS

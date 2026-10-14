@@ -11,6 +11,12 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <atomic>
+#ifdef __vita__
+#include <psp2/kernel/threadmgr.h>
+#else
+#include <thread>
+#endif
 #include <physfs.h>
 #include <set>
 #include <sstream>
@@ -126,17 +132,52 @@ std::vector<File> directoryFiles(const std::string &p) {
 // Every archive operation owns a private, read-only mount and closes it before
 // returning. The launcher never mounts archives into the game's asset
 // namespace.
-class Archive {
-  std::string source;
-
-public:
-  explicit Archive(const std::string &p) : source(p) {
+// Archive views in one operation share the central-directory index. Unique
+// mount points also keep background RTP checks separate from game inspection.
+struct ArchiveMount {
+  std::string source, point;
+  explicit ArchiveMount(const std::string &p, const std::string &m) : source(p), point(m) {
     if (!PHYSFS_isInit() && !PHYSFS_init("hardrpg"))
-      fail();
-    if (!PHYSFS_mount(p.c_str(), "__hardrpg_native__", 0))
-      fail();
+      throw std::runtime_error("Cannot initialize archive reader");
+    if (!PHYSFS_mount(p.c_str(), point.c_str(), 0))
+      throw std::runtime_error("Cannot open ZIP archive");
   }
-  ~Archive() { PHYSFS_unmount(source.c_str()); }
+  ~ArchiveMount() { PHYSFS_unmount(source.c_str()); }
+};
+// Share archive views across workers without lazy static initialization.
+std::atomic_flag archiveLock = ATOMIC_FLAG_INIT;
+std::map<std::string, std::shared_ptr<ArchiveMount>> archiveViews;
+unsigned archiveSerial = 0;
+struct ArchiveGuard {
+  ArchiveGuard() {
+    while (archiveLock.test_and_set(std::memory_order_acquire)) {
+#ifdef __vita__
+      sceKernelDelayThread(1000);
+#else
+      std::this_thread::yield();
+#endif
+    }
+  }
+  ~ArchiveGuard() { archiveLock.clear(std::memory_order_release); }
+};
+class Archive {
+  std::shared_ptr<ArchiveMount> mount;
+public:
+  explicit Archive(const std::string &p) {
+    ArchiveGuard lock;
+    auto &views = archiveViews;
+    auto found = views.find(p);
+    if (found != views.end()) mount = found->second;
+    else {
+      mount = std::make_shared<ArchiveMount>(p, "__hardrpg_native_" + std::to_string(++archiveSerial));
+      views[p] = mount;
+    }
+  }
+  ~Archive() {
+    ArchiveGuard lock;
+    if (mount.use_count() == 2) archiveViews.erase(mount->source);
+    mount.reset();
+  }
   Archive(const Archive &) = delete;
   static void fail() {
     auto *e = PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode());
@@ -145,7 +186,7 @@ public:
   std::string full(const std::string &p) const {
     if (!relative(p, true))
       throw std::runtime_error("Invalid ZIP path");
-    return join("__hardrpg_native__", p);
+    return join(mount->point, p);
   }
   std::vector<File> files(const std::string &p) const {
     std::string f = full(p);
@@ -276,14 +317,48 @@ void removePartial(const std::string &p) {
   if (rmdir(p.c_str()))
     throw std::runtime_error("Cannot remove partial cache");
 }
+// Deletes a game folder or an unpacked copy. Links are removed, never
+// followed, so nothing outside the folder can be reached.
+void removeTree(const std::string &p) {
+  struct stat s;
+  if (!statPath(p, s))
+    return;
+  if (!S_ISDIR(s.st_mode)) {
+    if (unlink(p.c_str()))
+      throw std::runtime_error("Cannot delete " + basename(p));
+    return;
+  }
+  DIR *d = opendir(p.c_str());
+  if (!d)
+    throw std::runtime_error("Cannot read " + basename(p));
+  std::vector<std::string> names;
+  while (auto *e = readdir(d)) {
+    std::string n = e->d_name;
+    if (n != "." && n != "..")
+      names.push_back(n);
+  }
+  closedir(d);
+  for (auto &n : names)
+    removeTree(join(p, n));
+  if (rmdir(p.c_str()))
+    throw std::runtime_error("Cannot delete " + basename(p));
+}
+// The ZIP-level node of a game inside a ZIP: the ZIP as the library lists it.
+Node zipOf(const Node &n) {
+  Node z = n;
+  z.inner.clear();
+  z.alias.clear();
+  return z;
+}
 struct ExtractFile {
   std::string inner, path;
   int64_t size;
 };
 void collect(const Node &node, const std::string &prefix,
-             std::vector<ExtractFile> &out, int depth = 0) {
+             std::vector<ExtractFile> &out, const Progress &progress, int depth = 0) {
   if (depth > 64)
     throw std::runtime_error("ZIP folder nesting exceeds 64 levels");
+  if (progress) progress(0, 0);
   for (auto &f : node.files()) {
     if (!relative(f.name))
       throw std::runtime_error("Unsafe ZIP filename");
@@ -291,7 +366,7 @@ void collect(const Node &node, const std::string &prefix,
       continue;
     auto dest = prefix.empty() ? f.name : join(prefix, f.name);
     if (f.directory)
-      collect(node.child(f.name), dest, out, depth + 1);
+      collect(node.child(f.name), dest, out, progress, depth + 1);
     else {
       if (f.size < 0)
         throw std::runtime_error("Invalid ZIP file size");
@@ -304,7 +379,8 @@ void collect(const Node &node, const std::string &prefix,
 }
 } // namespace
 
-const char *const packs[3] = {"Standard", "RPGVX", "RPGVXAce"};
+const char *const packs[rtpPackCount] = {"Standard", "RPGVX", "RPGVXAce",
+                                         "2000", "2003"};
 std::string lower(std::string s) {
   for (char &c : s)
     if (c >= 'A' && c <= 'Z')
@@ -335,7 +411,7 @@ bool directory(const std::string &p) {
 void Paths::setup() const {
   mkdirOne(parent(root));
   mkdirOne(root);
-  for (auto n : {"games", "rtp", "config", "cache"})
+  for (auto n : {"games", "rtp", "config", "cache", "saves"})
     mkdirOne(at(n));
   for (auto p : packs)
     mkdirOne(at(std::string("rtp/") + p));
@@ -424,6 +500,8 @@ std::string Node::path() const {
   return relative.empty() ? root : join(root, relative);
 }
 std::string Node::identity(const Paths &p) const {
+  if (!alias.empty())
+    return alias;
   return (root == p.at("games") ? relative : path()) +
          (archive ? "!/" + inner : "");
 }
@@ -464,7 +542,7 @@ Json parseGameIni(const std::string &text) {
       continue;
     if (s.front() == '[' && s.back() == ']')
       section = lower(s.substr(1, s.size() - 2));
-    else if (section == "game") {
+    else if (section == "game" || section == "rpg_rt") {
       auto eq = s.find('=');
       if (eq != std::string::npos)
         result.as_object()[lower(trim(s.substr(0, eq)))] =
@@ -476,6 +554,15 @@ Json parseGameIni(const std::string &text) {
 int gameVersion(const Json &v, const std::vector<File> &fs) {
   auto lib = lower(jsonString(v, "library"));
   auto scripts = lower(jsonString(v, "scripts"));
+  bool database = false, mapTree = false;
+  for (const auto &f : fs) {
+    if (!f.directory && lower(f.name) == "rpg_rt.ldb")
+      database = true;
+    if (!f.directory && lower(f.name) == "rpg_rt.lmt")
+      mapTree = true;
+  }
+  if (database && mapTree)
+    return 4;
   int version = 0;
   if (lib.find("rgss30") != std::string::npos || suffix(scripts, ".rvdata2"))
     version = 3;
@@ -491,6 +578,45 @@ int gameVersion(const Json &v, const std::vector<File> &fs) {
         version = i;
   return version;
 }
+std::string gameIniName(const std::vector<File> &fs,
+                        const std::function<std::string(const std::string &)> &read) {
+  // The engine loads "<name>.ini" and the archive "<name>.rgssad" (or .rgss2a,
+  // .rgss3a). A renamed release can keep a stale Game.ini beside its real
+  // "Title.ini" and "Title.rgssad" (the Windows To the Moon does): Game.ini
+  // only wins when the game's data can actually be found under that name.
+  auto hasData = [&](const std::string &ini) {
+    auto base = lower(ini.substr(0, ini.size() - 4));
+    for (const auto &f : fs) {
+      auto name = lower(f.name);
+      if (f.directory ? name == "data"
+                      : name == base + ".rgssad" || name == base + ".rgss2a" ||
+                            name == base + ".rgss3a")
+        return true;
+    }
+    return false;
+  };
+  std::string game;
+  for (const auto &f : fs)
+    if (!f.directory && lower(f.name) == "game.ini")
+      game = f.name;
+  if (!game.empty() && hasData(game))
+    return game;
+  std::string selected;
+  for (const auto &f : fs) {
+    if (f.directory || !suffix(f.name, ".ini") || lower(f.name) == "game.ini" ||
+        !relative(f.name) || f.name.find('/') != std::string::npos)
+      continue;
+    auto values = parseGameIni(read(f.name));
+    if (values.as_object().empty() || !gameVersion(values, fs))
+      continue;
+    if (!game.empty() && !hasData(f.name))
+      continue;
+    if (!selected.empty())
+      return game; // Several projects need an explicit Game.ini.
+    selected = f.name;
+  }
+  return selected.empty() ? game : selected;
+}
 int zipGameVersion(const Node &node) {
   try {
     // Inspect metadata in one read-only mount, including single-folder
@@ -500,14 +626,18 @@ int zipGameVersion(const Node &node) {
     auto inner = node.inner;
     for (int depth = 0; depth <= 16; ++depth) {
       auto fs = archive.files(inner);
+      auto ini = gameIniName(fs, [&](const std::string &name) {
+        return archive.read(inner.empty() ? name : join(inner, name));
+      });
+      if (!ini.empty())
+        return gameVersion(parseGameIni(archive.read(
+                               inner.empty() ? ini : join(inner, ini))), fs);
       std::vector<std::string> folders;
+      if (gameVersion(object(), fs) == 4)
+        return 4;
       for (auto &f : fs) {
         if (f.name[0] == '.' || f.name == "__MACOSX")
           continue;
-        if (!f.directory && lower(f.name) == "game.ini")
-          return gameVersion(parseGameIni(archive.read(
-                                 inner.empty() ? f.name : join(inner, f.name))),
-                             fs);
         if (f.directory)
           folders.push_back(f.name);
       }
@@ -520,12 +650,80 @@ int zipGameVersion(const Node &node) {
   }
   return 0;
 }
+/* Finding a ZIP's engine means mounting it, and PhysFS reads the whole
+ * central directory to do that: seconds per archive on a memory card, on
+ * every launcher start and every return from a game. Remember the answer on
+ * disk for as long as the file's size and times stay the same. Only a
+ * recognized game is remembered, so a ZIP that failed to open is tried again. */
+struct ZipScan {
+  int64_t size, modified, changed;
+  int version;
+};
+std::string zipScanFile;
+std::map<std::string, ZipScan> zipScans;
+bool zipScansLoaded = false, zipScansDirty = false;
+void loadZipScans() {
+  if (zipScansLoaded)
+    return;
+  zipScansLoaded = true;
+  try {
+    for (auto &line : split(readFile(zipScanFile, 262144), '\n')) {
+      auto f = split(line, '\t');
+      if (f.size() != 6)
+        continue;
+      int version = std::atoi(f[5].c_str());
+      if (version >= 1 && version <= 4 && zipScans.size() < 512)
+        zipScans[f[0] + "\t" + f[1]] = {std::atoll(f[2].c_str()), std::atoll(f[3].c_str()),
+                                        std::atoll(f[4].c_str()), version};
+    }
+  } catch (const std::exception &) {
+    zipScans.clear();
+  }
+}
+int rememberedZipGameVersion(const Node &node) {
+  struct stat st{};
+  if (zipScanFile.empty() || !statPath(node.path(), st) ||
+      node.path().find_first_of("\t\n") != std::string::npos ||
+      node.inner.find_first_of("\t\n") != std::string::npos)
+    return zipGameVersion(node);
+  loadZipScans();
+  auto id = node.path() + "\t" + node.inner;
+  auto known = zipScans.find(id);
+  if (known != zipScans.end() && known->second.size == int64_t(st.st_size) &&
+      known->second.modified == int64_t(st.st_mtime) && known->second.changed == int64_t(st.st_ctime))
+    return known->second.version;
+  int version = zipGameVersion(node);
+  if (known != zipScans.end())
+    zipScans.erase(known);
+  if (version) {
+    if (zipScans.size() >= 512)
+      zipScans.clear();
+    zipScans[id] = {int64_t(st.st_size), int64_t(st.st_mtime), int64_t(st.st_ctime), version};
+  }
+  zipScansDirty = true;
+  return version;
+}
+void saveZipScans() {
+  if (!zipScansDirty || zipScanFile.empty())
+    return;
+  zipScansDirty = false;
+  std::string text;
+  for (auto &scan : zipScans)
+    text += scan.first + "\t" + std::to_string(scan.second.size) + "\t" + std::to_string(scan.second.modified) +
+            "\t" + std::to_string(scan.second.changed) + "\t" + std::to_string(scan.second.version) + "\n";
+  try {
+    atomicWrite(zipScanFile, text);
+  } catch (const std::exception &) {
+    // The scan still worked; it is only repeated next time.
+  }
+}
 } // namespace
+std::string Node::iniName() const {
+  return gameIniName(files(), [&](const std::string &name) { return read(name); });
+}
 Json Node::ini() const {
-  for (auto &f : files())
-    if (lower(f.name) == "game.ini" && !f.directory)
-      return parseGameIni(read(f.name));
-  return object();
+  auto name = iniName();
+  return name.empty() ? object() : parseGameIni(read(name));
 }
 std::vector<std::string> Node::rtps() const {
   auto values = ini();
@@ -537,22 +735,43 @@ std::vector<std::string> Node::rtps() const {
   }
   return out;
 }
+struct CachedZipGame {
+  int64_t size, modified, changed;
+  Entry entry;
+};
+std::map<std::string, CachedZipGame> zipGames;
+std::map<std::string, CachedZipGame> zipSources;
 bool game(const Node &node, Entry &result) {
+  struct stat st{};
+  auto id = node.path() + "!/" + node.inner;
+  std::unique_ptr<Archive> archive;
+  if (node.archive) {
+    if (!statPath(node.path(), st)) return false;
+    auto cached = zipGames.find(id);
+    if (cached != zipGames.end() && cached->second.size == st.st_size &&
+        cached->second.modified == st.st_mtime && cached->second.changed == st.st_ctime) {
+      result = cached->second.entry;
+      result.node = node;
+      return true;
+    }
+    archive.reset(new Archive(node.path()));
+  }
   auto fs = node.files();
-  bool hasIni = false;
-  for (auto &f : fs)
-    if (lower(f.name) == "game.ini" && !f.directory)
-      hasIni = true;
-  if (!hasIni)
+  auto ini = gameIniName(fs, [&](const std::string &name) { return node.read(name); });
+  if (ini.empty() && gameVersion(object(), fs) != 4)
     return false;
-  auto v = node.ini();
+  auto v = ini.empty() ? object() : parseGameIni(node.read(ini));
   int version = gameVersion(v, fs);
   if (!version)
     return false;
-  auto title = scrubUtf8(jsonString(v, "title"));
+  auto title = scrubUtf8(jsonString(v, "title", jsonString(v, "gametitle")));
   if (title.empty())
     title = basename(node.inner.empty() ? node.path() : node.inner);
   result = {title, Kind::Game, node, version};
+  if (node.archive) {
+    if (zipGames.size() >= 64) zipGames.clear();
+    zipGames[id] = {st.st_size, st.st_mtime, st.st_ctime, result};
+  }
   return true;
 }
 std::vector<Entry> entries(const Node &n) {
@@ -569,18 +788,58 @@ std::vector<Entry> entries(const Node &n) {
         out.push_back({f.name + "/", Kind::Folder, child});
     } else if (!n.archive && suffix(f.name, ".zip")) {
       auto child = n.child(f.name, true);
-      out.push_back({f.name, Kind::Zip, child, zipGameVersion(child)});
+      out.push_back({f.name, Kind::Zip, child, rememberedZipGameVersion(child)});
     }
   }
   sortEntries(out);
   return out;
 }
+bool configurableGame(const Entry &entry, Entry &result) {
+  if (entry.kind == Kind::Game) {
+    result = entry;
+    return true;
+  }
+  if (entry.kind != Kind::Zip)
+    return false;
+  Node node = entry.node;
+  std::unique_ptr<Archive> archive;
+  struct stat st{};
+  auto id = node.path() + "!/" + node.inner;
+  auto cached = zipSources.find(id);
+  if (cached != zipSources.end() && statPath(node.path(), st) &&
+      cached->second.size == st.st_size && cached->second.modified == st.st_mtime &&
+      cached->second.changed == st.st_ctime) {
+    result = cached->second.entry;
+    return true;
+  }
+  cached = zipGames.find(id);
+  if (cached == zipGames.end() || !statPath(node.path(), st) ||
+      cached->second.size != st.st_size || cached->second.modified != st.st_mtime ||
+      cached->second.changed != st.st_ctime)
+    archive.reset(new Archive(node.path()));
+  for (int depth = 0; depth <= 16; ++depth) {
+    if (game(node, result)) {
+      if (zipSources.size() >= 64) zipSources.clear();
+      if (statPath(node.path(), st))
+        zipSources[id] = {st.st_size, st.st_mtime, st.st_ctime, result};
+      return true;
+    }
+    auto children = entries(node);
+    if (children.size() != 1 || children.front().kind == Kind::Zip)
+      return false;
+    node = children.front().node;
+  }
+  return false;
+}
 Model::Model(Paths p) : paths(std::move(p)) {
   paths.setup();
+  zipScanFile = paths.at("zip-scan-cache.txt");
   stack.push_back({"", "", paths.at("games"), false});
   refresh();
 }
 void Model::refresh() {
+  zipGames.clear();
+  zipSources.clear();
   error.clear();
   try {
     list = entries(current());
@@ -598,6 +857,8 @@ void Model::refresh() {
         nodes.insert(nodes.end(), found.begin(), found.end());
       } catch (const std::exception &) {
       }
+    auto unpacked = unpackedGames();
+    nodes.insert(nodes.end(), unpacked.begin(), unpacked.end());
     for (auto &n : nodes)
       try {
         Entry e;
@@ -607,6 +868,14 @@ void Model::refresh() {
         }
       } catch (const std::exception &) {
       }
+    auto hide = hidden();
+    if (!hide.empty())
+      list.erase(std::remove_if(list.begin(), list.end(), [&](const Entry &e) {
+                   return e.kind != Kind::Folder &&
+                          hide.count(key(e.node.identity(paths)));
+                 }),
+                 list.end());
+    saveZipScans();
     applyNames();
   } catch (const std::exception &e) {
     error = e.what();
@@ -766,10 +1035,170 @@ std::vector<Node> Model::discover(const std::string &p,
   }
   return found;
 }
+std::vector<Node> Model::unpackedGames() const {
+  std::vector<Node> out;
+  auto cache = paths.at("cache");
+  if (!directory(cache))
+    return out;
+  for (auto &f : directoryFiles(cache)) {
+    if (!f.directory || f.name.compare(0, 4, "zip-") || suffix(f.name, ".partial"))
+      continue;
+    auto marker = join(join(cache, f.name), ".hardrpg-source");
+    if (!regular(marker))
+      continue;
+    try {
+      auto id = json5pp::parse(readFile(marker, 262144)).as_array().at(0).as_string();
+      auto bang = id.find("!/");
+      if (bang == std::string::npos || "zip-" + key(id) != f.name)
+        continue;
+      auto zip = id.substr(0, bang);
+      // While its ZIP is there the game is listed through the ZIP.
+      if (exists(paths.external(zip) ? zip : join(paths.at("games"), zip)))
+        continue;
+      out.push_back(Node{f.name, "", cache, false, id});
+    } catch (const std::exception &) {
+    }
+  }
+  return out;
+}
+std::set<std::string> Model::hidden() const {
+  std::set<std::string> out;
+  auto file = paths.at("hidden-games.txt");
+  if (!regular(file))
+    return out;
+  std::istringstream s(readFile(file, 262144));
+  std::string line;
+  for (size_t count = 0; count < 4096 && std::getline(s, line); ++count)
+    if (!line.empty())
+      out.insert(line);
+  return out;
+}
+void Model::saveHidden(const std::set<std::string> &keys) {
+  std::string text;
+  for (auto &k : keys)
+    text += k + "\n";
+  atomicWrite(paths.at("hidden-games.txt"), text);
+}
+// Drops a game's added-game reference, so a removed game is not re-added.
+void Model::forget(const Entry &e) {
+  auto id = e.node.identity(paths), zip = zipOf(e.node).identity(paths);
+  auto old = references();
+  auto kept = old;
+  kept.erase(std::remove_if(kept.begin(), kept.end(), [&](const Node &n) {
+               return n.identity(paths) == id || n.identity(paths) == zip;
+             }),
+             kept.end());
+  if (kept.size() == old.size())
+    return;
+  std::string text;
+  for (auto &n : kept)
+    text += n.path() + "\t" + (n.archive ? "zip" : "dir") + "\t" + n.inner + "\n";
+  atomicWrite(paths.at("library-paths.txt"), text);
+}
+void Model::hide(const Entry &e) {
+  auto keys = hidden();
+  keys.insert(key(e.node.identity(paths)));
+  if (e.node.archive)
+    keys.insert(key(zipOf(e.node).identity(paths)));
+  if (keys.size() > 4096)
+    throw std::runtime_error("Too many hidden games");
+  forget(e);
+  saveHidden(keys);
+  stack.resize(1);
+  refresh();
+}
+Model::Removal Model::removal(const Entry &e) const {
+  Removal r;
+  const Node &n = e.node;
+  auto cache = paths.at("cache");
+  if (!n.archive && n.root == cache) {
+    r.unpacked = n.path();
+    return r;
+  }
+  if (n.archive) {
+    auto unpacked = paths.at("cache/zip-" + key(n.identity(paths)));
+    if (directory(unpacked))
+      r.unpacked = unpacked;
+    // Only a ZIP that holds just this game may be deleted with it.
+    Entry inner;
+    Entry whole{basename(n.path()), Kind::Zip, zipOf(n)};
+    if (regular(n.path()) && configurableGame(whole, inner) &&
+        inner.node.identity(paths) == n.identity(paths))
+      r.zip = n.path();
+    return r;
+  }
+  // A game folder: never a library root, storage root or HardRPG's own data.
+  auto p = n.path();
+  std::vector<std::string> roots = {paths.at("games"), cache, paths.root,
+                                    parent(paths.root)};
+  for (auto &f : searchFolders())
+    roots.push_back(f);
+  for (auto &s : paths.storage)
+    roots.push_back(s.substr(0, s.size() - 1));
+  bool root = false;
+  for (auto &x : roots)
+    if (p == x || x.compare(0, p.size() + 1, p + "/") == 0)
+      root = true;
+  Entry check;
+  if (!root && paths.external(p) && directory(p) && game(n, check))
+    r.folder = p;
+  return r;
+}
+void Model::deleteZip(const Entry &e) {
+  auto r = removal(e);
+  if (r.zip.empty() || r.unpacked.empty())
+    throw std::runtime_error("This game has no unpacked copy to play from");
+  if (unlink(r.zip.c_str()))
+    throw std::runtime_error("Cannot delete the ZIP");
+  forget(e);
+  stack.resize(1);
+  refresh();
+}
+void Model::remove(const Entry &e, bool files, bool unpacked) {
+  auto r = removal(e);
+  bool orphan = r.folder.empty() && r.zip.empty();
+  // The game files of a game whose ZIP is gone are its unpacked copy.
+  if (orphan && files)
+    unpacked = true;
+  if (files && !orphan) {
+    if (!r.folder.empty())
+      removeTree(r.folder);
+    else if (unlink(r.zip.c_str()))
+      throw std::runtime_error("Cannot delete the ZIP");
+  }
+  if (unpacked && !r.unpacked.empty())
+    removeTree(r.unpacked);
+  bool remains = (!orphan && !files) ||
+                 (!r.unpacked.empty() && !unpacked) ||
+                 (e.node.archive && r.zip.empty() && regular(e.node.path()));
+  if (remains) {
+    hide(e);
+    return;
+  }
+  // Nothing is left: forget the game entirely, so a copy added later shows.
+  forget(e);
+  auto keys = hidden();
+  if (keys.erase(key(e.node.identity(paths))) +
+      keys.erase(key(zipOf(e.node).identity(paths))))
+    saveHidden(keys);
+  stack.resize(1);
+  refresh();
+}
 size_t Model::addFolder(const std::string &p, ScanProgress progress) {
   auto found = discover(p, progress);
   if (found.empty())
-    throw std::runtime_error("No RPG Maker XP, VX or VX Ace games found");
+    throw std::runtime_error("No supported RPG Maker games found");
+  {
+    // Adding games again shows any that were removed from the list.
+    auto keys = hidden();
+    auto before = keys.size();
+    for (auto &n : found) {
+      keys.erase(key(n.identity(paths)));
+      keys.erase(key(zipOf(n).identity(paths)));
+    }
+    if (keys.size() != before)
+      saveHidden(keys);
+  }
   auto old = references();
   std::set<std::string> known;
   for (auto &n : old)
@@ -803,6 +1232,17 @@ size_t Model::addSearchFolder(const std::string &p, ScanProgress progress) {
   if (!directory(p))
     throw std::runtime_error("Choose an existing game folder");
   auto found = discover(p, progress);
+  {
+    // Adding a folder again shows the games that were removed from the list.
+    auto keys = hidden();
+    auto before = keys.size();
+    for (auto &n : found) {
+      keys.erase(key(n.identity(paths)));
+      keys.erase(key(zipOf(n).identity(paths)));
+    }
+    if (keys.size() != before)
+      saveHidden(keys);
+  }
   auto old = searchFolders();
   if (std::find(old.begin(), old.end(), p) == old.end())
     old.push_back(p);
@@ -816,6 +1256,17 @@ void Model::removeSearchFolder(const std::string &p) {
   old.erase(std::remove(old.begin(), old.end(), p), old.end());
   saveSearchFolders(old);
 }
+ControlProfile Model::controls(const Entry &entry) const {
+  auto path=paths.at("controls/"+key(entry.node.identity(paths))+".json");
+  if(!regular(path))return {};
+  return ControlProfile::parse(json5pp::parse(readFile(path,8192)));
+}
+void Model::saveControls(const Entry &entry,const ControlProfile &profile) {
+  if(entry.kind!=Kind::Game)throw std::runtime_error("Select a game to configure controls.");
+  auto validated=ControlProfile::parse(profile.json());
+  mkdirOne(paths.at("controls"));
+  atomicWrite(paths.at("controls/"+key(entry.node.identity(paths))+".json"),validated.json().stringify());
+}
 Json Model::display() const {
   auto v = object();
   if (regular(paths.at("launcher-config.json"))) {
@@ -825,7 +1276,10 @@ Json Model::display() const {
   return v;
 }
 void Model::changeDisplay(const std::string &name, const Json &value) {
-  if ((name == "fixedAspectRatio" || name == "integerScalingActive")
+  if (name == "performanceMetrics") {
+    if (!value.is_integer() || value.as_integer() < 0 || value.as_integer() > 2)
+      throw std::runtime_error("Invalid performance metrics mode");
+  } else if ((name == "fixedAspectRatio" || name == "integerScalingActive")
           ? !value.is_boolean()
           : name != "smoothScaling" || !value.is_integer() ||
                 value.as_integer() < 0 || value.as_integer() > 1)
@@ -837,6 +1291,54 @@ void Model::changeDisplay(const std::string &name, const Json &value) {
   if (name == "smoothScaling")
     v.as_object()["smoothScalingDown"] = value;
   atomicWrite(paths.at("launcher-config.json"), v.stringify());
+}
+Json Model::gameSettings(const Entry &entry) const {
+  auto result = display();
+  auto file = paths.at("config/" + key(entry.node.identity(paths)) + ".json");
+  if (regular(file)) {
+    auto saved = json5pp::parse(readFile(file, 262144));
+    for (const auto &item : saved.as_object())
+      result.as_object()[item.first] = item.second;
+  }
+  return result;
+}
+void Model::changeGameSetting(const Entry &entry, const std::string &name,
+                              const Json &value, bool reset) {
+  if (entry.kind != Kind::Game)
+    throw std::runtime_error("Select a game to change its settings.");
+  bool boolean = name == "fixedAspectRatio" || name == "integerScalingActive" ||
+                 name == "enableAudio" || name == "midiChorus" ||
+                 name == "midiReverb";
+  bool integer = name == "smoothScaling" || name == "performanceMetrics";
+  if ((!boolean && !integer) ||
+      (!reset && (boolean ? !value.is_boolean()
+                          : !value.is_integer() || value.as_integer() < 0 ||
+                                value.as_integer() >
+                                    (name == "performanceMetrics" ? 2 : 1))))
+    throw std::runtime_error("Invalid game setting.");
+  auto file = paths.at("config/" + key(entry.node.identity(paths)) + ".json");
+  auto saved =
+      regular(file) ? json5pp::parse(readFile(file, 262144)) : object();
+  auto &values = saved.as_object();
+  const std::string paired = name == "integerScalingActive"
+                                 ? "integerScalingLastMile"
+                             : name == "smoothScaling" ? "smoothScalingDown"
+                                                       : "";
+  if (reset) {
+    values.erase(name);
+    if (!paired.empty())
+      values.erase(paired);
+  } else {
+    values[name] = value;
+    if (name == "integerScalingActive")
+      values[paired] = !value.as_boolean();
+    if (name == "smoothScaling")
+      values[paired] = value;
+  }
+  auto text = saved.stringify();
+  if (text.size() > 262144)
+    throw std::runtime_error("Game settings are too large.");
+  atomicWrite(file, text);
 }
 Json Model::rtpPaths() const {
   auto v = object();
@@ -864,7 +1366,7 @@ void Model::setRtp(const std::string &name, const std::string &p) {
   Mount m;
   if (!p.empty() && (!paths.external(p) || !inspectRtp(p, pack, m)))
     throw std::runtime_error(
-        "Choose a pack containing Graphics and Audio folders.");
+        "Choose a pack containing Graphics/Audio or System/Music folders.");
   auto v = rtpPaths();
   if (p.empty())
     v.as_object().erase(pack);
@@ -949,15 +1451,20 @@ bool Model::inspectRtpRaw(const std::string &p, const std::string &name,
     for (int step = 0; step < 9 - depth; ++step) {
       auto fs = files(inner);
       std::vector<std::string> folders;
-      std::string graphics, audio;
+      std::string graphics, audio, system;
       for (auto &f : fs)
         if (f.directory) {
           folders.push_back(f.name);
           if (lower(f.name) == "graphics")
             graphics = f.name;
-          if (lower(f.name) == "audio")
+          if (lower(f.name) == "audio" ||
+              ((name == "2000" || name == "2003") && lower(f.name) == "music"))
             audio = f.name;
+          if (lower(f.name) == "system")
+            system = f.name;
         }
+      if (name == "2000" || name == "2003")
+        graphics = system;
       if (!graphics.empty() && !audio.empty() &&
           hasAssets(inner.empty() ? graphics : join(inner, graphics)) &&
           hasAssets(inner.empty() ? audio : join(inner, audio))) {
@@ -1064,8 +1571,10 @@ std::string Model::prepareZip(const Node &node, Progress progress) {
   removePartial(stage);
   mkdirOne(stage);
   try {
+    if (progress) progress(0, 0);
+    Archive archive(node.path());
     std::vector<ExtractFile> files;
-    collect(node, "", files);
+    collect(node, "", files, progress);
     uint64_t total = 0, copied = 0;
     for (auto &f : files) {
       if (uint64_t(f.size) > std::numeric_limits<uint64_t>::max() - total)
@@ -1074,7 +1583,6 @@ std::string Model::prepareZip(const Node &node, Progress progress) {
     }
     if (progress)
       progress(copied, total);
-    Archive archive(node.path());
     for (auto &f : files) {
       auto components = split(f.path, '/');
       std::string dir = stage;
@@ -1094,13 +1602,20 @@ std::string Model::prepareZip(const Node &node, Progress progress) {
   }
   return cache;
 }
-Json Model::launch(const Entry &e, Progress progress) {
-  if (e.kind != Kind::Game || e.version < 1 || e.version > 3)
+Json Model::launch(const Entry &e, Progress progress, PreparationStatus status) {
+  if (status) status(e.node.archive ? "Preparing game ZIP" : "Starting game");
+  const auto *engine = engineFor(e.version);
+  if (e.kind != Kind::Game || !engine)
     throw std::runtime_error("Choose a valid game");
-  auto mounts = resolveRtp(e.node);
+  if (backendAvailable && !backendAvailable(*engine))
+    throw std::runtime_error("The " + std::string(engine->id) +
+                             " runtime is missing from this package.");
+  auto mounts = e.version == 4 ? std::vector<Mount>{} : resolveRtp(e.node);
+  // A game unpacked from a ZIP that is gone runs from its unpacked copy.
+  bool unpacked = !e.node.archive && e.node.root == paths.at("cache");
   auto folder = e.node.archive ? prepareZip(e.node, progress)
-                : e.node.root == paths.at("games") ? e.node.relative
-                                                   : e.node.path();
+                : unpacked || e.node.root == paths.at("games") ? e.node.relative
+                                                               : e.node.path();
   auto rtps = array();
   for (auto &m : mounts) {
     auto mount = object();
@@ -1110,13 +1625,73 @@ Json Model::launch(const Entry &e, Progress progress) {
   }
   auto selection = object();
   auto &v = selection.as_object();
-  v["source"] = e.node.archive                     ? "cache"
+  v["source"] = e.node.archive || unpacked          ? "cache"
                 : e.node.root == paths.at("games") ? "games"
                                                    : "external";
   v["path"] = folder;
   v["config"] = key(e.node.identity(paths));
   v["rgss"] = Json::integer_type(e.version);
   v["rtp"] = rtps;
+  if (e.version == 4) {
+    v.erase("rgss");
+    v["backend"] = "easyrpg";
+    v["schema"] = Json::integer_type(1);
+    auto saveBase = paths.at("saves/easyrpg");
+    mkdirOne(saveBase);
+    auto save = join(saveBase, key(e.node.identity(paths)));
+    mkdirOne(save);
+    v["save"] = save;
+    // EasyRPG receives absolute paths, including prepared ZIP projects.
+    v["project"] = e.node.archive || unpacked ? paths.at("cache/" + folder) : e.node.path();
+    // Seed existing RPG Maker saves without modifying the source project or
+    // replacing a slot already owned by HardRPG.
+    auto project = v["project"].as_string();
+    for (const auto &file : directoryFiles(project)) {
+      auto name = lower(file.name);
+      if (file.directory || name.size() < 9 || name.compare(0, 4, "save") ||
+          !suffix(name, ".lsd"))
+        continue;
+      auto slot = name.substr(4, name.size() - 8);
+      if (slot.empty() ||
+          slot.find_first_not_of("0123456789") != std::string::npos)
+        continue;
+      bool present = false;
+      for (const auto &existing : directoryFiles(save))
+        if (lower(existing.name) == name)
+          present = true;
+      if (!present)
+        atomicWrite(join(save, file.name),
+                    readFile(join(project, file.name), 16 * 1024 * 1024));
+    }
+    auto choices = rtpPaths();
+    for (const auto &name : {"2000", "2003"}) {
+      if (status) status(std::string("Checking ") + name + " RTP");
+      auto chosen = choices.as_object().find(name);
+      std::string candidate = chosen == choices.as_object().end()
+                                  ? paths.at(std::string("rtp/") + name)
+                                  : chosen->second.as_string();
+      Mount mount;
+      if (inspectRtp(candidate, name, mount)) {
+        // Reuse the safe extraction cache for ZIP RTPs.
+        auto path = mount.path;
+        if (regular(path)) {
+          if (status) status(std::string("Preparing ") + name + " RTP ZIP");
+          auto node = Node::fromPath(paths, path, true, mount.root);
+          path = paths.at("cache/" + prepareZip(node, progress));
+        }
+        auto pack = object();
+        pack.as_object()["engine"] = name;
+        pack.as_object()["path"] = path;
+        rtps.as_array().push_back(pack);
+      }
+    }
+    v["rtp"] = rtps;
+  } else {
+    auto ini = e.node.iniName();
+    if (!ini.empty() && lower(ini) != "game.ini")
+      v["execName"] = ini.substr(0, ini.size() - 4);
+  }
+
   auto encoded = selection.stringify();
   if (encoded.size() > 4096)
     throw std::runtime_error(

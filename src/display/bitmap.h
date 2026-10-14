@@ -22,6 +22,7 @@
 #ifndef BITMAP_H
 #define BITMAP_H
 
+#include <stddef.h>
 #include "disposable.h"
 #include "etc-internal.h"
 #include "etc.h"
@@ -182,6 +183,10 @@ public:
 #endif
 
 	static int maxSize();
+	static void reclaimMemory();
+	static void frameTick();
+	static bool cpuPixelsNearBudget();
+	static size_t cpuPixelBytes();
 
     void assumeRubyGC();
 

@@ -28,6 +28,8 @@
 #include "vita_proto_launcher.h"
 #endif
 #include <sys/stat.h>
+#include <cstdio>
+#include <cstring>
 #endif
 #include "util/encoding.h"
 
@@ -139,6 +141,7 @@ void Config::read(int argc, char *argv[]) {
         {"debugMode", false},
         {"displayFPS", false},
         {"printFPS", false},
+        {"performanceMetrics", 0},
         {"winResizable", true},
         {"fullscreen", false},
         {"fixedAspectRatio", true},
@@ -169,6 +172,7 @@ void Config::read(int argc, char *argv[]) {
         {"preferMetalRenderer", false},
 #endif
         {"subImageFix", false},
+        {"vitaKeepAwake", false},
 #ifdef __WIN32__
         {"enableBlitting", false},
 #else
@@ -186,7 +190,11 @@ void Config::read(int argc, char *argv[]) {
         {"dataPathApp", ""},
         {"iconPath", ""},
         {"execName", "Game"},
+#ifdef MKXPZ_VITA_FLUIDLITE
+        {"midiSoundFont", "app0:/TimGM6mb.sf2"},
+#else
         {"midiSoundFont", ""},
+#endif
         {"midiChorus", false},
         {"midiReverb", false},
         {"SESourceCount", 6},
@@ -275,7 +283,8 @@ try { exp } catch (...) {}
     // player", filled in before the normal chdir/ini flow runs.
     bool launcherMode = gameFolder.empty();
     if (launcherMode &&
-        !protoLauncherPick(gameFolder, rgssVersion, rtps, vitaConfigPath, vitaRtpArchiveRoots)) {
+        !protoLauncherPick(gameFolder, rgssVersion, rtps, vitaConfigPath, vitaRtpArchiveRoots,
+                           true, &execName)) {
         throw Exception(Exception::MKXPError, "No game selected");
     }
     /* The hook derives the per-game sidecar from the pick; remember it so
@@ -377,6 +386,8 @@ try { exp } catch (...) {}
     SET_OPT(debugMode, boolean);
     SET_OPT(displayFPS, boolean);
     SET_OPT(printFPS, boolean);
+    SET_OPT(performanceMetrics, integer);
+    if (performanceMetrics < 0 || performanceMetrics > 2) performanceMetrics = 0;
     SET_OPT(fullscreen, boolean);
     SET_OPT(fixedAspectRatio, boolean);
     SET_OPT(smoothScaling, integer);
@@ -406,6 +417,7 @@ try { exp } catch (...) {}
     SET_OPT(preferMetalRenderer, boolean);
 #endif
     SET_OPT(subImageFix, boolean);
+    SET_OPT(vitaKeepAwake, boolean);
     SET_OPT(enableBlitting, boolean);
     SET_OPT_CUSTOMKEY(integerScaling.active, integerScalingActive, boolean);
     SET_OPT_CUSTOMKEY(integerScaling.lastMileScaling, integerScalingLastMile, boolean);
@@ -414,6 +426,9 @@ try { exp } catch (...) {}
     SET_OPT(enableReset, boolean);
     SET_OPT(enableSettings, boolean);
     SET_STRINGOPT(midi.soundFont, midiSoundFont);
+#ifdef MKXPZ_VITA_FLUIDLITE
+    if (midi.soundFont.empty()) midi.soundFont = "app0:/TimGM6mb.sf2";
+#endif
     SET_OPT_CUSTOMKEY(midi.chorus, midiChorus, boolean);
     SET_OPT_CUSTOMKEY(midi.reverb, midiReverb, boolean);
     SET_OPT_CUSTOMKEY(SE.sourceCount, SESourceCount, integer);
@@ -453,6 +468,49 @@ try { exp } catch (...) {}
 #endif
     fillStringVec(opts["patches"], patches);
     fillStringVec(opts["fontSub"], fontSubs);
+#ifdef __vita__
+    /* Games released on desktop mkxp (To the Moon and the other Freebird
+     * titles) keep sound and text in archives beside the game and name them
+     * as RTP in their own mkxp.conf, with the font substitutions they need.
+     * Honour those two keys from the game's file, and mount the Freebird
+     * archive names even when the file was not copied over. Only a plain name
+     * inside the game folder that really is an archive is mounted: a mount
+     * that fails stops the boot. */
+    if (!gameFolder.empty() && gameFolder != "app0:/stub" && customScript.empty()) {
+        std::vector<std::string> wanted = {"Audio.dat", "lang.dat"};
+        if (FILE *conf = fopen((gameFolder + "/mkxp.conf").c_str(), "rb")) {
+            char line[512];
+            for (int lines = 0; lines < 512 && fgets(line, sizeof(line), conf); ++lines) {
+                std::string text(line);
+                while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' '))
+                    text.pop_back();
+                if (text.compare(0, 4, "RTP=") == 0)
+                    wanted.push_back(text.substr(4));
+                else if (text.compare(0, 8, "fontSub=") == 0 && text.find('>') != std::string::npos &&
+                         std::find(fontSubs.begin(), fontSubs.end(), text.substr(8)) == fontSubs.end())
+                    fontSubs.push_back(text.substr(8));
+            }
+            fclose(conf);
+        }
+        for (const std::string &name : wanted) {
+            if (name.empty() || name.size() > 128 || name[0] == '.' ||
+                name.find_first_of("/\\:") != std::string::npos)
+                continue;
+            const std::string path = gameFolder + "/" + name;
+            if (std::find(rtps.begin(), rtps.end(), path) != rtps.end())
+                continue;
+            unsigned char magic[8] = {0};
+            FILE *archive = fopen(path.c_str(), "rb");
+            if (!archive)
+                continue;
+            const size_t got = fread(magic, 1, sizeof(magic), archive);
+            fclose(archive);
+            if (got == sizeof(magic) &&
+                (!memcmp(magic, "RGSSAD\0", 7) || !memcmp(magic, "PK\3\4", 4)))
+                rtps.push_back(path);
+        }
+    }
+#endif
     for (std::string & fontSub : fontSubs)
         std::transform(fontSub.begin(), fontSub.end(), fontSub.begin(),
             [](unsigned char c) { return std::tolower(c); });

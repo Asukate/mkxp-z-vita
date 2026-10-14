@@ -30,6 +30,43 @@
 #include <utility>
 #include <assert.h>
 #include <string.h>
+#include <map>
+#include <vector>
+#include <algorithm>
+#include <stdio.h>
+
+/* Render targets handed out and not yet returned, by size, for the memory
+ * snapshot: what bitmaps and the engine itself hold in graphics memory. */
+static std::map<std::pair<int, int>, int> liveTargets;
+static size_t liveTargetBytes = 0;
+static size_t poolCacheBytes = 0;
+static void countTarget(int w, int h, int by)
+{
+	if ((liveTargets[std::make_pair(w, h)] += by) <= 0)
+		liveTargets.erase(std::make_pair(w, h));
+	liveTargetBytes += (size_t)w * h * 4 * by;
+}
+extern "C" void vitaTexPoolFigures(size_t figures[3], char *top, size_t capacity)
+{
+	size_t count = 0;
+	std::vector<std::pair<size_t, std::pair<int, int> > > order;
+	for (std::map<std::pair<int, int>, int>::const_iterator i = liveTargets.begin(); i != liveTargets.end(); ++i)
+	{
+		count += i->second;
+		order.push_back(std::make_pair((size_t)i->first.first * i->first.second * 4 * i->second, i->first));
+	}
+	std::sort(order.rbegin(), order.rend());
+	figures[0] = count;
+	figures[1] = liveTargetBytes;
+	figures[2] = poolCacheBytes;
+	size_t used = 0;
+	if (capacity)
+		top[0] = 0;
+	for (size_t i = 0; i < order.size() && i < 8 && used + 24 < capacity; ++i)
+		used += snprintf(top + used, capacity - used, "%s%dx%d*%d", i ? "," : "",
+		                 order[i].second.first, order[i].second.second,
+		                 liveTargets[order[i].second]);
+}
 
 typedef std::pair<uint16_t, uint16_t> Size;
 
@@ -127,6 +164,8 @@ TEXFBO TexPool::request(int width, int height)
 
 		p->memSize -= byteCount(size);
 		--p->objCount;
+		poolCacheBytes = p->memSize;
+		countTarget(width, height, 1);
 
 //		Debug() << "TexPool: <?+> (" << width << height << ")";
 
@@ -141,8 +180,22 @@ TEXFBO TexPool::request(int width, int height)
 
 	/* Nope, create it instead */
 	TEXFBO::init(cnode.obj);
-	TEXFBO::allocEmpty(cnode.obj, width, height);
+	try
+	{
+		TEXFBO::allocEmpty(cnode.obj, width, height);
+	}
+	catch (const Exception &)
+	{
+		/* Cached objects have no owner; give their storage back and try
+		 * once more before reporting the failure. */
+		if (p->objCount == 0)
+			throw;
+		clearCache();
+		TEXFBO::init(cnode.obj);
+		TEXFBO::allocEmpty(cnode.obj, width, height);
+	}
 	TEXFBO::linkFBO(cnode.obj);
+	countTarget(width, height, 1);
 
 //	Debug() << "TexPool: <?-> (" << width << height << ")";
 
@@ -166,6 +219,7 @@ void TexPool::release(TEXFBO &obj)
 	}
 
 	Size size(obj.width, obj.height);
+	countTarget(obj.width, obj.height, -1);
 
 	uint32_t newMemSize = p->memSize + byteCount(size);
 
@@ -207,6 +261,7 @@ void TexPool::release(TEXFBO &obj)
 	}
 
 	p->memSize = newMemSize;
+	poolCacheBytes = newMemSize;
 
 	/* Retain object */
 	p->priorityQueue.push_front(obj);

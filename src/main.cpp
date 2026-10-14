@@ -66,6 +66,7 @@
 
 #ifdef __vita__
 extern "C" void glFinish(void);
+extern "C" void vglSetVertexAttribPoolSize(uint32_t main_size, uint32_t aux_size);
 extern "C" int vglInitWithCustomThreshold(int pool_size, int width, int height,
                                           int ram_threshold,
                                           int cdram_threshold,
@@ -215,6 +216,9 @@ int rgssThreadFun(void *userdata) {
   ba_script_begin();
   scriptBinding->execute();
   vitaDiagLog("RUBY", "script_binding_execute_return");
+#ifdef __vita__
+  vitaStartupTimerMark("shutdown_script_returned");
+#endif
   ba_dump_final("script_return");
 
   threadData->rqTermAck.set();
@@ -223,15 +227,20 @@ int rgssThreadFun(void *userdata) {
   SharedState::finiInstance();
 
 #ifdef __vita__
+  vitaStartupTimerMark("shutdown_shared_state_freed");
   /* vitaGL has no context-destruction entry point.  Finish the final scene
    * and wait for GXM after all RGSS GL resources have been released, before
    * the process returns control to LiveArea. */
   vitaDiagLog("GL", "shutdown_finish_begin");
   glFinish();
   vitaDiagLog("GL", "shutdown_finish_done");
+  vitaStartupTimerMark("shutdown_gl_finished");
 #endif
 
   alcDestroyContext(alcCtx);
+#ifdef __vita__
+  vitaStartupTimerMark("shutdown_rgss_thread_done");
+#endif
 
   return 0;
 }
@@ -617,13 +626,11 @@ int main(int argc, char *argv[]) {
     initTouchBar(win, conf);
 #endif
 
-    /* The old Vita port used 5 MiB for RGSS. Keep that as a diagnostic-only
-     * candidate while the normal build remains at the smaller baseline. */
-#ifdef MKXPZ_VITA_DIAGNOSTICS
-    constexpr int rgssStackSize = 5 * 1024 * 1024;
-#else
-    constexpr int rgssStackSize = 4 * 1024 * 1024;
-#endif
+    /* Ruby Fibers switch natively and keep their machine stacks inside this
+     * thread's registered stack (the kernel refuses system calls made from a
+     * stack pointer outside it). Ruby's cont.c reserves the top 4 MiB for the
+     * thread itself and a 128 KiB gap; the remaining 20 MiB holds 63 Fibers. */
+    constexpr int rgssStackSize = (4 + 20) * 1024 * 1024 + 128 * 1024;
     vitaDiagPollTrigger();
     vitaDiagLog("THREAD", "creating_rgss_thread stack=%d", rgssStackSize);
     SDL_Thread *rgssThread = SDL_CreateThreadWithStackSize(rgssThreadFun, "rgss", rgssStackSize, &rtData);
@@ -636,6 +643,9 @@ int main(int argc, char *argv[]) {
     /* Start event processing */
     eventThread.process(rtData);
 
+#ifdef __vita__
+    vitaStartupTimerMark("shutdown_requested");
+#endif
     /* Request RGSS thread to stop */
     rtData.rqTerm.set();
 
@@ -679,8 +689,14 @@ int main(int argc, char *argv[]) {
       vitaDiagLog("MAIN", "clean shutdown, no error");
     }
 
+#ifdef __vita__
+    vitaStartupTimerMark("shutdown_thread_joined");
+#endif
     if (rtData.glContext)
       SDL_GL_DeleteContext(rtData.glContext);
+#ifdef __vita__
+    vitaStartupTimerMark("shutdown_gl_context_deleted");
+#endif
 
     /* Clean up any remainin events */
     eventThread.cleanup();
@@ -688,7 +704,13 @@ int main(int argc, char *argv[]) {
     Debug() << "Shutting down.";
 
     alcCloseDevice(alcDev);
+#ifdef __vita__
+    vitaStartupTimerMark("shutdown_audio_closed");
+#endif
     SDL_DestroyWindow(win);
+#ifdef __vita__
+    vitaStartupTimerMark("shutdown_window_destroyed");
+#endif
 
 #if defined(__WIN32__)
     if (wsadata.wVersion)
@@ -714,6 +736,8 @@ int main(int argc, char *argv[]) {
             char returnArg[] = "--hardrpg-return";
             char *returnArgs[] = {returnArg, nullptr};
             const bool returningToPicker = playingGame || eventThread.returnToLauncherRequested();
+            vitaStartupTimerMark("shutdown_restart");
+            vitaStartupTimerKeep();
             sceAppMgrLoadExec("app0:/eboot.bin", returningToPicker ? returnArgs : nullptr, nullptr);
         }
         else if (protoPick)
@@ -756,8 +780,22 @@ static SDL_GLContext initGL(SDL_Window *win, Config &conf,
    * repeatedly overflows temporary storage and forces allocation waits. */
   {
     vitaDiagLog("GL", "vgl_preinit_begin msaa=none ram64 phycont1m");
+    /* vitaGL takes all main memory except this first figure. About 24 MiB
+     * of it is what the system and thread stacks need, as on 0.3.0 (the RGSS
+     * thread's stack, Fiber region included, is not counted in it). The other
+     * 48 MiB, with headroom from that 24, backs the kernel blocks that large
+     * pixel buffers live in (56 MiB budget, SDL shim). The heap gave up those
+     * 48 MiB, so vitaGL's pool is the size it was. */
+    /* Every vertex array object gets a pool for the values of attributes
+     * given as constants (glVertexAttrib4f) instead of arrays: 64 KiB of
+     * graphics memory each by default. A Sprite owns two such objects and
+     * this renderer never sets a constant attribute, so 500 sprites held
+     * 62 MiB for nothing (measured: To the Moon's title has 567). 1 KiB
+     * covers the 16 four-float defaults vitaGL writes when it creates one.
+     * The default object keeps its 256 KiB. */
+    vglSetVertexAttribPoolSize(256 * 1024, 1024);
     vglInitWithCustomThreshold(0, 960, 544,
-                               28 * 1024 * 1024, 0, 25 * 1024 * 1024,
+                               76 * 1024 * 1024, 0, 25 * 1024 * 1024,
                                0x8C6000, 0);
     vitaDiagLog("GL", "vgl_preinit_done");
     vitaDiagLog("BOOTPERF", "vgl_preinit_done");

@@ -1,5 +1,6 @@
---- a/Makefile	2026-05-12 21:04:08.000000000 -0300
-+++ b/Makefile	2026-09-21 13:33:37.647871291 -0300
+diff -ruN --no-dereference a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
 @@ -152,7 +152,7 @@
  endif
  
@@ -9,8 +10,9 @@
  endif
  
  ifeq ($(HAVE_WRAPPED_ALLOCATORS),1)
---- a/source/buffers.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/buffers.c	2026-09-03 03:29:03.023085076 -0300
+diff -ruN --no-dereference a/source/buffers.c b/source/buffers.c
+--- a/source/buffers.c
++++ b/source/buffers.c
 @@ -229,6 +229,59 @@
  	}
  }
@@ -71,8 +73,9 @@
  inline __attribute__((always_inline)) void glGenBuffers(GLsizei n, GLuint *res) {
  #ifndef SKIP_ERROR_HANDLING
  	if (n < 0) {
---- a/source/custom_shaders.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/custom_shaders.c	2026-09-02 03:05:52.183874165 -0300
+diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
+--- a/source/custom_shaders.c
++++ b/source/custom_shaders.c
 @@ -709,7 +709,7 @@
  			}
  #endif
@@ -136,8 +139,9 @@
  #endif
  			sceGxmSetFragmentTexture(gxm_context, i, &tex->gxm_tex);
  #ifdef HAVE_GLSL_TEXTURE_SIZE
---- a/source/draw.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/draw.c	2026-09-02 03:05:52.181874174 -0300
+diff -ruN --no-dereference a/source/draw.c b/source/draw.c
+--- a/source/draw.c
++++ b/source/draw.c
 @@ -642,7 +642,7 @@
  			if (texture_slots[tex_unit->tex_id[0]].status != TEX_VALID)
  				return;
@@ -147,8 +151,9 @@
  #endif
  			sceGxmSetFragmentTexture(gxm_context, 0, &texture_slots[tex_unit->tex_id[0]].gxm_tex);
  			sceGxmSetVertexStream(gxm_context, 1, texture_object);
---- a/source/ffp.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/ffp.c	2026-09-02 03:06:40.883651275 -0300
+diff -ruN --no-dereference a/source/ffp.c b/source/ffp.c
+--- a/source/ffp.c
++++ b/source/ffp.c
 @@ -1184,7 +1184,7 @@
  		restore_tex_cache(tex);
  #endif
@@ -194,8 +199,9 @@
  #endif
  		sampler *smp = samplers[0];
  		if (smp) {
---- a/source/framebuffers.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/framebuffers.c	2026-09-11 00:34:50.441551638 -0300
+diff -ruN --no-dereference a/source/framebuffers.c b/source/framebuffers.c
+--- a/source/framebuffers.c
++++ b/source/framebuffers.c
 @@ -31,6 +31,18 @@
  framebuffer *active_write_fb = NULL; // Current write framebuffer in use
  renderbuffer *active_rb = NULL; // Current renderbuffer in use
@@ -215,10 +221,95 @@
  uint32_t get_color_from_texture(SceGxmTextureFormat type) {
  	switch (type) {
  	case SCE_GXM_TEXTURE_FORMAT_U8_R:
+@@ -237,6 +249,7 @@
+ 			ids[j++] = (GLuint)&framebuffers[i];
+ 			framebuffers[i].active = GL_TRUE;
+ 			framebuffers[i].is_depth_hidden = GL_FALSE;
++			framebuffers[i].is_depth_shared = GL_FALSE;
+ 			framebuffers[i].depthbuffer_ptr = NULL;
+ 			framebuffers[i].target = NULL;
+ 			framebuffers[i].tex = NULL;
+@@ -294,7 +307,7 @@
+ 				mark_rt_as_dirty(fb->target);
+ #ifndef DEPTH_STENCIL_HACK
+ 			if (fb->depthbuffer_ptr && fb->is_depth_hidden) {
+-				mark_as_dirty(fb->depthbuffer_ptr->depthData);
++				discard_hidden_depth(fb);
+ 			}
+ #endif
+ 		}
+@@ -386,7 +399,7 @@
+ 	// Discarding any previously bound hidden depth buffers
+ 	if (fb->depthbuffer_ptr && fb->is_depth_hidden) {
+ #ifndef DEPTH_STENCIL_HACK
+-		mark_as_dirty(fb->depthbuffer_ptr->depthData);
++		discard_hidden_depth(fb);
+ #endif
+ 		fb->is_depth_hidden = GL_FALSE;
+ 	}
+@@ -419,7 +432,7 @@
+ 	// Discarding any previously bound hidden depth buffers
+ 	if (fb->depthbuffer_ptr && fb->is_depth_hidden) {
+ #ifndef DEPTH_STENCIL_HACK
+-		mark_as_dirty(fb->depthbuffer_ptr->depthData);
++		discard_hidden_depth(fb);
+ #endif
+ 		fb->is_depth_hidden = GL_FALSE;
+ 	}
+@@ -528,6 +541,15 @@
+ 	// Aliasing to make code more readable
+ 	texture *tex = &texture_slots[tex_id];
+ 
++	/* A texture whose storage allocation failed has no backing. Treat the
++	 * request as a detach so the color surface never references memory this
++	 * framebuffer does not own. */
++	if (tex_id != 0 && attachment == GL_COLOR_ATTACHMENT0 && (tex->status != TEX_VALID || tex->data == NULL)) {
++		vgl_log("%s:%d %s: Texture 0x%X has no storage; framebuffer left without a color attachment.\n", __FILE__, __LINE__, __func__, tex_id);
++		tex_id = 0;
++		tex = &texture_slots[0];
++	}
++
+ 	// Extracting texture data
+ 	int old_w = fb->width, old_h = fb->height;
+ 	SceGxmTextureFormat fmt = sceGxmTextureGetFormat(&tex->gxm_tex);
+@@ -543,7 +565,7 @@
+ 		// Discarding any previously bound hidden depth buffer
+ 		if (fb->depthbuffer_ptr && fb->is_depth_hidden) {
+ #ifndef DEPTH_STENCIL_HACK
+-			mark_as_dirty(fb->depthbuffer_ptr->depthData);
++			discard_hidden_depth(fb);
+ #endif
+ 			fb->depthbuffer_ptr = NULL;
+ 			fb->is_depth_hidden = GL_FALSE;
+@@ -607,6 +629,15 @@
+ 	// Aliasing to make code more readable
+ 	texture *tex = &texture_slots[tex_id];
+ 
++	/* A texture whose storage allocation failed has no backing. Treat the
++	 * request as a detach so the color surface never references memory this
++	 * framebuffer does not own. */
++	if (tex_id != 0 && attachment == GL_COLOR_ATTACHMENT0 && (tex->status != TEX_VALID || tex->data == NULL)) {
++		vgl_log("%s:%d %s: Texture 0x%X has no storage; framebuffer left without a color attachment.\n", __FILE__, __LINE__, __func__, tex_id);
++		tex_id = 0;
++		tex = &texture_slots[0];
++	}
++
+ 	// Extracting texture data
+ 	int old_w = fb->width, old_h = fb->height;
+ 
+@@ -622,7 +653,7 @@
+ 		// Discarding any previously bound hidden depth buffer
+ 		if (fb->depthbuffer_ptr && fb->is_depth_hidden) {
+ #ifndef DEPTH_STENCIL_HACK
+-			mark_as_dirty(fb->depthbuffer_ptr->depthData);
++			discard_hidden_depth(fb);
+ #endif
+ 			fb->depthbuffer_ptr = NULL;
+ 			fb->is_depth_hidden = GL_FALSE;
+diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
 --- a/source/gxm.c
 +++ b/source/gxm.c
-@@ -22,8 +22,22 @@
-  */
+@@ -23,6 +23,20 @@
  
  #include "shared.h"
  
@@ -239,9 +330,7 @@
  #define MAX_SCENES_PER_FRAME 8 // Maximum amount of scenes per frame allowed by sceGxm per render target
  
  // FIXME: Since we use our own default uniform buffers circular pool, fragment and vertex buffer rings can likely be reduced in size
- uint32_t gxm_param_buf_size = SCE_GXM_DEFAULT_PARAMETER_BUFFER_SIZE; // Param buffer size for sceGxm
-@@ -99,8 +113,12 @@
- #ifndef SKIP_ERROR_HANDLING
+@@ -100,6 +114,10 @@
  float *legacy_pool_end = NULL; // Address of the end of the GL1 immediate draw pipeline vertex pool
  #endif
  uint32_t vgl_framecount = 0; // Current frame number since application started
@@ -252,9 +341,7 @@
  
  void *frame_purge_list[FRAME_PURGE_FREQ][FRAME_PURGE_LIST_SIZE]; // Purge list for internal elements
  void *frame_rt_purge_list[FRAME_PURGE_FREQ][FRAME_PURGE_RENDERTARGETS_LIST_SIZE]; // Purge list for rendertargets
- int frame_purge_idx = 0; // Index for currently populatable purge list
-@@ -158,11 +176,48 @@
- 	return sceGxmCreateRenderTarget(&renderTargetParams, rt);
+@@ -159,10 +177,47 @@
  }
  
  #ifdef HAVE_SHARED_RENDERTARGETS
@@ -262,7 +349,7 @@
 +#define MAX_RENDER_TARGETS_NUM 12 // Maximum amount of dedicated render targets usable for fbos
  #define MAX_SHARED_RT_SIZE 256 // Maximum  width value in pixels for shared rendertargets usage
  render_target rt_list[MAX_RENDER_TARGETS_NUM];
-+
+ 
 +#if defined(HAVE_SHARED_RENDERTARGETS) && defined(RECYCLE_RENDERTARGETS)
 +void __vglInvalidateSharedRenderTarget(render_target *target);
 +#endif
@@ -299,12 +386,11 @@
 +	return r;
 +}
 +#endif
- 
++
  render_target *get_free_render_target(int w, int h) {
  	int i;
  	for (i = 0; i < MAX_RENDER_TARGETS_NUM; i++) {
-@@ -177,36 +232,27 @@
- #ifdef LOG_ERRORS
+@@ -178,6 +233,15 @@
  			if (r)
  				vgl_log("%s:%d Failed to create a shared rendertarget of size %dx%d (%s).\n", __FILE__, __LINE__, w, h, get_gxm_error_literal(r));
  #endif
@@ -320,7 +406,7 @@
  			rt_list[i].w = w;
  			rt_list[i].h = h;
  			rt_list[i].ref_count = 1;
- 			return &rt_list[i];
+@@ -185,27 +249,9 @@
  		}
  	}
  #ifdef RECYCLE_RENDERTARGETS
@@ -351,9 +437,7 @@
  #else
  #ifdef LOG_ERRORS
  	vgl_log("%s:%d Failed to create a shared rendertarget of size %dx%d (Out of rendertargets handles).\n", __FILE__, __LINE__, w, h);
- #endif
-@@ -271,29 +317,44 @@
- #ifndef HAVE_SINGLE_THREADED_GC
+@@ -272,27 +318,42 @@
  	for (;;) {
  		// Waiting for garbage collection request
  		sceKernelWaitSema(gc_mutex[0], 1, NULL);
@@ -396,9 +480,59 @@
  		sceKernelSignalSema(gc_mutex[1], 1);
  	}
  #ifndef HAVE_PTHREAD
- 	return sceKernelExitDeleteThread(0);
-@@ -580,21 +641,31 @@
- static inline __attribute__((always_inline)) void scene_end(void) {
+@@ -536,6 +597,51 @@
+ #endif
+ }
+ 
++#if !defined(DEPTH_STENCIL_HACK) && !defined(STORE_DEPTH_STENCIL)
++/* Hidden depth storage shared by render-to-texture framebuffers.
++ *
++ * A framebuffer without a depth attachment still needs a depth-stencil
++ * surface for the scissor mask. Its contents never outlive a scene: nothing
++ * force-loads or force-stores it, so memory is only touched while a single
++ * scene spills during a partial render. One scratch block, sized for the
++ * largest such framebuffer seen, can therefore back all of them instead of
++ * every render-target texture carrying a private block of its own size. */
++#define SHARED_DEPTH_MAX_SAMPLES (1024 * 1280) // Larger targets keep private storage
++#define SHARED_DEPTH_MIN_SAMPLES (960 * 544) // Initial capacity; avoids regrowth for screen-sized targets
++static void *shared_depth_data = NULL;
++static uint32_t shared_depth_samples = 0;
++static uint32_t shared_depth_generation = 0;
++
++static GLboolean bind_shared_hidden_depth(framebuffer *fb) {
++	uint32_t w = VGL_ALIGN(fb->width, SCE_GXM_TILE_SIZEX);
++	uint32_t h = VGL_ALIGN(fb->height, SCE_GXM_TILE_SIZEY);
++	uint32_t samples = w * h;
++	if (msaa_mode != SCE_GXM_MULTISAMPLE_NONE || !samples || samples > SHARED_DEPTH_MAX_SAMPLES)
++		return GL_FALSE;
++	if (samples > shared_depth_samples) {
++		uint32_t capacity = samples < SHARED_DEPTH_MIN_SAMPLES ? SHARED_DEPTH_MIN_SAMPLES : samples;
++		void *data = gpu_alloc_mapped_aligned(SCE_GXM_DEPTHSTENCIL_SURFACE_ALIGNMENT, 4 * capacity, VGL_MEM_VRAM);
++		if (!data)
++			return GL_FALSE;
++		// Scenes already submitted keep the old block until the collector's usual delay
++		if (shared_depth_data)
++			mark_as_dirty(shared_depth_data);
++		shared_depth_data = data;
++		shared_depth_samples = capacity;
++		shared_depth_generation++;
++	}
++	vglDepthStencilSurfaceInit(&fb->depthbuffer,
++		SCE_GXM_DEPTH_STENCIL_FORMAT_DF32M,
++		SCE_GXM_DEPTH_STENCIL_SURFACE_LINEAR,
++		w, shared_depth_data, NULL);
++	fb->depthbuffer_ptr = &fb->depthbuffer;
++	fb->is_depth_hidden = GL_TRUE;
++	fb->is_depth_shared = GL_TRUE;
++	fb->shared_depth_gen = shared_depth_generation;
++	return GL_TRUE;
++}
++#endif
++
+ void init_display_depth_stencil_surfaces(void) {
+ 	init_depth_stencil_buffer(DISPLAY_WIDTH, DISPLAY_HEIGHT, &gxm_depth_stencil_surface, GL_TRUE);
+ }
+@@ -581,11 +687,26 @@
  	// Ends current gxm scene
  	query_fence.value++;
  	sceGxmEndScene(gxm_context, NULL, &query_fence);
@@ -416,11 +550,16 @@
 +	 * open scene. Either way GPU writes may now be outstanding, so latch
 +	 * the hazard flag for the next CPU texture upload. */
 +	vgl_gpu_write_pending = GL_TRUE;
++#ifndef TEXTURES_SPEEDHACK
++	/* Render targets remain GPU-owned just like sampled textures. */
++	if (active_write_fb && active_write_fb->tex) {
++		mark_texture_used(active_write_fb->tex);
++	}
++#endif
  	if (in_use_framebuffer != active_write_fb || needs_scene_reset || dirty_framebuffer || dirty_query) {
  		dirty_framebuffer = GL_FALSE;
  		dirty_query = GL_FALSE;
- 		needs_scene_reset = GL_FALSE;
- 		in_use_framebuffer = active_write_fb;
+@@ -594,6 +715,7 @@
  		is_fbo_float = in_use_framebuffer ? in_use_framebuffer->is_float : GL_FALSE;
  
  		// Ending drawing scene
@@ -428,9 +567,7 @@
  		if (needs_end_scene) {
  			scene_end();
  		} else {
- 			if (legacy_pool_size) {
-@@ -605,8 +676,9 @@
- #endif
+@@ -606,6 +728,7 @@
  			}
  			needs_end_scene = GL_TRUE;
  		}
@@ -438,9 +575,7 @@
  
  #ifndef SKIP_SPLASHSCREEN	
  		// If we're running the boot splashscreen, we need to terminate it first
- 		if (is_splashscreen_active) {
-@@ -618,8 +690,9 @@
- 			sceKernelDeleteSema(splash_mutex[1]);
+@@ -619,6 +742,7 @@
  		}
  #endif
  
@@ -448,9 +583,7 @@
  		// Starting drawing scene
  		is_rendering_display = !active_write_fb;
  		if (is_rendering_display) { // Default framebuffer is used
- 			if (system_app_mode) {
-@@ -637,8 +710,43 @@
- 				vgl_log("%s:%d Scene reset failed due to sceGxmBeginScene erroring (%s) on display.\n", __FILE__, __LINE__, get_gxm_error_literal(r));
+@@ -638,8 +762,54 @@
  			}
  #endif
  		} else {
@@ -490,11 +623,23 @@
 +			}
 +
  			// If a depthstencil surface is not bound to the in use framebuffer, we get one for it to ensure scissor testing compatibility
- 			if (!active_write_fb->depthbuffer_ptr) {
+-			if (!active_write_fb->depthbuffer_ptr) {
++#if !defined(DEPTH_STENCIL_HACK) && !defined(STORE_DEPTH_STENCIL)
++			// The shared scratch block moved since this surface was built: rebuild it
++			if (active_write_fb->depthbuffer_ptr && active_write_fb->is_depth_hidden && active_write_fb->is_depth_shared && active_write_fb->shared_depth_gen != shared_depth_generation) {
++				active_write_fb->depthbuffer_ptr = NULL;
++				active_write_fb->is_depth_hidden = GL_FALSE;
++				active_write_fb->is_depth_shared = GL_FALSE;
++			}
++			if (!active_write_fb->depthbuffer_ptr && !bind_shared_hidden_depth(active_write_fb))
++#else
++			if (!active_write_fb->depthbuffer_ptr)
++#endif
++			{
  				init_depth_stencil_buffer(active_write_fb->width, active_write_fb->height, &active_write_fb->depthbuffer, GL_FALSE);
  				active_write_fb->depthbuffer_ptr = &active_write_fb->depthbuffer;
-@@ -688,8 +796,9 @@
- 			if (r)
+ 				active_write_fb->is_depth_hidden = GL_TRUE;
+@@ -689,6 +859,7 @@
  				vgl_log("%s:%d Scene reset failed due to sceGxmBeginScene erroring (%s) on framebuffer 0x%08X.\n", __FILE__, __LINE__, get_gxm_error_literal(r), active_write_fb);
  #endif
  		}
@@ -502,9 +647,7 @@
  
  		// Setting back current viewport if enabled cause sceGxm will reset it at sceGxmEndScene call
  		if (old_framebuffer != in_use_framebuffer) {
- 			dirty_scissor_state = GL_TRUE;
-@@ -757,8 +866,9 @@
- 	gxm_display_buffer_count = count;
+@@ -758,6 +929,7 @@
  }
  
  void vglSwapBuffers(GLboolean has_commondialog) {
@@ -512,9 +655,7 @@
  #ifndef SKIP_SPLASHSCREEN
  	// Ignore display swaps during splashscreen since we handle them in the splashscreen thread
  	if (is_splashscreen_active)
- 		return;
-@@ -806,8 +916,9 @@
- 	needs_end_scene = GL_FALSE;
+@@ -807,6 +979,7 @@
  
  	if (!needs_scene_reset)
  		scene_end();
@@ -522,9 +663,7 @@
  
  	if (has_commondialog) {
  		// Populating SceCommonDialog parameters
- 		SceCommonDialogUpdateParam updateParam;
-@@ -925,19 +1036,23 @@
- 		queue_cb_data.addr = gxm_color_surfaces_addr[gxm_back_buffer_index];
+@@ -926,7 +1099,9 @@
  #ifdef HAVE_PROFILING
  		tick = sceKernelGetProcessTimeLow();
  #endif
@@ -534,8 +673,7 @@
  #ifdef HAVE_PROFILING
  		gpu_stall_cnt += sceKernelGetProcessTimeLow() - tick;
  #endif
- #ifdef HAVE_CPU_TRACER
- 		sceRazorCpuSync();
+@@ -935,8 +1110,10 @@
  #endif
  		gxm_front_buffer_index = gxm_back_buffer_index;
  		gxm_back_buffer_index = (gxm_back_buffer_index + 1) % gxm_display_buffer_count;
@@ -546,9 +684,7 @@
  	
  	// Perform resolution change if there's one pending
  	if (NEW_DISPLAY_WIDTH) {
- 		sceGxmFinish(gxm_context);
-@@ -967,12 +1082,25 @@
- #endif
+@@ -968,10 +1145,23 @@
  }
  
  void glFinish(void) {
@@ -574,17 +710,16 @@
  }
  
  void glReleaseShaderCompiler(void) {
- 	if (is_shark_online) {
-@@ -1002,5 +1130,5 @@
- 		SET_GL_ERROR_WITH_VALUE(GL_INVALID_VALUE, size)
+@@ -1003,4 +1193,4 @@
  	}
  #endif
  	gxm_display_rt_size = size;
 -}
 \ No newline at end of file
 +}
---- a/source/misc.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/misc.c	2026-09-08 03:40:47.827947945 -0300
+diff -ruN --no-dereference a/source/misc.c b/source/misc.c
+--- a/source/misc.c
++++ b/source/misc.c
 @@ -23,6 +23,19 @@
  
  #include "shared.h"
@@ -655,9 +790,21 @@
  }
  
  void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
---- a/source/shared.h	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/shared.h	2026-09-18 03:40:58.018457240 -0300
-@@ -123,6 +123,10 @@
+diff -ruN --no-dereference a/source/shared.h b/source/shared.h
+--- a/source/shared.h
++++ b/source/shared.h
+@@ -47,7 +47,9 @@
+ #define FRAME_PURGE_LIST_SIZE 16384 // Number of elements a single frame can hold
+ #define FRAME_PURGE_RENDERTARGETS_LIST_SIZE 128 // Number of rendertargets a single frame can hold
+ #define FRAME_PURGE_FREQ 4 // Frequency in frames for garbage collection
+-#define BUFFERS_NUM 256 // Maximum amount of framebuffers objects usable
++// RGSS bitmaps each retain a framebuffer, including source-only images.
++// Menu transitions can exceed 256 live objects before Ruby collects them.
++#define BUFFERS_NUM 1024 // Maximum amount of framebuffer/renderbuffer objects
+ #ifdef HAVE_HIGH_FFP_TEXUNITS
+ #define FFP_VERTEX_ATTRIBS_NUM 9 // Number of attributes used in ffp shaders
+ #else
+@@ -123,6 +125,10 @@
  typedef struct texture {
  #ifndef TEXTURES_SPEEDHACK
  	uint32_t last_frame;
@@ -668,7 +815,7 @@
  #endif
  #ifdef HAVE_TEX_CACHE
  	uint32_t upload_frame;
-@@ -153,6 +157,21 @@
+@@ -153,6 +159,26 @@
  #endif
  } texture;
  
@@ -680,6 +827,11 @@
 +} while (0)
 +#endif
 +
++/* Texture storage allocations that found no memory in any pool. A caller
++ * compares the count around glTexImage2D to detect a texture left without
++ * backing storage. */
++extern uint32_t vgl_texture_alloc_failures;
++
 +/* CPU-upload vs GPU-write hazard latch. Set whenever a GXM scene boundary
 + * runs while draws may be outstanding, cleared only by an explicit GPU
 + * drain (glFinish) or by the upload barrier in _glTexSubImage2D. */
@@ -690,8 +842,34 @@
  // Memory file cache settings
  #ifdef HAVE_TEX_CACHE
  extern char vgl_file_cache_path[256];
---- a/source/textures.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/textures.c	2026-09-18 01:39:29.236523585 -0300
+@@ -516,6 +542,8 @@
+ 	GLboolean active;
+ 	GLboolean is_float;
+ 	GLboolean is_depth_hidden;
++	GLboolean is_depth_shared; // Hidden depth surface uses the shared scratch storage
++	uint32_t shared_depth_gen; // Generation of the shared storage this surface was built on
+ 	SceGxmRenderTarget *target;
+ 	SceGxmColorSurface colorbuffer;
+ 	SceGxmDepthStencilSurface depthbuffer;
+@@ -528,6 +556,15 @@
+ 	texture *tex;
+ } framebuffer;
+ 
++/* Release a framebuffer's hidden depth storage. Shared scratch storage is
++ * owned by the library, and a surface whose allocation failed has none. */
++#define discard_hidden_depth(fb) do { \
++	if (!(fb)->is_depth_shared && (fb)->depthbuffer_ptr->depthData) { \
++		mark_as_dirty((fb)->depthbuffer_ptr->depthData); \
++	} \
++	(fb)->is_depth_shared = GL_FALSE; \
++} while (0)
++
+ // Query struct
+ typedef struct {
+ 	GLenum mode;
+diff -ruN --no-dereference a/source/textures.c b/source/textures.c
+--- a/source/textures.c
++++ b/source/textures.c
 @@ -23,6 +23,18 @@
  
  #include "shared.h"
@@ -810,7 +988,16 @@
  #endif
  #ifdef HAVE_TEX_CACHE
  			texture_slots[i].prev = NULL;
-@@ -2482,3 +2531,37 @@
+@@ -1789,7 +1838,7 @@
+ 						if (fb) {
+ 							gpu_free_texture(&texture_slots[i]);
+ 							if (fb->depthbuffer_ptr && fb->is_depth_hidden) {
+-								mark_as_dirty(fb->depthbuffer_ptr->depthData);
++								discard_hidden_depth(fb);
+ 								fb->depthbuffer_ptr = NULL;
+ 								fb->is_depth_hidden = GL_FALSE;
+ 							}
+@@ -2482,3 +2531,41 @@
  		SET_GL_ERROR_WITH_RET(GL_INVALID_ENUM, NULL)
  	}
  }
@@ -848,12 +1035,19 @@
 +		return NULL;
 +	return sceGxmColorSurfaceGetData(&fb->colorbuffer);
 +}
---- a/source/utils/gpu_utils.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/utils/gpu_utils.c	2026-09-02 03:25:10.633238850 -0300
-@@ -85,6 +85,30 @@
++
++GLuint vglGetTextureAllocFailures(void) {
++	return vgl_texture_alloc_failures;
++}
+diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
+--- a/source/utils/gpu_utils.c
++++ b/source/utils/gpu_utils.c
+@@ -85,16 +85,50 @@
  }
  
  static int unsafe_allocator_counter = 0;
++uint32_t vgl_texture_alloc_failures = 0; // Texture storage allocations that found no memory in any pool
++extern void mkxp_gpu_allocation_recovery(void) __attribute__((weak));
 +
 +void *gpu_try_alloc_mapped_aligned(size_t alignment, size_t size, vglMemType type) {
 +	void *res = vgl_memalign(alignment, size, type);
@@ -881,8 +1075,46 @@
  void *gpu_alloc_mapped_aligned_unsafe(size_t alignment, size_t size, vglMemType type) {
  	// Performing a garbage collection cycle prior to attempting to allocate the memory again
  	unsafe_allocator_counter++;
---- a/source/utils/gpu_utils.h	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/utils/gpu_utils.h	2026-09-02 03:25:10.633238850 -0300
+-	sceGxmFinish(gxm_context);
++	if (mkxp_gpu_allocation_recovery)
++		mkxp_gpu_allocation_recovery();
++	/* Submit the open scene before reclamation can advance beyond its
++	 * deferred resources. Waiting for submitted work alone is insufficient. */
++	glFinish();
+ #if defined(HAVE_SINGLE_THREADED_GC) && !defined(HAVE_PTHREAD)
+ 	garbage_collector(0, NULL);
+ #else
+ 	sceKernelWaitSema(gc_mutex[1], 1, NULL);
+ 	sceKernelSignalSema(gc_mutex[0], 1);
+-	sceKernelDelayThread(1000000);
++	/* Wait for the collector to go idle instead of sleeping a fixed second:
++	 * every outstanding request has returned its token once the full count
++	 * is available again. The GPU was drained by glFinish above. */
++	sceKernelWaitSema(gc_mutex[1], FRAME_PURGE_FREQ, NULL);
++	sceKernelSignalSema(gc_mutex[1], FRAME_PURGE_FREQ);
+ #endif
+ 
+ 	// Allocating requested memblock
+@@ -382,6 +416,16 @@
+ #ifdef HAVE_TEX_CACHE
+ 		mark_as_cacheable(tex)
+ #endif
++	} else {
++		/* Allocation failed. Any previous storage was released above, and a
++		 * fresh slot still carries the descriptor of its last occupant. Never
++		 * leave a descriptor that points at released memory: a framebuffer
++		 * attach or a sampler would hand that address to the GPU. */
++		vgl_texture_alloc_failures++;
++		vgl_memset(&tex->gxm_tex, 0, sizeof(tex->gxm_tex));
++		tex->data = NULL;
++		tex->palette_data = NULL;
++		tex->status = TEX_UNINITIALIZED;
+ 	}
+ }
+ 
+diff -ruN --no-dereference a/source/utils/gpu_utils.h b/source/utils/gpu_utils.h
+--- a/source/utils/gpu_utils.h
++++ b/source/utils/gpu_utils.h
 @@ -37,6 +37,13 @@
  // Alloc a generic memblock into sceGxm mapped memory with alignment
  void *gpu_alloc_mapped_aligned(size_t alignment, size_t size, vglMemType type);
@@ -897,8 +1129,9 @@
  // Alloc a generic memblock into sceGxm mapped memory
  static inline __attribute__((always_inline)) void *gpu_alloc_mapped(size_t size, vglMemType type) {
  	return gpu_alloc_mapped_aligned(MEM_ALIGNMENT, size, type);
---- a/source/utils/mem_utils.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/utils/mem_utils.c	2026-09-18 14:46:44.338956711 -0300
+diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
+--- a/source/utils/mem_utils.c
++++ b/source/utils/mem_utils.c
 @@ -496,6 +496,8 @@
  }
  
@@ -928,9 +1161,10 @@
  #endif
  	return NULL;
  }
---- a/source/vitaGL.h	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/vitaGL.h	2026-09-18 14:46:44.338956711 -0300
-@@ -1078,6 +1078,18 @@
+diff -ruN --no-dereference a/source/vitaGL.h b/source/vitaGL.h
+--- a/source/vitaGL.h
++++ b/source/vitaGL.h
+@@ -1078,6 +1078,22 @@
  // Get the internal texture data pointer of a GL texture.
  void *vglGetTexDataPointer(GLenum target);
  
@@ -942,6 +1176,10 @@
 +// (no binding, no state change — diagnostics only).
 +void *vglGetTexDataPointerByID(GLuint texture);
 +
++// Number of texture storage allocations that failed since boot. Compare the
++// value around glTexImage2D: a change means the texture has no storage.
++GLuint vglGetTextureAllocFailures(void);
++
 +// Get the FBO colorbuffer data pointer (where the GPU writes) by FBO ID
 +// (no binding, no state change — diagnostics only).
 +void *vglGetFramebufferColorData(GLuint fbo);
@@ -949,17 +1187,3 @@
  // Simple vitaGL init function. Legacy pool size is the amount of memory to reserve to handle immediate mode usage.
  GLboolean vglInit(int legacy_pool_size);
  
-
---- a/source/shared.h
-+++ b/source/shared.h
-@@ -47,7 +47,9 @@
- #define FRAME_PURGE_LIST_SIZE 16384 // Number of elements a single frame can hold
- #define FRAME_PURGE_RENDERTARGETS_LIST_SIZE 128 // Number of rendertargets a single frame can hold
- #define FRAME_PURGE_FREQ 4 // Frequency in frames for garbage collection
--#define BUFFERS_NUM 256 // Maximum amount of framebuffers objects usable
-+// RGSS bitmaps each retain a framebuffer, including source-only images.
-+// Menu transitions can exceed 256 live objects before Ruby collects them.
-+#define BUFFERS_NUM 1024 // Maximum amount of framebuffer/renderbuffer objects
- #ifdef HAVE_HIGH_FFP_TEXUNITS
- #define FFP_VERTEX_ATTRIBS_NUM 9 // Number of attributes used in ffp shaders
- #else

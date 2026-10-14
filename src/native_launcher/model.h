@@ -1,9 +1,12 @@
 #pragma once
 
+#include "engines.h"
 #include "util/json5pp.hpp"
+#include "input/vita_controls.h"
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -11,6 +14,7 @@
 namespace hardrpg {
 using Json = json5pp::value;
 using Progress = std::function<void(uint64_t, uint64_t)>;
+using PreparationStatus = std::function<void(const std::string &)>;
 using ScanProgress = std::function<void(size_t, const std::string &)>;
 struct Cancelled : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -40,6 +44,9 @@ struct File {
 struct Node {
   std::string relative, inner, root;
   bool archive = false;
+  // An unpacked ZIP game keeps the identity of the ZIP game it came from, so
+  // its settings, controls, name and saves follow it after the ZIP is gone.
+  std::string alias;
   static Node fromPath(const Paths &, const std::string &, bool zip = false,
                        const std::string &inner = "");
   std::string path() const;
@@ -48,6 +55,7 @@ struct Node {
   Node child(const std::string &, bool zip = false) const;
   std::vector<File> files() const;
   std::string read(const std::string &) const;
+  std::string iniName() const;
   Json ini() const;
   std::vector<std::string> rtps() const;
 };
@@ -59,6 +67,7 @@ struct Entry {
   int version = 0;
 };
 bool game(const Node &, Entry &);
+bool configurableGame(const Entry &, Entry &);
 std::vector<Entry> entries(const Node &);
 struct ErrorRecord {
   std::string path, game, timestamp, summary;
@@ -73,6 +82,7 @@ public:
   std::vector<Node> stack;
   std::vector<Entry> list;
   std::string error;
+  std::function<bool(const Engine &)> backendAvailable;
   const Node &current() const { return stack.back(); }
   void refresh();
   void setDisplayName(const Entry &, const std::string &displayName);
@@ -84,10 +94,28 @@ public:
   void removeSearchFolder(const std::string &);
   std::vector<std::string> searchFolders() const;
   std::vector<Node> references() const;
-  Json launch(const Entry &, Progress = {});
+  // Unpacked ZIP games whose ZIP is gone; they launch from cache/.
+  std::vector<Node> unpackedGames() const;
+  // What "Remove from library" can do for a game.
+  struct Removal {
+    std::string folder, zip, unpacked; // existing paths, or empty
+  };
+  Removal removal(const Entry &) const;
+  void hide(const Entry &);
+  // Takes a game off the list, deleting its folder or ZIP and/or the
+  // unpacked copy as asked. While any of its files remain it stays hidden.
+  void remove(const Entry &, bool files, bool unpacked);
+  // Deletes an unpacked ZIP game's ZIP; the game stays, played from its copy.
+  void deleteZip(const Entry &);
+  Json launch(const Entry &, Progress = {}, PreparationStatus = {});
   std::string prepareZip(const Node &, Progress = {});
+  ControlProfile controls(const Entry &) const;
+  void saveControls(const Entry &, const ControlProfile &);
   Json display() const;
   void changeDisplay(const std::string &, const Json &);
+  Json gameSettings(const Entry &) const;
+  void changeGameSetting(const Entry &, const std::string &, const Json &,
+                         bool reset = false);
   Json rtpPaths() const;
   void setRtp(const std::string &, const std::string &path = "");
   void clearRtpCache() const { rtpCache.clear(); }
@@ -112,6 +140,9 @@ private:
   bool inspectRtpRaw(const std::string &, const std::string &, Mount &,
                      int) const;
   void saveSearchFolders(const std::vector<std::string> &);
+  std::set<std::string> hidden() const;
+  void saveHidden(const std::set<std::string> &);
+  void forget(const Entry &);
   void applyNames();
 };
 class Browser {
@@ -126,7 +157,7 @@ public:
   bool back();
   std::string selectedPath(size_t) const;
 };
-extern const char *const packs[3];
+extern const char *const packs[rtpPackCount];
 std::string packName(const std::string &);
 std::string packLabel(const std::string &);
 } // namespace hardrpg

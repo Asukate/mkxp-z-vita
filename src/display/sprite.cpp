@@ -46,6 +46,7 @@
 
 #include <string.h>
 #include <vector>
+#include <memory>
 
 #include "sigslot/signal.hpp"
 
@@ -77,6 +78,13 @@ struct SpritePrivate
     Bitmap *bitmap;
     
     sigslot::connection bitmapDispCon;
+    sigslot::connection bitmapModCon;
+
+    /* A sprite owns only its selected GPU region; bitmap remains the original
+     * CPU-backed sheet exposed to Ruby and shared by other sprites. */
+    std::unique_ptr<Bitmap> megaBitmap;
+    IntRect megaRect;
+    bool megaDirty;
     
     Quad quad;
     Transform trans;
@@ -135,6 +143,7 @@ struct SpritePrivate
     
     SpritePrivate()
     : bitmap(0),
+    megaDirty(true),
     srcRect(&tmp.rect),
     mirrored(false),
     bushDepth(0),
@@ -167,6 +176,7 @@ struct SpritePrivate
         wave.length = 180;
         wave.speed = 360;
         wave.phase = 0.0f;
+        wave.active = false;
         wave.dirty = false;
     }
     
@@ -175,13 +185,92 @@ struct SpritePrivate
         srcRectCon.disconnect();
         prepareCon.disconnect();
         
+        bitmapDispCon.disconnect();
         bitmapDisposal();
     }
     
     void bitmapDisposal()
     {
         bitmap = 0;
-        bitmapDispCon.disconnect();
+        /* The single-threaded signal iterates its live slot list. Disconnect
+         * this disposal slot only on reassignment/destruction, not while that
+         * list is being emitted to sprites sharing the same bitmap. */
+        resetMegaBitmap();
+    }
+
+    void resetMegaBitmap()
+    {
+        bitmapModCon.disconnect();
+        megaBitmap.reset();
+        megaRect = IntRect(0, 0, 0, 0);
+        megaDirty = true;
+    }
+
+    void bitmapModified()
+    {
+        megaDirty = true;
+    }
+
+    FloatRect textureRect() const
+    {
+        FloatRect rect = adjustedSrcRect;
+        if (megaBitmap)
+        {
+            rect.x -= megaRect.x;
+            rect.y -= megaRect.y;
+        }
+        else if (!nullOrDisposed(bitmap) && bitmap->hasHires())
+        {
+            rect.x *= (float)bitmap->getHires()->width() / bitmap->width();
+            rect.y *= (float)bitmap->getHires()->height() / bitmap->height();
+            rect.w *= (float)bitmap->getHires()->width() / bitmap->width();
+            rect.h *= (float)bitmap->getHires()->height() / bitmap->height();
+        }
+        return mirrored ? rect.hFlipped() : rect;
+    }
+
+    void prepareMegaBitmap()
+    {
+        if (!bitmap->isMega())
+            return;
+
+        const IntRect selected = adjustedSrcRect;
+        if (selected.w <= 0 || selected.h <= 0)
+            return;
+
+        const int limit = Bitmap::maxSize();
+        if (selected.w > limit || selected.h > limit)
+            throw Exception(Exception::MKXPError,
+                            "Sprite source rectangle %dx%d exceeds texture limit %d; "
+                            "select a smaller src_rect from the mega bitmap",
+                            selected.w, selected.h, limit);
+
+        /* Include neighboring pixels for smooth filters, within the texture
+         * limit. Upload only at draw preparation, after scripts set src_rect. */
+        const int padX = std::min(3, (limit - selected.w) / 2);
+        const int padY = std::min(3, (limit - selected.h) / 2);
+        const int x = std::max(0, selected.x - padX);
+        const int y = std::max(0, selected.y - padY);
+        const int right = std::min(bitmap->width(), selected.x + selected.w + padX);
+        const int bottom = std::min(bitmap->height(), selected.y + selected.h + padY);
+        const IntRect region(x, y, right - x, bottom - y);
+
+        if (megaBitmap && !megaDirty &&
+            region.x == megaRect.x && region.y == megaRect.y &&
+            region.w == megaRect.w && region.h == megaRect.h)
+            return;
+
+        /* Do not create a high-resolution substitute for this internal region.
+         * Construct before replacing the cache so allocation/blit failures can
+         * unwind without publishing incomplete pixels. */
+        std::unique_ptr<Bitmap> next(new Bitmap(region.w, region.h, true));
+        next->blt(0, 0, *bitmap, region);
+        megaBitmap.swap(next);
+        megaRect = region;
+        megaDirty = false;
+        quad.setTexRect(textureRect());
+        if (wave.active)
+            wave.dirty = true;
     }
 
     void recomputeBushDepth()
@@ -287,15 +376,10 @@ struct SpritePrivate
         adjustedSrcRect = srcRect->toFloatRect();
         FloatRect &rect = adjustedSrcRect;
         Vec2i bmSize;
-        Vec2i bmSizeHires;
         
         if (!nullOrDisposed(bitmap))
         {
             bmSize = Vec2i(bitmap->width(), bitmap->height());
-            if (bitmap->hasHires())
-            {
-                bmSizeHires = Vec2i(bitmap->getHires()->width(), bitmap->getHires()->height());
-            }
         }
         
         /* Clamp the rectangle so it doesn't reach outside
@@ -319,19 +403,8 @@ struct SpritePrivate
         rect.w = clamp<int>(rect.w, 0, bmSize.x-rect.x);
         rect.h = clamp<int>(rect.h, 0, bmSize.y-rect.y);
         
-        if (bmSizeHires.x && bmSizeHires.y && bmSize.x && bmSize.y)
-        {
-            FloatRect rectHires(rect.x * bmSizeHires.x / bmSize.x,
-                                rect.y * bmSizeHires.y / bmSize.y,
-                                rect.w * bmSizeHires.x / bmSize.x,
-                                rect.h * bmSizeHires.y / bmSize.y);
-            quad.setTexRect(mirrored ? rectHires.hFlipped() : rectHires);
-        }
-        else
-        {
-            quad.setTexRect(mirrored ? rect.hFlipped() : rect);
-        }
-        
+        quad.setTexRect(textureRect());
+
         quad.setPosRect(FloatRect(0, 0, rect.w, rect.h));
         bushDirty = true;
         
@@ -356,6 +429,9 @@ struct SpritePrivate
             return;
         
         if (!opacity)
+            return;
+
+        if (bitmap->isMega() && (adjustedSrcRect.w <= 0 || adjustedSrcRect.h <= 0))
             return;
         
         if (wave.active)
@@ -399,23 +475,13 @@ struct SpritePrivate
         //if (p->trans.getRotation())
         //    pos.w *= pos.w / (pos.w + (2.0f * wave.amp));
         
-        FloatRect tex = mirrored ? adjustedSrcRect.hFlipped() : adjustedSrcRect;
+        FloatRect tex = textureRect();
         
-        tex.y += pos.y;
-        tex.h = pos.h;
-        if (bitmap->hasHires())
-        {
-            Vec2 bmSize = Vec2(bitmap->width(), bitmap->height());
-            Vec2 bmSizeHires = Vec2(bitmap->getHires()->width(), bitmap->getHires()->height());
-            if (bmSizeHires.x && bmSizeHires.y && bmSize.x && bmSize.y)
-            {
-                tex.x *= bmSizeHires.x / bmSize.x;
-                tex.y *= bmSizeHires.y / bmSize.y;
-                tex.w *= bmSizeHires.x / bmSize.x;
-                tex.h *= bmSizeHires.y / bmSize.y;
-            }
-        }
-        
+        const float scaleY = bitmap->hasHires() && !megaBitmap ?
+            (float)bitmap->getHires()->height() / bitmap->height() : 1.0f;
+        tex.y += pos.y * scaleY;
+        tex.h = pos.h * scaleY;
+
         Quad::setTexPosRect(vert, tex, pos);
         vert += 4;
     }
@@ -455,11 +521,11 @@ struct SpritePrivate
         {
             float scaledAmp = wave.amp / zoom.x;
             
-            FloatRect tex = mirrored ? adjustedSrcRect.hFlipped() : adjustedSrcRect;
+            FloatRect tex = textureRect();
             FloatRect pos(0, 0, 0, adjustedSrcRect.h);
             float mult = (scaledAmp * 2) / (float)srcRect->width;
             pos.x = -scaledAmp - (trans.getSrcRectOrigin().x * mult);
-            pos.w = tex.w * (1 + mult);
+            pos.w = (mirrored ? -adjustedSrcRect.w : adjustedSrcRect.w) * (1 + mult);
             
             if ((pos.w * zoom.x) < 0.5f)
             {
@@ -469,18 +535,6 @@ struct SpritePrivate
                 return;
             }
             
-            if (bitmap->hasHires())
-            {
-                Vec2 bmSize = Vec2(bitmap->width(), bitmap->height());
-                Vec2 bmSizeHires = Vec2(bitmap->getHires()->width(), bitmap->getHires()->height());
-                if (bmSizeHires.x && bmSizeHires.y && bmSize.x && bmSize.y)
-                {
-                    tex.x *= bmSizeHires.x / bmSize.x;
-                    tex.y *= bmSizeHires.y / bmSize.y;
-                    tex.w *= bmSizeHires.x / bmSize.x;
-                    tex.h *= bmSizeHires.y / bmSize.y;
-                }
-            }
             wave.qArray.resize(1);
             Quad::setTexPosRect(&wave.qArray.vertices[0], tex, pos);
             wave.qArray.commit();
@@ -540,8 +594,14 @@ struct SpritePrivate
         
         updateVisibility();
         
-        if (isVisible && bushDirty)
-            recomputeBushDepth();
+        if (isVisible)
+        {
+            prepareMegaBitmap();
+            if (wave.dirty)
+                updateWave();
+            if (bushDirty)
+                recomputeBushDepth();
+        }
     }
 };
 
@@ -608,21 +668,9 @@ void Sprite::setBitmap(Bitmap *bitmap)
         return;
     }
 
+    p->resetMegaBitmap();
     p->bitmap = bitmap;
     vitaDiagLog("SETBITMAP", "after bitmap assignment");
-
-    /* Diagnostic (2026-08-08): skip sigslot disconnect/
-     * connect when the trigger file exists, to prove sigslot is the blocker.
-     * Disposed-bitmap handling is broken in this mode — diagnostic only. */
-    {
-        FILE *skip = fopen("ux0:/data/hardrpg/skip-sigslot", "rb");
-        if (skip)
-        {
-            fclose(skip);
-            vitaDiagLog("SETBITMAP", "SIGSLOT SKIPPED (trigger present)");
-            goto skip_sigslot;
-        }
-    }
 
     p->bitmapDispCon.disconnect();
     vitaDiagLog("SETBITMAP", "after disconnect");
@@ -637,9 +685,8 @@ void Sprite::setBitmap(Bitmap *bitmap)
     p->bitmapDispCon = bitmap->wasDisposed.connect(&SpritePrivate::bitmapDisposal, p);
     vitaDiagLog("SETBITMAP", "after connect");
 
-skip_sigslot:
-    bitmap->ensureNonMega();
-    vitaDiagLog("SETBITMAP", "after ensureNonMega");
+    if (bitmap->isMega())
+        p->bitmapModCon = bitmap->modified.connect(&SpritePrivate::bitmapModified, p);
 
     *p->srcRect = bitmap->rect();
     vitaDiagLog("SETBITMAP", "after srcRect assignment");
@@ -931,7 +978,11 @@ void Sprite::draw()
         shader.bind();
         shader.applyViewportProj();
         shader.setSpriteMat(p->trans.getMatrix());
-        
+        Bitmap *source = p->bitmap->hasHires() && !p->megaBitmap ?
+            p->bitmap->getHires() : p->bitmap;
+        shader.setSourceRegion(p->megaBitmap ? Vec2(p->megaRect.x, p->megaRect.y) : Vec2(0, 0),
+                               Vec2(source->width(), source->height()));
+
         shader.setTone(p->tone->norm);
         shader.setOpacity(p->opacity.norm);
         shader.setBushDepth(p->bushY, p->bushUnder, p->bushSlope, p->bushIntercept);
@@ -1037,7 +1088,8 @@ void Sprite::draw()
     profile.stage(FrameProfile::DrawSprite);
     glState.blendMode.pushSet(p->blendType);
     
-    p->bitmap->bindTex(*base, false);
+    Bitmap *renderBitmap = p->megaBitmap ? p->megaBitmap.get() : p->bitmap;
+    renderBitmap->bindTex(*base, false);
 
 #ifdef MKXPZ_SSL
     if (scalingMethod == xBRZ)

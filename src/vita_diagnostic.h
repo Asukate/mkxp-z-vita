@@ -58,7 +58,12 @@ static inline void vitaDiagTextureStorage(unsigned int, int, int) {}
 static inline void vitaDiagTextureDelete(unsigned int) {}
 static inline unsigned long long vitaDiagTextureUploadBytes() { return 0; }
 static inline void vitaDiagGpuSnapshot(const char *) {}
+#ifdef __vita__
+/* Ruby VM/GVL held, before acquiring the graphics lock or native pointers. */
+void vitaGpuPressureSafePoint(const char *phase);
+#else
 static inline void vitaGpuPressureSafePoint(const char *) {}
+#endif
 
 #endif
 

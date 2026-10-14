@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PREAMBLE = r'''
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
@@ -51,6 +52,8 @@ struct BitmapPrivate {
  bool pendingClear=false; Vec4 pendingColor; struct {bool enabled=false;} animation;
  void *megaSurface=nullptr; struct {int width=8,height=4;} gl;
  Bitmap *selfHires=nullptr;
+ // These sequences are about GPU bitmaps; a CPU-composed one never reaches them.
+ struct Pixels {int w=0,h=0,pitch=0; void *pixels=nullptr;} *cpu=nullptr; IntRect cpuContent{0,0,0,0};
  void bindFBO(){FBO::bind(1);}
  void clearTaintedArea(){} void onModified(){} void addTaintedArea(const IntRect &){} void substractTaintedArea(const IntRect &){}
  void fillRect(const IntRect &r,const Vec4 &color){
@@ -58,6 +61,11 @@ struct BitmapPrivate {
   FBO::clear();glState.clearColor.pop();glState.scissorBox.pop();glState.scissorTest.pop();
  }
 };
+static IntRect cpuClip(const IntRect &r,int,int){return r;}
+static void cpuFill(BitmapPrivate::Pixels *,const IntRect &,unsigned){}
+static unsigned cpuPack(const Vec4 &){return 0;}
+static void cpuMarkDirty(BitmapPrivate *,const IntRect &){}
+static void cpuTouch(BitmapPrivate *,const IntRect &){}
 struct Bitmap {
  BitmapPrivate *p; void guardDisposed(){} bool hasHires(){return false;} int width(){return 8;}int height(){return 4;}
  void clear();void fillRect(const IntRect &,const Vec4 &);void clearRect(const IntRect &);

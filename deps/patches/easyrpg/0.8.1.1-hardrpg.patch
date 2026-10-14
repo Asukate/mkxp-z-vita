@@ -1,0 +1,112 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a12ca82..588c370 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -221,8 +221,6 @@ add_library(${PROJECT_NAME} OBJECT
+ 	src/generated/bitmapfont_rmg2000.h
+ 	src/generated/bitmapfont_ttyp0.h
+ 	src/generated/bitmapfont_wqy.h
+-	src/generated/logo.h
+-	src/generated/logo2.h
+ 	src/generated/shinonome_gothic.h
+ 	src/generated/shinonome_mincho.h
+ 	src/graphics.cpp
+@@ -1098,7 +1096,7 @@ if(PLAYER_HAS_AUDIO)
+ 		TARGET SndFile::sndfile)
+ 
+ 	# libvorbis
+-	player_find_package(NAME Vorbis
++	player_find_package(NAME Vorbis CONFIG_BROKEN
+ 		CONDITION PLAYER_WITH_OGGVORBIS
+ 		DEFINITION HAVE_OGGVORBIS
+ 		TARGET Vorbis::vorbisfile)
+@@ -1336,10 +1334,14 @@ elseif(PLAYER_CONSOLE_PORT AND NOT PLAYER_TARGET_PLATFORM STREQUAL "libretro")
+ 		set(CPACK_PLATFORM "wiiu")
+ 	elseif(VITA)
+ 		set(CMAKE_EXECUTABLE_SUFFIX .elf)
++		find_library(HARDRPG_VITA2D_LIBRARY vita2d REQUIRED)
+ 		add_executable(easyrpg-player src/platform/psvita/main.cpp)
++		# HardRPG entry point validates a JSON handoff; only this translation unit uses exceptions.
++		set_source_files_properties(src/platform/psvita/main.cpp PROPERTIES COMPILE_OPTIONS "-fexceptions")
++		target_include_directories(easyrpg-player PRIVATE "${HARDRPG_SOURCE_DIR}/src")
+ 		target_link_libraries(easyrpg-player
+ 			${PROJECT_NAME}
+-			vita2d
++			${HARDRPG_VITA2D_LIBRARY}
+ 			-Wl,--whole-archive pthread -Wl,--no-whole-archive
+ 			SceLibKernel_stub
+ 			SceDisplay_stub
+diff --git a/src/platform/psvita/ui.cpp b/src/platform/psvita/ui.cpp
+index 91afcc4..8160041 100644
+--- a/src/platform/psvita/ui.cpp
++++ b/src/platform/psvita/ui.cpp
+@@ -159,7 +159,7 @@ Psp2Ui::Psp2Ui(int width, int height, const Game_Config& cfg) : BaseUi(cfg)
+ 		SCE_GXM_TEXTURE_FORMAT_A8B8G8R8);
+ 	next_texture = vita2d_create_empty_texture_format(width, height,
+ 		SCE_GXM_TEXTURE_FORMAT_A8B8G8R8);
+-	touch_texture = vita2d_load_PNG_file("app0:/touch_ui.png");
++	touch_texture = nullptr; // HardRPG does not ship the EasyRPG touch overlay.
+ 	Bitmap::SetFormat(Bitmap::ChooseFormat(format));
+ 	main_surface = Bitmap::Create(vita2d_texture_get_datap(main_texture),
+ 		width, height, vita2d_texture_get_stride(main_texture), format);
+@@ -244,7 +244,7 @@ bool Psp2Ui::ProcessEvents() {
+ 	analog_input.secondary.y = normalize(input.ry);
+ 
+ 	// Touchpad support
+-	if (!vcfg.touch_ui.IsLocked() && vcfg.touch_ui.Get() && !is_pstv) {
++	if (touch_texture && !vcfg.touch_ui.IsLocked() && vcfg.touch_ui.Get() && !is_pstv) {
+ 		sceTouchPeek(SCE_TOUCH_PORT_FRONT, &touch, 1);
+ 		for (int i = 0; i < touch.reportNum; ++i) {
+ 			int xpos = touch.report[i].x / 2;
+diff --git a/src/scene_logo.cpp b/src/scene_logo.cpp
+index 11f0ef5..689125c 100644
+--- a/src/scene_logo.cpp
++++ b/src/scene_logo.cpp
+@@ -28,8 +28,6 @@
+ #include "scene_gamebrowser.h"
+ #include "scene_settings.h"
+ #include "output.h"
+-#include "generated/logo.h"
+-#include "generated/logo2.h"
+ #include "utils.h"
+ #include "rand.h"
+ #include "text.h"
+@@ -40,7 +38,7 @@
+ Scene_Logo::Scene_Logo() :
+ 	frame_counter(0) {
+ 	type = Scene::Logo;
+-	skip_logos = Player::debug_flag || Game_Battle::battle_test.enabled;
++	skip_logos = true; // HardRPG starts the selected game without a runtime splash.
+ }
+ 
+ Scene_Logo::Scene_Logo(std::vector<std::vector<uint8_t>> logos, unsigned current_logo_index) :
+@@ -161,13 +159,7 @@ BitmapRef Scene_Logo::LoadLogo() {
+ 	std::tm* tm = std::localtime(&t);
+ 
+ 	if (current_logo_index == 0) {
+-		// Load the built-in logo
+-		if (Rand::ChanceOf(1, 32) || (tm->tm_mday == 1 && tm->tm_mon == 3)) {
+-			current_logo = Bitmap::Create(easyrpg_logo2, sizeof(easyrpg_logo2), false);
+-		}
+-		else {
+-			current_logo = Bitmap::Create(easyrpg_logo, sizeof(easyrpg_logo), false);
+-		}
++		current_logo = Bitmap::Create(Player::screen_width, Player::screen_height);
+ 	} else {
+ 		// Load external logos
+ 		const auto& logo_bytes = logos[current_logo_index - 1];
+diff --git a/src/filefinder_rtp.cpp b/src/filefinder_rtp.cpp
+--- a/src/filefinder_rtp.cpp
++++ b/src/filefinder_rtp.cpp
+@@ -62,6 +62,11 @@
+ 	AddPath("romfs:/data/rtp/" + version_str);
+ 	AddPath("sdmc:/data/rtp/" + version_str);
+ #elif defined(__vita__)
++	// The handoff keeps custom RTP roots separate until engine detection.
++	const char* custom = std::getenv(Player::IsRPG2k() ? "HARDRPG_RTP_2000" : "HARDRPG_RTP_2003");
++	if (custom && *custom) AddPath(custom);
++	if (!rtp_path.empty()) AddPath(rtp_path);
++	AddPath("ux0:/data/hardrpg/rtp/" + version_str);
+ 	AddPath("ux0:/data/easyrpg-player/rtp/" + version_str);
+ #elif defined(__MORPHOS__)
+ 	AddPath("PROGDIR:rtp/" + version_str);

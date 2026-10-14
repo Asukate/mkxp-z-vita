@@ -20,6 +20,13 @@
 #include <psp2/ime_dialog.h>
 #include <psp2/sysmodule.h>
 #include <psp2/touch.h>
+#include "input/vita_input.h"
+#include "vita_startup_timer.h"
+#include <psp2/kernel/sysmem.h>
+extern "C" GLboolean vglInitWithCustomSizes(int pool_size, int width, int height,
+                                            int ram_pool_size, int cdram_pool_size,
+                                            int phycont_pool_size, int cdlg_pool_size,
+                                            SceGxmMultisampleMode msaa);
 
 namespace {
 bool nativeKeyboardActive = false;
@@ -80,9 +87,26 @@ public:
           SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN_DESKTOP);
       if (!window)
         throw std::runtime_error(SDL_GetError());
+#if defined(__vita__) && !defined(HARDRPG_LAUNCHER_FULL_POOL)
+      {
+        /* vitaGL allocates and maps its whole pool at start-up, which costs
+         * about 13 ms per MiB. Left to its defaults it takes all free main
+         * memory; the menu draws a handful of textures, so give it a small
+         * main-memory pool and all of video memory. vitaGL ignores SDL's own
+         * initialization after this one. Multisampling stays as before. */
+        SceKernelFreeMemorySizeInfo info;
+        info.size = sizeof(info);
+        sceKernelGetFreeMemorySize(&info);
+        vglInitWithCustomSizes(0, 960, 544, 32 * 1024 * 1024, info.size_cdram,
+                               1024 * 1024, 0, SCE_GXM_MULTISAMPLE_4X);
+      }
+#endif
       context = SDL_GL_CreateContext(window);
       if (!context)
         throw std::runtime_error(SDL_GetError());
+#ifdef __vita__
+      vitaStartupTimerMark("launcher_gl_ready");
+#endif
       SDL_GL_SetSwapInterval(1);
       GLuint vertex = shader(
           GL_VERTEX_SHADER,
@@ -175,6 +199,13 @@ public:
     (void)keyboard;
 #endif
       SDL_GL_SwapWindow(window);
+#ifdef __vita__
+    static bool firstFrame = true;
+    if (firstFrame) {
+      firstFrame = false;
+      vitaStartupTimerMark("launcher_first_frame");
+    }
+#endif
   }
 #ifdef __vita__
   bool editName(const View &view, const std::string &initial, std::string &out,
@@ -387,12 +418,30 @@ int runNativeLauncher(bool returning) {
     // Selections are only consumed on an explicit --hardrpg-play boot.
     // A leftover selection cannot silently launch a game on a fresh boot.
     std::remove("ux0:/data/hardrpg/selection.json");
+#ifdef __vita__
+    vitaStartupTimerMark("launcher_begin");
+#endif
     UI ui;
 #ifdef __vita__
+    vitaStartupTimerMark("launcher_library_ready");
+#endif
+    UpdateCheck update;
+    if(!returning && ui.automaticUpdates)update.start();
+#ifdef __vita__
+    ui.model.backendAvailable = [](const Engine &engine) {
+      FILE *f = std::fopen(engine.executable, "rb");
+      if (!f)
+        return false;
+      std::fclose(f);
+      return true;
+    };
     sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT,
                              SCE_TOUCH_SAMPLING_STATE_START);
 #endif
     View view("app0:/font.ttf");
+#ifdef __vita__
+    vitaStartupTimerMark("launcher_view_ready");
+#endif
     std::fprintf(stderr, "HardRPG native launcher backend\n");
     for (;;) {
       bool quit = false;
@@ -444,6 +493,9 @@ int runNativeLauncher(bool returning) {
         returning = true;
         view.draw(ui);
         presenter.show(view, true);
+#ifdef __vita__
+        vitaStartupTimerMark("launcher_list_shown");
+#endif
         uint32_t progressAt = 0;
         ui.progressPump = [&] {
           auto button = input.poll(quit);
@@ -460,8 +512,24 @@ int runNativeLauncher(bool returning) {
           auto button = input.poll(quit);
           bool touched = input.touch(ui);
           bool serviced = false;
+          if(ui.checkReleaseRequested) {update.start();ui.checkReleaseRequested=false;}
+          ReleaseNotice notice;
+          bool retrieved = false;
+          if(update.poll(notice, &retrieved)) {
+            ui.offerRelease(notice);
+            if(ui.page==Page::Updates)ui.message=!notice.tag.empty()?"New release: "+notice.tag:
+                retrieved?"No newer release found.":"Could not check releases. Offline or request failed.";
+            serviced=true;
+          }
+#ifdef __vita__
+          if(ui.controlsTesting) {
+            ui.controlsSample=vitaReadControls();
+            ui.controlsResult=ui.controlsTestState.update(ui.controls,ui.controlsSample);
+            serviced=true;
+          }
+#endif
           if (button == Button::None && !touched)
-            serviced = ui.service();
+            serviced = ui.service() || serviced;
           if (button != Button::None || touched || serviced) {
             if (button != Button::None)
               ui.action(button);
@@ -477,17 +545,19 @@ int runNativeLauncher(bool returning) {
       // All menu GL resources and mounts are closed before LoadExec.
       // Neither Ruby nor OpenAL has been initialized in this process.
 #ifdef __vita__
+      update.cancel();
       SDL_Quit();
       char play[] = "--hardrpg-play";
       char *args[] = {play, nullptr};
-      int rc = sceAppMgrLoadExec("app0:/eboot.bin", args, nullptr);
+      const auto *engine = engineFor(ui.launchFormat);
+      int rc = sceAppMgrLoadExec(engine->executable, args, nullptr);
+      std::fprintf(stderr, "LoadExec failed: %s (%d, 0x%08x)\n",
+                   engine->executable, rc, unsigned(rc));
       std::remove("ux0:/data/hardrpg/selection.json");
       if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_TIMER |
                    SDL_INIT_EVENTS) < 0)
         return 1;
-      ui.launchRequested = false;
-      ui.message =
-          "Could not start game (LoadExec " + std::to_string(rc) + ").";
+      ui.launchFailed(rc, engine->executable);
 #else
       return 0;
 #endif

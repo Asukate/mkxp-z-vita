@@ -20,6 +20,7 @@ uniform bool renderPattern;
 uniform bool invert;
 
 varying vec2 v_texCoord;
+varying vec2 v_sourceCoord;
 varying vec2 v_patCoord;
 
 const vec3 lumaF = vec3(.299, .587, .114);
@@ -105,8 +106,8 @@ void main()
     }
 
 	/* Apply bush alpha by mathematical if */
-	bool underBush = (float(bushY) * v_texCoord.y + float(!bushY) * v_texCoord.x) <
-	                 (bushSlope * (float(bushY) * v_texCoord.x + float(!bushY) * v_texCoord.y) + bushIntercept);
+	bool underBush = (float(bushY) * v_sourceCoord.y + float(!bushY) * v_sourceCoord.x) <
+	                 (bushSlope * (float(bushY) * v_sourceCoord.x + float(!bushY) * v_sourceCoord.y) + bushIntercept);
 	frag.a *= clamp(bushOpacity + float(underBush == bushUnder), 0.0, 1.0);
 	
 	gl_FragColor = frag;

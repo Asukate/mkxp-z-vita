@@ -262,7 +262,8 @@ void EventThread::process(RGSSThreadData &rtData)
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
         if (playingGame) {
             SceCtrlData pad = {};
-            if (sceCtrlPeekBufferPositive(0, &pad, 1) > 0 &&
+            int result = sceCtrlPeekBufferPositive(0, &pad, 1);
+            if (result > 0 &&
                 (pad.buttons & returnButtons) == returnButtons) {
                 if (!returnHoldActive) {
                     returnHeldAt = SDL_GetTicks();

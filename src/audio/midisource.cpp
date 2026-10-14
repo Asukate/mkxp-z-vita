@@ -110,7 +110,7 @@ struct PCEvent : ChannelEvent
 
 struct TempoEvent
 {
-	uint32_t bpm;
+	float bpm;
 };
 
 struct MidiEvent
@@ -237,7 +237,8 @@ readVoiceEvent(MidiEvent &e, MemChunk &chunk,
 		break;
 
 	case 0xA :
-		/* Note aftertouch unhandled */
+		/* Note aftertouch unhandled; consume its second data byte. */
+        chunk.readByte();
 		handled = false;
 		break;
 
@@ -320,7 +321,8 @@ readEvent(MidiReadHandler *handler, MemChunk &chunk,
 			              | (data[2] << 0x00);
 
 			e.type = Tempo;
-			e.e.tempo.bpm = 60000000 / mpqn;
+			if (!mpqn) badMidiFormat();
+            e.e.tempo.bpm = 60000000.f / mpqn;
 		}
 		else if (metaType == 0x2F)
 		{
@@ -431,6 +433,7 @@ void readMidi(MidiReadHandler *handler, const std::vector<uint8_t> &data)
 
 	/* Type 0 only contains one track */
 	uint16_t trackCount = readBigEndian<uint16_t>(chunk);
+    if (trackCount > 256) badMidiFormat();
 	if (trackCount == 0)
 		badMidiFormat();
 	if (type == 0 && trackCount > 1)
@@ -593,7 +596,7 @@ struct MidiSource : ALDataSource, MidiReadHandler
 	CCResetter<CC_CTRL_EXPRESSION> expReset;
 
 	/* Index of longest track */
-	uint8_t longestI;
+	size_t longestI;
 
 	bool looped;
 
@@ -617,12 +620,19 @@ struct MidiSource : ALDataSource, MidiReadHandler
 	           bool looped)
 	    : freq(SYNTH_SAMPLERATE),
 	      looped(looped),
+	      longestI(0),
+	      loopDelta(0),
 	      dpb(480),
 	      pitchShift(0),
 	      genDeltasCarry(0),
 	      curTrack(-1)
 	{
-		size_t dataLen = SDL_RWsize(&ops);
+		Sint64 size = SDL_RWsize(&ops);
+        if (size < 14 || size > 8*1024*1024) {
+            SDL_RWclose(&ops);
+            throw Exception(Exception::MKXPError, "Midi: Invalid size (maximum 8 MiB)");
+        }
+        size_t dataLen = static_cast<size_t>(size);
 		std::vector<uint8_t> data(dataLen);
 
 		if (SDL_RWread(&ops, &data[0], 1, dataLen) < dataLen)
@@ -691,7 +701,7 @@ struct MidiSource : ALDataSource, MidiReadHandler
 	}
 
 
-	void updatePlaybackSpeed(uint32_t bpm)
+	void updatePlaybackSpeed(float bpm)
 	{
 		float deltaLength = 60.0f / (dpb * bpm);
 		playbackSpeed = TICK_FRAMES / (deltaLength * freq);
@@ -756,9 +766,10 @@ struct MidiSource : ALDataSource, MidiReadHandler
 
 		tracks.resize(trackCount);
 
-		// SMTP unhandled
-		if (division & 0x8000)
-			throw Exception(Exception::MKXPError, "Midi: SMTP parameters not supported");
+		// SMPTE time divisions are unsupported.
+		if (!division) badMidiFormat();
+        if (division & 0x8000)
+			throw Exception(Exception::MKXPError, "Midi: SMPTE parameters not supported");
 		else
 			dpb = division;
 	}

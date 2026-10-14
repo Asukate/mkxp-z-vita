@@ -7,16 +7,19 @@
 #include <stdexcept>
 #include <sstream>
 
-static void check(const std::string &json, const std::string &expected, int rgss = 0, bool rtp = false) {
+static void check(const std::string &json, const std::string &expected, int rgss = 0, bool rtp = false,
+                  const std::string &expectedExec = "Game") {
     std::ofstream("ux0:/data/hardrpg/selection.json", std::ios::binary) << json;
-    std::string folder, config;
+    std::string folder, config, executable;
     std::vector<std::string> rtps;
     std::map<std::string, std::string> roots;
     int version = 0;
-    protoLauncherPick(folder, version, rtps, config, roots);
+    protoLauncherPick(folder, version, rtps, config, roots, true, &executable);
     if (folder != expected || (rgss && version != rgss) ||
         std::filesystem::exists("ux0:/data/hardrpg/selection.json"))
         throw std::runtime_error("Invalid native handoff result: " + folder);
+    if (executable != expectedExec)
+        throw std::runtime_error("Invalid executable name: " + executable);
     if (rgss && config != "ux0:/data/hardrpg/config/0123456789abcdef.json")
         throw std::runtime_error("Invalid config path");
     if (rtp && rtps != std::vector<std::string>{"ux0:/data/mkxp-z-vita/rtp/VXACE.zip"})
@@ -32,6 +35,11 @@ int main(int argc, char **argv) {
     const std::string key = ",\"config\":\"0123456789abcdef\",\"rgss\":3}";
     check("{\"source\":\"games\",\"path\":\"Collection/Game\"" + key,
           "ux0:/data/hardrpg/games/Collection/Game", 3);
+    check("{\"source\":\"games\",\"path\":\"Named\",\"execName\":\"Uranium\"" + key,
+          "ux0:/data/hardrpg/games/Named", 3, false, "Uranium");
+    for (const char *name : {"../bad", "a/b", "", ".", "..", "a\\\\b", "a\\nb", "ux0:bad", "a\\u0000b"})
+        check(std::string("{\"source\":\"games\",\"path\":\"Named\",\"execName\":\"") + name + "\"" + key,
+              "app0:/stub");
     check("{\"source\":\"cache\",\"path\":\"zip-0123456789abcdef\"" + key,
           "ux0:/data/hardrpg/cache/zip-0123456789abcdef", 3);
     check("{\"source\":\"external\",\"path\":\"ux0:/data/mkxp-z-vita/games/Hylics\"" + key,

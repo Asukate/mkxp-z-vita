@@ -13,7 +13,7 @@ index 67b3a23..7360536 100644
              coroutine_type=arm32
          ],
 diff --git a/cont.c b/cont.c
-index 4b18ddd..d06dbe2 100644
+index 4b18ddd..6b16cf8 100644
 --- a/cont.c
 +++ b/cont.c
 @@ -16,6 +16,10 @@
@@ -27,7 +27,134 @@ index 4b18ddd..d06dbe2 100644
  // On Solaris, madvise() is NOT declared for SUS (XPG4v2) or later,
  // but MADV_* macros are defined when __EXTENSIONS__ is defined.
  #ifdef NEED_MADVICE_PROTOTYPE_USING_CADDR_T
-@@ -750,6 +754,36 @@ fiber_entry(struct coroutine_context * from, struct coroutine_context * to)
+@@ -412,9 +416,78 @@ fiber_pool_vacancy_initialize(struct fiber_pool * fiber_pool, struct fiber_pool_
+ // @param count the number of stacks to allocate / were allocated.
+ // @param stride the size of the individual stacks.
+ // @return [void *] the allocated memory or NULL if allocation failed.
++#if defined(__vita__) && !defined(COROUTINE_PTHREAD_CONTEXT)
++/*
++ * Vita native coroutines.  The kernel stops a thread that enters a system
++ * call while its stack pointer is outside the stack registered for that
++ * thread, so Fiber machine stacks cannot come from the heap.  They are
++ * carved once from the low end of the registered stack of the thread that
++ * first creates a Fiber (the RGSS thread), below the part that thread keeps
++ * for itself.  The region is never returned, and only its owner may run
++ * Fibers on it.
++ */
++#define VITA_FIBER_MAIN_RESERVE (4u * 1024u * 1024u)
++#define VITA_FIBER_GUARD (128u * 1024u)
++static struct {
++    void *base;
++    size_t size;
++    SceUID owner;
++    int claimed;
++} vita_fiber_arena;
++
++static void *
++vita_fiber_arena_claim(size_t *count, size_t stride)
++{
++    SceKernelThreadInfo info;
++    uintptr_t low, high, base;
++    size_t slots;
++
++    if (vita_fiber_arena.claimed) {
++        errno = ENOMEM;
++        return NULL;
++    }
++    memset(&info, 0, sizeof(info));
++    info.size = sizeof(info);
++    if (sceKernelGetThreadInfo(sceKernelGetThreadId(), &info) < 0 ||
++        info.stack == NULL || info.stackSize <= 0) {
++        errno = ENOMEM;
++        return NULL;
++    }
++    low = (uintptr_t)info.stack;
++    high = low + (size_t)info.stackSize;
++    base = (low + RB_PAGE_SIZE - 1) & ~((uintptr_t)RB_PAGE_SIZE - 1);
++    if (high - base <= VITA_FIBER_MAIN_RESERVE + VITA_FIBER_GUARD) {
++        errno = ENOMEM;
++        return NULL;
++    }
++    slots = (high - base - VITA_FIBER_MAIN_RESERVE - VITA_FIBER_GUARD) / stride;
++    if (slots < 2) {
++        errno = ENOMEM;
++        return NULL;
++    }
++    vita_fiber_arena.base = (void *)base;
++    vita_fiber_arena.size = slots * stride;
++    vita_fiber_arena.owner = sceKernelGetThreadId();
++    vita_fiber_arena.claimed = 1;
++    *count = slots;
++    return vita_fiber_arena.base;
++}
++
++/* Lowest address the owning thread's own stack may reach. */
++void *
++rb_vita_fiber_arena_ceiling(void)
++{
++    if (!vita_fiber_arena.claimed) return NULL;
++    return (char *)vita_fiber_arena.base + vita_fiber_arena.size + VITA_FIBER_GUARD;
++}
++#endif
++
+ inline static void *
+ fiber_pool_allocate_memory(size_t * count, size_t stride)
+ {
++#if defined(__vita__) && !defined(COROUTINE_PTHREAD_CONTEXT)
++    return vita_fiber_arena_claim(count, stride);
++#else
+     // We use a divide-by-2 strategy to try and allocate memory. We are trying
+     // to allocate `count` stacks. In normal situation, this won't fail. But
+     // if we ran out of address space, or we are allocating more memory than
+@@ -452,6 +525,7 @@ fiber_pool_allocate_memory(size_t * count, size_t stride)
+     }
+ 
+     return NULL;
++#endif
+ }
+ 
+ // Given an existing fiber pool, expand it by the specified number of stacks.
+@@ -503,6 +577,8 @@ fiber_pool_expand(struct fiber_pool * fiber_pool, size_t count)
+             VirtualFree(allocation->base, 0, MEM_RELEASE);
+             rb_raise(rb_eFiberError, "can't set a guard page: %s", ERRNOMSG);
+         }
++#elif defined(__vita__) && !defined(COROUTINE_PTHREAD_CONTEXT)
++        (void)page;
+ #else
+         if (mprotect(page, RB_PAGE_SIZE, PROT_NONE) < 0) {
+             munmap(allocation->base, count*stride);
+@@ -608,6 +684,11 @@ fiber_pool_allocation_free(struct fiber_pool_allocation * allocation)
+ static struct fiber_pool_stack
+ fiber_pool_stack_acquire(struct fiber_pool * fiber_pool)
+ {
++#if defined(__vita__) && !defined(COROUTINE_PTHREAD_CONTEXT)
++    if (vita_fiber_arena.claimed && vita_fiber_arena.owner != sceKernelGetThreadId()) {
++        rb_raise(rb_eFiberError, "Fibers can only run on the thread that created the first Fiber on this console");
++    }
++#endif
+     struct fiber_pool_vacancy * vacancy = fiber_pool_vacancy_pop(fiber_pool);
+ 
+     if (DEBUG) fprintf(stderr, "fiber_pool_stack_acquire: %p used=%"PRIuSIZE"\n", (void*)fiber_pool->vacancies, fiber_pool->used);
+@@ -703,6 +784,10 @@ fiber_pool_stack_release(struct fiber_pool_stack * stack)
+ 
+     allocation->used -= 1;
+ 
++#if defined(__vita__) && !defined(COROUTINE_PTHREAD_CONTEXT)
++    /* The arena is part of a thread stack: it is reused, never released. */
++    (void)allocation;
++#else
+     // Release address space and/or dirty memory:
+     if (allocation->used == 0) {
+         fiber_pool_allocation_free(allocation);
+@@ -710,6 +795,7 @@ fiber_pool_stack_release(struct fiber_pool_stack * stack)
+     else if (stack->pool->free_stacks) {
+         fiber_pool_stack_free(&vacancy->stack);
+     }
++#endif
+ #else
+     // This is entirely optional, but clears the dirty flag from the stack memory, so it won't get swapped to disk when there is memory pressure:
+     if (stack->pool->free_stacks) {
+@@ -750,6 +836,36 @@ fiber_entry(struct coroutine_context * from, struct coroutine_context * to)
      rb_fiber_t *fiber = to->argument;
      rb_thread_t *thread = fiber->cont.saved_ec.thread_ptr;
  
@@ -64,6 +191,25 @@ index 4b18ddd..d06dbe2 100644
  #ifdef COROUTINE_PTHREAD_CONTEXT
      ruby_thread_set_native(thread);
  #endif
+@@ -2306,12 +2422,15 @@ fiber_switch(rb_fiber_t *fiber, int argc, const VALUE *argv, int kw_splat, rb_fi
+ 
+     fiber_store(fiber, th);
+ 
+-    // We cannot free the stack until the pthread is joined:
+-#ifndef COROUTINE_PTHREAD_CONTEXT
+     if (resuming_fiber && FIBER_TERMINATED_P(fiber)) {
++#ifdef COROUTINE_PTHREAD_CONTEXT
++        /* A completed Fiber may remain reachable or await GC. Join its parked
++         * native thread before returning the stack to the pool, so native
++         * thread and stack resources do not depend on Ruby object collection. */
++        coroutine_destroy(&fiber->context);
++#endif
+         fiber_stack_release(fiber);
+     }
+-#endif
+ 
+     if (fiber_current()->blocking) {
+         th->blocking += 1;
 diff --git a/coroutine/arm32/Context.S b/coroutine/arm32/Context.S
 index 1850c4c..30922a1 100644
 --- a/coroutine/arm32/Context.S
@@ -135,6 +281,63 @@ index 09410eb..1caeae6 100644
  }
  
  struct coroutine_context * coroutine_transfer(struct coroutine_context * current, struct coroutine_context * target);
+diff --git a/coroutine/pthread/Context.c b/coroutine/pthread/Context.c
+index 38774cd..7f2580b 100644
+--- a/coroutine/pthread/Context.c
++++ b/coroutine/pthread/Context.c
+@@ -183,6 +183,7 @@ int coroutine_create_thread(struct coroutine_context *context)
+         return result;
+     }
+ 
++    pthread_attr_destroy(&attr);
+     context->shared->count += 1;
+ 
+     return result;
+@@ -193,6 +194,7 @@ struct coroutine_context * coroutine_transfer(struct coroutine_context * current
+     assert(current->shared);
+ 
+     struct coroutine_context * previous = target->from;
++    int error = 0;
+     target->from = current;
+ 
+     if (DEBUG) fprintf(stderr, "coroutine_transfer:pthread_mutex_lock(guard=%p is_locked=%d)\n", &current->shared->guard, is_locked(&current->shared->guard));
+@@ -204,11 +206,11 @@ struct coroutine_context * coroutine_transfer(struct coroutine_context * current
+         target->shared = current->shared;
+ 
+         if (DEBUG) fprintf(stderr, "coroutine_transfer:coroutine_create_thread...\n");
+-        if (coroutine_create_thread(target)) {
++        error = coroutine_create_thread(target);
++        if (error != 0) {
+             if (DEBUG) fprintf(stderr, "coroutine_transfer:coroutine_create_thread failed\n");
+             target->shared = NULL;
+-            target->from = previous;
+-            return NULL;
++            goto transfer_done;
+         }
+     } else {
+         if (DEBUG) fprintf(stderr, "coroutine_transfer:pthread_cond_signal(target)\n");
+@@ -221,6 +223,7 @@ struct coroutine_context * coroutine_transfer(struct coroutine_context * current
+         pthread_cond_wait(&current->schedule, &current->shared->guard)
+     );
+ 
++transfer_done:
+     if (DEBUG) fprintf(stderr, "coroutine_transfer:pthread_cleanup_pop\n");
+     pthread_cleanup_pop(1);
+ 
+@@ -231,6 +234,13 @@ struct coroutine_context * coroutine_transfer(struct coroutine_context * current
+ 
+     target->from = previous;
+ 
++    /* pthread APIs return their error number rather than setting errno. The
++     * caller raises a Ruby system error after the guard has been released. */
++    if (error != 0) {
++        errno = error;
++        return NULL;
++    }
++
+     return target;
+ }
+ 
 diff --git a/gc.c b/gc.c
 index d77dc2c..ddf53b9 100644
 --- a/gc.c
@@ -208,6 +411,112 @@ index f63cecd..5b8fd73 100644
      fill_standard_fds();
 +#endif
  }
+diff --git a/thread_pthread.c b/thread_pthread.c
+index 6f0cc3d..715d27d 100644
+--- a/thread_pthread.c
++++ b/thread_pthread.c
+@@ -47,7 +47,7 @@
+ #  define USE_EVENTFD (0)
+ #endif
+ 
+-#if defined(SIGVTALRM) && !defined(__CYGWIN__) && !defined(__EMSCRIPTEN__)
++#if defined(SIGVTALRM) && !defined(__CYGWIN__) && !defined(__EMSCRIPTEN__) && !defined(__vita__)
+ #  define USE_UBF_LIST 1
+ #endif
+ 
+@@ -80,6 +80,13 @@
+ #define UBF_TIMER_POSIX 1
+ #define UBF_TIMER_PTHREAD 2
+ 
++#ifdef __vita__
++/* Vita cannot service the signal-pipe timer. Native condition waits keep
++ * GVL scheduling and Thread#sleep without an unsupported signal worker. */
++# undef UBF_TIMER
++# define UBF_TIMER UBF_TIMER_NONE
++#endif
++
+ #ifndef UBF_TIMER
+ #  if defined(HAVE_TIMER_SETTIME) && defined(HAVE_TIMER_CREATE) && \
+       defined(CLOCK_MONOTONIC) && defined(USE_UBF_LIST)
+@@ -193,7 +200,7 @@ static const rb_thread_t *sigwait_th;
+ #define native_thread_yield() ((void)0)
+ #endif
+ 
+-#if defined(HAVE_PTHREAD_CONDATTR_SETCLOCK) && \
++#if !defined(__vita__) && defined(HAVE_PTHREAD_CONDATTR_SETCLOCK) && \
+     defined(CLOCK_REALTIME) && defined(CLOCK_MONOTONIC) && \
+     defined(HAVE_CLOCK_GETTIME)
+ static pthread_condattr_t condattr_mono;
+@@ -637,7 +644,7 @@ static void native_thread_init(rb_thread_t *th);
+ void
+ Init_native_thread(rb_thread_t *th)
+ {
+-#if defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
++#if !defined(__vita__) && defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
+     if (condattr_monotonic) {
+         int r = pthread_condattr_init(condattr_monotonic);
+         if (r == 0) {
+@@ -1805,6 +1812,9 @@ ubf_timer_create(rb_pid_t current)
+ static void
+ rb_thread_create_timer_thread(void)
+ {
++#ifdef __vita__
++    return;
++#else
+     /* we only create the pipe, and lazy-spawn */
+     rb_pid_t current = getpid();
+     rb_pid_t owner = signal_self_pipe.owner_process;
+@@ -1824,6 +1834,7 @@ rb_thread_create_timer_thread(void)
+         sigwait_th = THREAD_INVALID;
+         signal_self_pipe.owner_process = current;
+     }
++#endif
+ }
+ 
+ static void
+@@ -2039,6 +2050,10 @@ rb_thread_create_mjit_thread(void (*worker_func)(void))
+ int
+ rb_sigwait_fd_get(const rb_thread_t *th)
+ {
++#ifdef __vita__
++    (void)th;
++    return -1;
++#else
+     if (signal_self_pipe.normal[0] >= 0) {
+         VM_ASSERT(signal_self_pipe.owner_process == getpid());
+         /*
+@@ -2052,6 +2067,7 @@ rb_sigwait_fd_get(const rb_thread_t *th)
+         }
+     }
+     return -1; /* avoid thundering herd and work stealing/starvation */
++#endif
+ }
+ 
+ void
+@@ -2215,9 +2231,13 @@ native_ppoll_sleep(rb_thread_t *th, rb_hrtime_t *rel)
+ static void
+ native_sleep(rb_thread_t *th, rb_hrtime_t *rel)
+ {
+-    int sigwait_fd = rb_sigwait_fd_get(th);
+     rb_ractor_blocking_threads_inc(th->ractor, __FILE__, __LINE__);
+ 
++#ifdef __vita__
++    native_cond_sleep(th, rel);
++#else
++    int sigwait_fd = rb_sigwait_fd_get(th);
++
+     if (sigwait_fd >= 0) {
+         rb_native_mutex_lock(&th->interrupt_lock);
+         th->unblock.func = ubf_sigwait;
+@@ -2243,6 +2263,8 @@ native_sleep(rb_thread_t *th, rb_hrtime_t *rel)
+         native_cond_sleep(th, rel);
+     }
+ 
++#endif
++
+     rb_ractor_blocking_threads_dec(th->ractor, __FILE__, __LINE__);
+ }
+ 
 diff --git a/thread_pthread.h b/thread_pthread.h
 index 2ac3540..412b40b 100644
 --- a/thread_pthread.h
@@ -249,112 +558,3 @@ index c3df263..abfa180 100644
  #endif
  #define TRANSIENT_HEAP_ALLOC_MAX   (1024 *    2       ) /* 2 KB */
  #define TRANSIENT_HEAP_BLOCK_NUM   (TRANSIENT_HEAP_TOTAL_SIZE / TRANSIENT_HEAP_BLOCK_SIZE)
-
-diff --git a/thread_pthread.c b/thread_pthread.c
---- a/thread_pthread.c
-+++ b/thread_pthread.c
-@@ -47,7 +47,7 @@
- #  define USE_EVENTFD (0)
- #endif
- 
--#if defined(SIGVTALRM) && !defined(__CYGWIN__) && !defined(__EMSCRIPTEN__)
-+#if defined(SIGVTALRM) && !defined(__CYGWIN__) && !defined(__EMSCRIPTEN__) && !defined(__vita__)
- #  define USE_UBF_LIST 1
- #endif
- 
-@@ -80,6 +80,13 @@
- #define UBF_TIMER_POSIX 1
- #define UBF_TIMER_PTHREAD 2
- 
-+#ifdef __vita__
-+/* Vita cannot service the signal-pipe timer. Native condition waits keep
-+ * GVL scheduling and Thread#sleep without an unsupported signal worker. */
-+# undef UBF_TIMER
-+# define UBF_TIMER UBF_TIMER_NONE
-+#endif
-+
- #ifndef UBF_TIMER
- #  if defined(HAVE_TIMER_SETTIME) && defined(HAVE_TIMER_CREATE) && \
-       defined(CLOCK_MONOTONIC) && defined(USE_UBF_LIST)
-@@ -193,7 +200,7 @@
- #define native_thread_yield() ((void)0)
- #endif
- 
--#if defined(HAVE_PTHREAD_CONDATTR_SETCLOCK) && \
-+#if !defined(__vita__) && defined(HAVE_PTHREAD_CONDATTR_SETCLOCK) && \
-     defined(CLOCK_REALTIME) && defined(CLOCK_MONOTONIC) && \
-     defined(HAVE_CLOCK_GETTIME)
- static pthread_condattr_t condattr_mono;
-@@ -1805,6 +1812,9 @@
- static void
- rb_thread_create_timer_thread(void)
- {
-+#ifdef __vita__
-+    return;
-+#else
-     /* we only create the pipe, and lazy-spawn */
-     rb_pid_t current = getpid();
-     rb_pid_t owner = signal_self_pipe.owner_process;
-@@ -1824,6 +1834,7 @@
-         sigwait_th = THREAD_INVALID;
-         signal_self_pipe.owner_process = current;
-     }
-+#endif
- }
- 
- static void
-@@ -2039,6 +2050,10 @@
- int
- rb_sigwait_fd_get(const rb_thread_t *th)
- {
-+#ifdef __vita__
-+    (void)th;
-+    return -1;
-+#else
-     if (signal_self_pipe.normal[0] >= 0) {
-         VM_ASSERT(signal_self_pipe.owner_process == getpid());
-         /*
-@@ -2052,6 +2067,7 @@
-         }
-     }
-     return -1; /* avoid thundering herd and work stealing/starvation */
-+#endif
- }
- 
- void
-@@ -2215,8 +2231,12 @@
- static void
- native_sleep(rb_thread_t *th, rb_hrtime_t *rel)
- {
-+    rb_ractor_blocking_threads_inc(th->ractor, __FILE__, __LINE__);
-+
-+#ifdef __vita__
-+    native_cond_sleep(th, rel);
-+#else
-     int sigwait_fd = rb_sigwait_fd_get(th);
--    rb_ractor_blocking_threads_inc(th->ractor, __FILE__, __LINE__);
- 
-     if (sigwait_fd >= 0) {
-         rb_native_mutex_lock(&th->interrupt_lock);
-@@ -2242,6 +2262,8 @@
-     else {
-         native_cond_sleep(th, rel);
-     }
-+
-+#endif
- 
-     rb_ractor_blocking_threads_dec(th->ractor, __FILE__, __LINE__);
- }
-
-diff --git a/thread_pthread.c b/thread_pthread.c
---- a/thread_pthread.c
-+++ b/thread_pthread.c
-@@ -637,7 +637,7 @@
- void
- Init_native_thread(rb_thread_t *th)
- {
--#if defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
-+#if !defined(__vita__) && defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
-     if (condattr_monotonic) {
-         int r = pthread_condattr_init(condattr_monotonic);
-         if (r == 0) {

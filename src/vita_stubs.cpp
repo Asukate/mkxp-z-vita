@@ -43,18 +43,25 @@
 #include "vita_startup_timer.h"
 
 /*
- * _newlib_heap_size_user — Controls newlib heap size.
- * Default is 128MiB. SceCommonDialog needs room for its own heap,
- * so we limit our heap to 64MiB.
+ * _newlib_heap_size_user sets the newlib heap: Ruby, game data and every
+ * small allocation. Pixel buffers of 128 KiB and more (decoded images, large
+ * CPU-composed bitmaps) are kernel memory blocks of their own, taken from the
+ * main memory vitaGL is told to leave free (the SDL shim's vita_big_alloc and
+ * the threshold in main.cpp), so the heap no longer has to hold them.
+ * 112 MiB: Hylics, the largest measured, uses about 80.
  */
-unsigned int _newlib_heap_size_user = SCE_KERNEL_128MiB;
+unsigned int _newlib_heap_size_user = 112u * 1024u * 1024u;
 
 /* =================================================================
- * Release-safe startup timer
+ * Startup timer. Every build keeps the clock (Graphics.startup_elapsed_ms);
+ * only diagnostic builds write the marks to ux0:/data/hardrpg and the
+ * console, so a release build leaves no log behind.
  * ================================================================= */
 namespace {
+#ifdef MKXPZ_VITA_DIAGNOSTICS
 constexpr const char *kStartupTimingPath =
     "ux0:/data/hardrpg/startup-timing.log";
+#endif
 uint64_t vita_startup_zero_us = 0;
 FILE *vita_startup_file = NULL;
 volatile int vita_startup_lock = 0;
@@ -74,9 +81,13 @@ void vita_startup_unlock_file()
 extern "C" void vitaStartupTimerInit(void)
 {
     vita_startup_zero_us = sceKernelGetSystemTimeWide();
+#ifdef MKXPZ_VITA_DIAGNOSTICS
     mkdir("ux0:/data", 0777);
     mkdir("ux0:/data/hardrpg", 0777);
     vita_startup_file = std::fopen(kStartupTimingPath, "w");
+    if (vita_startup_file)
+        std::setvbuf(vita_startup_file, NULL, _IOFBF, 8192);
+#endif
     vitaStartupTimerMark("process_entry");
 }
 
@@ -89,6 +100,9 @@ extern "C" uint64_t vitaStartupTimerElapsedUs(void)
 
 extern "C" void vitaStartupTimerMark(const char *phase)
 {
+#ifndef MKXPZ_VITA_DIAGNOSTICS
+    (void)phase;
+#else
     const uint64_t elapsed_us = vitaStartupTimerElapsedUs();
     vita_startup_lock_file();
     if (vita_startup_file)
@@ -97,12 +111,35 @@ extern "C" void vitaStartupTimerMark(const char *phase)
                      static_cast<unsigned long long>(elapsed_us / 1000),
                      static_cast<unsigned long long>(elapsed_us % 1000),
                      phase ? phase : "<null>");
-        std::fflush(vita_startup_file);
+        /* No flush per mark: a write to the memory card can take 150-350 ms
+         * when the card is busy, and a boot makes about fifty marks. The file
+         * is flushed at the milestones below and when it is closed. */
+        if (phase && (!std::strcmp(phase, "script_execute_begin") ||
+                      !std::strncmp(phase, "launcher_", 9) ||
+                      !std::strcmp(phase, "first_game_present") ||
+                      !std::strncmp(phase, "shutdown_re", 11)))
+            std::fflush(vita_startup_file);
     }
     sceClibPrintf("[MKXPZ-STARTUP] %llu.%03llu ms %s\n",
                   static_cast<unsigned long long>(elapsed_us / 1000),
                   static_cast<unsigned long long>(elapsed_us % 1000),
                   phase ? phase : "<null>");
+    vita_startup_unlock_file();
+#endif
+}
+
+extern "C" void vitaStartupTimerKeep(void)
+{
+    vita_startup_lock_file();
+    if (vita_startup_file)
+    {
+        std::fclose(vita_startup_file);
+        vita_startup_file = NULL;
+#ifdef MKXPZ_VITA_DIAGNOSTICS
+        std::remove("ux0:/data/hardrpg/startup-timing.prev.log");
+        std::rename(kStartupTimingPath, "ux0:/data/hardrpg/startup-timing.prev.log");
+#endif
+    }
     vita_startup_unlock_file();
 }
 

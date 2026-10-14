@@ -1,7 +1,7 @@
 # HardRPG launcher
 
 The red Games/Settings/About/Exit menu fills 960×544. The native
-**HardRPG 0.2.1 Alpha** uses a C++ launcher; games still run in the
+**HardRPG 0.3.0 Alpha** uses a C++ launcher; games still run in the
 RGSS engine. The original `library.rb`/`picker.rb` launcher remains an
 alternative build. Selecting a game restarts the engine into its folder.
 About displays the version, author, repository and dated one-line release notes.
@@ -11,7 +11,8 @@ About displays the version, author, repository and dated one-line release notes.
 Put user-owned game folders or ZIP files in `ux0:/data/hardrpg/games/`.
 Cross opens a folder/ZIP or launches a recognized XP, VX, or VX Ace game.
 Circle goes up one level, returning to the left menu at the library root.
-Triangle refreshes the current listing. ZIPs may contain a game directly,
+Triangle opens the highlighted game's settings; the library is scanned when
+the app starts. ZIPs may contain a game directly,
 a wrapper folder, or multiple game folders. Archives inside archives are
 not supported. No games or RTP are included in the package.
 
@@ -74,11 +75,20 @@ Circle. It needs space for the uncompressed game; an I/O failure removes
 the incomplete copy. The original ZIP is untouched. Subsequent launches
 reuse the working copy, including saves. A changed ZIP is reported instead
 of overwriting that copy; back up its saves before replacing/removing the
-cache. Added ZIP games use this same preparation path; adding an ordinary game
+cache. Once a ZIP game is unpacked its ZIP can be deleted: the library then
+lists the game from `cache/zip-<id>/`, under the same identity, so its
+settings, controls, display name and saves carry on. Added ZIP games use this same preparation path; adding an ordinary game
 folder stores its path and launches it in place, without extraction or copying.
 The completed working copy has no expiry or automatic eviction. App updates do
 not delete it. Treat it as game/save storage: deleting it can delete that game's
 saves. Only incomplete `.partial` preparations are automatically removed.
+
+**Remove from library** (Triangle menu) takes a game off the list, then asks,
+one question at a time and defaulting to No, whether to delete its folder or
+ZIP and then its unpacked copy. A game whose files remain is kept hidden in
+`hidden-games.txt`; adding its folder again with Start shows it. Library roots,
+extra game folders, storage roots and HardRPG's own folders are never offered
+for deletion.
 
 Per-game settings go in `ux0:/data/hardrpg/config/<id>.json`. The stable ID
 is in the launch handoff's `selection.json` and can be computed on the host

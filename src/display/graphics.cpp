@@ -21,6 +21,8 @@
  */
 
 #include "graphics.h"
+#include "performance-overlay.h"
+#include "vita_resume.h"
 
 #include "alstream.h"
 #include "audio.h"
@@ -109,6 +111,7 @@ struct VitaGLTexturePrefix
 #define AUDIO_BUFFER_LEN_MS 2000
 
 #ifdef __vita__
+#include "vita_startup_timer.h"
 static inline void vitaBootMarkFirstGamePresent()
 {
 	static bool done = false;
@@ -116,6 +119,7 @@ static inline void vitaBootMarkFirstGamePresent()
 		return;
 	done = true;
 	vitaDiagLog("BOOTPERF", "first_game_present");
+	vitaStartupTimerMark("first_game_present");
 }
 #else
 static inline void vitaBootMarkFirstGamePresent() {}
@@ -1424,6 +1428,7 @@ struct GraphicsPrivate {
     int brightness;
     
     double last_update;
+    PerformanceOverlay performanceOverlay;
     
     
     FPSLimiter fpsLimiter;
@@ -1628,6 +1633,10 @@ struct GraphicsPrivate {
     }
     
     void swapGLBuffer() {
+        if (threadData->config.performanceMetrics)
+            performanceOverlay.draw(threadData->config.performanceMetrics,
+                                    winSize.x, winSize.y, scOffset.x, scOffset.y,
+                                    scSize.x, scSize.y);
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("FPS_DELAY_BEGIN");
 #endif
@@ -1670,6 +1679,9 @@ struct GraphicsPrivate {
         s42iMark("SDL_SWAP_BEGIN");
 #endif
         { FrameProfile::Scope present(FrameProfile::Present); SDL_GL_SwapWindow(threadData->window); }
+        if (threadData->config.performanceMetrics)
+            performanceOverlay.present(uint64_t(double(SDL_GetPerformanceCounter()) *
+                                      1000000 / SDL_GetPerformanceFrequency()), vitaStandbyEpoch());
         FrameProfile::boundary();
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("SDL_SWAP_DONE");
@@ -1683,6 +1695,14 @@ struct GraphicsPrivate {
         if (s27Gate) vitaDiagLog("S27", "f=%d AFTER_SWAP", frameCount);
         
         ++frameCount;
+#ifdef __vita__
+        /* The system suspends an application that reports no activity for its
+         * standby timer, button presses aside. Off by default, as for any game;
+         * set for unattended runs and long non-interactive scenes. */
+        if (threadData->config.vitaKeepAwake && frameCount % 60 == 0)
+            sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
+#endif
+        Bitmap::frameTick();
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("FRAMECOUNT_DONE value=%d", frameCount);
 #endif
@@ -2201,6 +2221,7 @@ struct GraphicsPrivate {
         SDL_GL_MakeCurrent(threadData->window, 0);
         threadData->syncPoint.waitMainSync();
         SDL_GL_MakeCurrent(threadData->window, glCtx);
+        performanceOverlay.reset();
         
         fpsLimiter.resetFrameAdjust();
     }

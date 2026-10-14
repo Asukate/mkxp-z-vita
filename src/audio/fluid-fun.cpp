@@ -32,7 +32,15 @@ static void *so;
 
 void initFluidFunctions()
 {
-#if defined(__vita__) || defined(__psp2__)
+#if defined(MKXPZ_VITA_FLUIDLITE)
+#define FLUID_FUN(name, type) fluid.name = fluid_##name;
+#define FLUID_FUN2(name, type, real_name) fluid.name = real_name;
+	FLUID_FUNCS
+	FLUID_FUNCS2
+#undef FLUID_FUN
+#undef FLUID_FUN2
+	return;
+#elif defined(__vita__) || defined(__psp2__)
 	/* No fluidsynth on Vita, and the Vita SDL loadso stubs report
 	 * success unconditionally, so any load attempt below would leave
 	 * garbage function pointers behind. Stay unloaded: HAVE_FLUID

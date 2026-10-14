@@ -13,6 +13,7 @@ public:
 };
 
 unsigned vitaResumeEpoch();
+unsigned vitaStandbyEpoch();
 void vitaResumeNotify();
 bool vitaPollResume();
 #endif

@@ -11,6 +11,7 @@
 // Always returns true. consume=false validates without removing the handoff.
 bool protoLauncherPick(std::string &gameFolder, int &rgssVersion,
                        std::vector<std::string> &rtps, std::string &vitaConfigPath,
-                       std::map<std::string, std::string> &rtpRoots, bool consume = true);
+                       std::map<std::string, std::string> &rtpRoots, bool consume = true,
+                       std::string *execName = nullptr);
 
 #endif // MKXPZ_PROTO_LAUNCHER

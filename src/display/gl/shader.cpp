@@ -1153,6 +1153,8 @@ SpriteShader::SpriteShader()
     GET_U(patternScroll);
     GET_U(patternZoom);
     GET_U(invert);
+    GET_U(sourceOffset);
+    GET_U(sourceSizeInv);
 }
 
 void SpriteShader::setSpriteMat(const float value[16])
@@ -1222,6 +1224,12 @@ void SpriteShader::setPatternScroll(const Vec2 &scroll)
 void SpriteShader::setPatternZoom(const Vec2 &zoom)
 {
     setVec2Uniform(u_patternZoom, zoom);
+}
+
+void SpriteShader::setSourceRegion(const Vec2 &offset, const Vec2 &dimensions)
+{
+    setVec2Uniform(u_sourceOffset, offset);
+    setVec2Uniform(u_sourceSizeInv, Vec2(1.0f / dimensions.x, 1.0f / dimensions.y));
 }
 
 void SpriteShader::setInvert(bool value)

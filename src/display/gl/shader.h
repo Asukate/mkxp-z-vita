@@ -220,11 +220,12 @@ public:
     void setPatternScroll(const Vec2 &scroll);
     void setPatternZoom(const Vec2 &zoom);
     void setInvert(bool value);
+    void setSourceRegion(const Vec2 &offset, const Vec2 &dimensions);
 
 private:
 	GLint u_spriteMat, u_tone, u_opacity, u_color,
     u_bushY, u_bushUnder, u_bushSlope, u_bushIntercept, u_bushOpacity, u_pattern, u_renderPattern,
-    u_patternBlendType, u_patternSizeInv, u_patternTile, u_patternOpacity, u_patternScroll, u_patternZoom, u_invert;
+    u_patternBlendType, u_patternSizeInv, u_patternTile, u_patternOpacity, u_patternScroll, u_patternZoom, u_invert, u_sourceOffset, u_sourceSizeInv;
 };
 
 class PlaneShader : public ShaderBase

@@ -1,6 +1,7 @@
 // Desktop preview and fixture driver for the production native model/view.
 #include "runtime.h"
 #include "view.h"
+#include "release.h"
 #include <SDL.h>
 #include <iostream>
 #include <sstream>
@@ -40,7 +41,11 @@ Json listing(const std::vector<Entry> &list, const Paths &paths) {
     o["path"] = e.node.path();
     o["inner"] = e.node.inner;
     o["config"] = key(e.node.identity(paths));
-    o["rgss"] = e.version;
+    o["rgss"] = e.version <= 3 ? e.version : 0;
+    if (e.version == 4) {
+      o["format"] = e.version;
+      o["backend"] = engineFor(e.version)->id;
+    }
     out.as_array().push_back(item);
   }
   return out;
@@ -75,6 +80,9 @@ Json commands(Model &m, const Json &script) {
         Entry e;
         if (!game(node, e))
           throw std::runtime_error("Not a game");
+        m.backendAvailable = field(cmd, "runtime") == "missing"
+            ? std::function<bool(const Engine &)>([](const Engine &) { return false; })
+            : std::function<bool(const Engine &)>{};
         result = m.launch(e, progress);
       } else if (op == "add")
         result = Json::integer_type(m.addFolder(path, scan));
@@ -244,7 +252,7 @@ int main(int argc, char **argv) {
       return rc;
     }
     hardrpg::Paths paths;
-    std::string font = "assets/liberation.ttf", snapshot, script, actions,
+    std::string font = "assets/liberation.ttf", snapshot, script, actions, releaseFixture,
                 rename, search;
     bool edit = false;
     bool interactive = false, storageSet = false;
@@ -268,6 +276,8 @@ int main(int argc, char **argv) {
         paths.storage.push_back(value);
       } else if (arg == "--font")
         font = value;
+      else if (arg == "--release-fixture")
+        releaseFixture = value;
       else if (arg == "--snapshot")
         snapshot = value;
       else if (arg == "--commands")
@@ -295,6 +305,7 @@ int main(int argc, char **argv) {
         return rename != "--cancel";
       };
     ui.search(search);
+    if(!releaseFixture.empty())ui.offerRelease(newerRelease(readFile(releaseFixture,262144),HARDRPG_VERSION_TAG));
     hardrpg::View view(font);
     std::istringstream stream(actions);
     std::string action;
@@ -306,6 +317,8 @@ int main(int argc, char **argv) {
             ui.touch(x, y);
         } else if (action.find("scroll:") == 0)
           ui.scroll(std::stoi(action.substr(7)));
+        else if (action == "loadexec-fail")
+          ui.launchFailed(-2139086818, "app0:/easyrpg.self");
         else
           ui.action(button(action));
       }
@@ -336,8 +349,31 @@ int main(int argc, char **argv) {
     state.as_object()["message"] = ui.message;
     state.as_object()["menu"] = ui.menu;
     state.as_object()["launchRequested"] = ui.launchRequested;
+    state.as_object()["launchFormat"] = ui.launchFormat;
+    state.as_object()["launchingName"] = ui.launchingName;
+    state.as_object()["preparationLabel"] = ui.preparationLabel;
+    state.as_object()["rtpSelected"] = ui.rtpSelected;
     state.as_object()["missingRtp"] = ui.missingRtp;
     state.as_object()["page"] = int(ui.page);
+    state.as_object()["releaseLines"] = int(ui.releaseReport.size());
+    state.as_object()["releaseScroll"] = ui.releaseScroll;
+    state.as_object()["releaseTag"] = ui.releaseNotice.tag;
+    state.as_object()["controls"] = ui.controls.json();
+    state.as_object()["controlsTesting"] = ui.controlsTesting;
+    state.as_object()["controlPicking"] = ui.controlPicking;
+    state.as_object()["gameOptions"] = ui.gameOptions;
+    state.as_object()["configuredGame"] = ui.gameOptions ? ui.gameEntry.name : "";
+    state.as_object()["gameConfigKey"] = ui.gameOptions ? key(ui.gameEntry.node.identity(paths)) : "";
+    state.as_object()["gameSettings"] = ui.gameOptions ? ui.model.gameSettings(ui.gameEntry) : object();
+    state.as_object()["setting"] = ui.setting;
+    {
+      auto rows = array();
+      if (ui.page == Page::Remove)
+        rows.as_array().push_back(ui.removePath(ui.removeQuestions[ui.removeStep]));
+      state.as_object()["removeQuestion"] = rows;
+    }
+    state.as_object()["settingFirst"] = ui.settingFirst;
+    state.as_object()["automaticUpdates"] = ui.automaticUpdates;
     state.as_object()["focus"] = int(ui.focus);
     state.as_object()["selected"] = ui.selected;
     state.as_object()["first"] = ui.first;

@@ -26,6 +26,10 @@ raw = (b'\0' + bytes((40, 20, 10, 255)) * 960) * 1152
 #include "SDL_error.h"
 #include "SDL_image.h"
 #include "SDL_rwops.h"
+static int snapshots;
+void vitaImageFailure(const char *stage, unsigned width, unsigned height, size_t size) {
+ assert(strstr(stage,"PNG")); assert(width==960 && height==1152 && size>8); ++snapshots;
+}
 static char error[256];
 static size_t fail_size;
 void *__real_malloc(size_t);
@@ -50,9 +54,11 @@ static void expect_failure(size_t n,const char *reason) { fail_size=n; int befor
 int main(int argc,char **argv) {
  assert(argc==2); FILE *f=fopen(argv[1],"rb"); assert(f); fseek(f,0,SEEK_END); length=ftell(f); rewind(f); bytes=malloc(length); assert(fread(bytes,1,length,f)==length); fclose(f);
  for(int i=0;i<20;++i) { SDL_Surface *s=decode(); if(!s) fprintf(stderr,"valid decode failed: %s\n",SDL_GetError()); assert(s && s->w==960 && s->h==1152); SDL_FreeSurface(s); }
+ assert(snapshots==0);
  expect_failure(length,"out of memory reading image");
  expect_failure(960*1152*4,"out of memory allocating PNG pixels");
  expect_failure(1152*sizeof(void*),"out of memory allocating PNG rows");
+ assert(snapshots==2);
  short_read=1; expect_failure(0,"incomplete image stream read"); short_read=0;
  bytes[0]=0; expect_failure(0,"not a PNG"); free(bytes);
  puts("PASS: actual SDL image decoder loads PNG repeatedly; allocation/read failures report precise SDL errors and close streams once");

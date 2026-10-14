@@ -17,6 +17,9 @@ void vitaStartupTimerInit(void);
 void vitaStartupTimerMark(const char *phase);
 uint64_t vitaStartupTimerElapsedUs(void);
 void vitaStartupTimerShutdown(void);
+/* Keep this run's marks as startup-timing.prev.log: the next process
+ * (a restart into the launcher or a game) starts the log again. */
+void vitaStartupTimerKeep(void);
 
 #ifdef __cplusplus
 }

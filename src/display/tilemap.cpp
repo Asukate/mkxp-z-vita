@@ -477,6 +477,14 @@ struct TilemapPrivate
 				continue;
 			}
 
+			/* A one-row autotile narrower than a frame has no frame to
+			 * cycle: the blit loops take `j % frames`. */
+			if (autotiles[i]->height() == 32 && autotiles[i]->width() < 32)
+			{
+				atlas.nATFrames[i] = 1;
+				continue;
+			}
+
 			usableATs.push_back(i);
 
 			if (autotiles[i]->height() == 32)

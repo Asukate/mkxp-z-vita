@@ -116,6 +116,43 @@ readUint32(PHYSFS_Io *io, uint32_t &result)
 
 #define IO_READ(io, dest, size) (io->read(io, dest, size) == size)
 
+/* Resolve exact archive names first, then ASCII case-insensitive names.
+ * Non-ASCII bytes remain unchanged. Folded collisions use lexical order. */
+static inline bool
+rgssNameEqualFolded(const char *a, const char *b)
+{
+	while (*a && *b)
+	{
+		unsigned char ca = static_cast<unsigned char>(*a);
+		unsigned char cb = static_cast<unsigned char>(*b);
+		if (ca >= 'A' && ca <= 'Z')
+			ca += static_cast<unsigned char>('a' - 'A');
+		if (cb >= 'A' && cb <= 'Z')
+			cb += static_cast<unsigned char>('a' - 'A');
+		if (ca != cb)
+			return false;
+		++a;
+		++b;
+	}
+	return *a == *b;
+}
+
+template<typename V>
+static const std::string *
+rgssFindKeyCaseInsensitive(const BoostHash<std::string, V> &hash,
+                           const char *name)
+{
+	const std::string *match = 0;
+	for (typename BoostHash<std::string, V>::const_iterator it = hash.cbegin();
+	     it != hash.cend(); ++it)
+	{
+		if (rgssNameEqualFolded(it->first.c_str(), name) &&
+		    (!match || it->first < *match))
+			match = &it->first;
+	}
+	return match;
+}
+
 static inline uint32_t
 advanceMagic(uint32_t &magic)
 {
@@ -449,7 +486,13 @@ RGSS_enumerateFiles(void *opaque, const char *dirname,
 	std::string _dirname(dirname);
 
 	if (!data->dirHash.contains(_dirname))
-		return PHYSFS_ENUM_STOP;
+	{
+		const std::string *match =
+		    rgssFindKeyCaseInsensitive(data->dirHash, dirname);
+		if (!match)
+			return PHYSFS_ENUM_STOP;
+		_dirname = *match;
+	}
 
 	const BoostSet<std::string> &entries = data->dirHash[_dirname];
 
@@ -465,11 +508,18 @@ RGSS_openRead(void *opaque, const char *filename)
 {
 	RGSS_archiveData *data = static_cast<RGSS_archiveData*>(opaque);
 
-	if (!data->entryHash.contains(filename))
-		return 0;
+	std::string target(filename);
+	if (!data->entryHash.contains(target))
+	{
+		const std::string *match =
+		    rgssFindKeyCaseInsensitive(data->entryHash, filename);
+		if (!match)
+			return 0;
+		target = *match;
+	}
 
 	RGSS_entryHandle *entry =
-	        new RGSS_entryHandle(data->entryHash[filename], data->archiveIo);
+	        new RGSS_entryHandle(data->entryHash[target], data->archiveIo);
 
 	PHYSFS_Io *io = PHYSFS_ALLOC(PHYSFS_Io);
 
@@ -484,8 +534,21 @@ RGSS_stat(void *opaque, const char *filename, PHYSFS_Stat *stat)
 {
 	RGSS_archiveData *data = static_cast<RGSS_archiveData*>(opaque);
 
-	bool hasFile = data->entryHash.contains(filename);
-	bool hasDir  = data->dirHash.contains(filename);
+	std::string fileKey(filename);
+	bool hasFile = data->entryHash.contains(fileKey);
+	bool hasDir = data->dirHash.contains(filename);
+	if (!hasFile && !hasDir)
+	{
+		const std::string *match =
+		    rgssFindKeyCaseInsensitive(data->entryHash, filename);
+		if (match)
+		{
+			fileKey = *match;
+			hasFile = true;
+		}
+	}
+	if (!hasDir && !hasFile)
+		hasDir = rgssFindKeyCaseInsensitive(data->dirHash, filename) != 0;
 
 	if (!hasFile && !hasDir)
 	{
@@ -500,7 +563,7 @@ RGSS_stat(void *opaque, const char *filename, PHYSFS_Stat *stat)
 
 	if (hasFile)
 	{
-		const RGSS_entryData &entry = data->entryHash[filename];
+		const RGSS_entryData &entry = data->entryHash[fileKey];
 
 		stat->filesize = entry.size;
 		stat->filetype = PHYSFS_FILETYPE_REGULAR;

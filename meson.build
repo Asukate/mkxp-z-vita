@@ -11,7 +11,8 @@ compilers = {'cpp': meson.get_compiler('cpp')}
 global_sources = []
 global_dependencies = []
 global_include_dirs = []
-global_link_args = []
+# Leave room for SCE metadata before the next 64 KiB aligned load segment.
+global_link_args = ['-Wl,--defsym=__sce_headroom=0x1000']
 global_args = ['-DMKXPZ_BUILD_MESON',
     '-DMKXPZ_VERSION="@0@"'.format(meson.project_version()),
     '-DMKXPZ_GIT_HASH="@0@"'.format(git_hash),

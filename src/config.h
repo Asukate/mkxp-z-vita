@@ -40,6 +40,7 @@ struct Config {
     bool preferMetalRenderer;
     bool displayFPS;
     bool printFPS;
+    int performanceMetrics;
     
     bool winResizable;
     bool fullscreen;
@@ -70,6 +71,8 @@ struct Config {
     std::vector<std::string> solidFonts;
     
     bool subImageFix;
+    /* Vita: keep the console from entering standby on its idle timer while a game runs. */
+    bool vitaKeepAwake;
     bool enableBlitting;
     int maxTextureSize;
     

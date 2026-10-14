@@ -25,8 +25,12 @@
 #include "config.h"
 #include "debugwriter.h"
 #include "fluid-fun.h"
+#include "exception.h"
 
 #include <assert.h>
+#include <cstdio>
+#include <cstring>
+#include <cstdint>
 #include <vector>
 #include <string>
 
@@ -44,7 +48,7 @@ struct SharedMidiState
 	bool inited;
 	std::vector<Synth> synths;
 	const std::string &soundFont;
-	fluid_settings_t *flSettings;
+	fluid_settings_t *flSettings = nullptr;
 
 	SharedMidiState(const Config &conf)
 	    : inited(false),
@@ -80,13 +84,22 @@ struct SharedMidiState
 			return;
 
 		flSettings = fluid.new_settings();
+#ifdef MKXPZ_VITA_FLUIDLITE
+        if (!flSettings) {
+            inited = false;
+            throw Exception(Exception::MKXPError, "Midi: Could not allocate synthesizer settings");
+        }
+        fluid.settings_setint(flSettings, "synth.polyphony", 64);
+#endif
 		fluid.settings_setnum(flSettings, "synth.gain", 1.0f);
 		fluid.settings_setnum(flSettings, "synth.sample-rate", SYNTH_SAMPLERATE);
 		fluid.settings_setint(flSettings, "synth.chorus.active", conf.midi.chorus);
 		fluid.settings_setint(flSettings, "synth.reverb.active", conf.midi.reverb);
 
+#ifndef MKXPZ_VITA_FLUIDLITE
 		for (size_t i = 0; i < SYNTH_INIT_COUNT; ++i)
 			addSynth(false);
+#endif
 	}
 
 	fluid_synth_t *allocateSynth()
@@ -130,17 +143,48 @@ struct SharedMidiState
 private:
 	fluid_synth_t *addSynth(bool usedNow)
 	{
+#ifdef MKXPZ_VITA_FLUIDLITE
+        // Validate the file before entering the loader, including missing paths.
+        // A bounded SF2 bank keeps sample allocation appropriate for the Vita.
+        unsigned char header[12]{};
+        std::FILE *file = std::fopen(soundFont.c_str(), "rb");
+        bool valid = false;
+        if (file) {
+            bool headerRead = std::fread(header, 1, sizeof(header), file) == sizeof(header);
+            bool end = std::fseek(file, 0, SEEK_END) == 0;
+            long size = end ? std::ftell(file) : -1;
+            uint32_t riffSize = uint32_t(header[4]) | (uint32_t(header[5]) << 8) |
+                                (uint32_t(header[6]) << 16) | (uint32_t(header[7]) << 24);
+            valid = headerRead && size >= 12 && size <= 32*1024*1024 &&
+                    !std::memcmp(header, "RIFF", 4) && !std::memcmp(header+8, "sfbk", 4) &&
+                    uint64_t(riffSize)+8 == uint64_t(size);
+            std::fclose(file);
+        }
+        if (!valid)
+            throw Exception(Exception::MKXPError, "Midi: Invalid or missing SF2 bank '%s' (maximum 32 MiB). Set midiSoundFont to a valid SF2 file.", soundFont.c_str());
+#endif
 		fluid_synth_t *syn = fluid.new_synth(flSettings);
 
+#ifdef MKXPZ_VITA_FLUIDLITE
+        // MIDI synthesis and sample memory are allocated only for a MIDI source.
+        if (!syn)
+            throw Exception(Exception::MKXPError, "Midi: Could not allocate synthesizer");
+        if (soundFont.empty() || fluid.synth_sfload(syn, soundFont.c_str(), 1) < 0) {
+            fluid.delete_synth(syn);
+            throw Exception(Exception::MKXPError, "Midi: Could not load SoundFont '%s'. Set midiSoundFont to a valid SF2 file.", soundFont.c_str());
+        }
+#else
 		if (!soundFont.empty())
 			fluid.synth_sfload(syn, soundFont.c_str(), 1);
 		else
 			Debug() << "Warning: No soundfont specified, sound might be mute";
+#endif
 
 		Synth synth;
 		synth.inUse = usedNow;
 		synth.synth = syn;
-		synths.push_back(synth);
+        try {synths.push_back(synth);}
+        catch (...) {fluid.delete_synth(syn);throw;}
 
 		return syn;
 	}

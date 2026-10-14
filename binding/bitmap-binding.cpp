@@ -27,6 +27,10 @@
 #include "font.h"
 #include "sharedstate.h"
 #include "graphics.h"
+#ifdef __vita__
+#include "vita_error_report.h"
+#include "texpool.h"
+#endif
 
 #if RAPI_FULL > 187
 DEF_TYPE(Bitmap);
@@ -39,29 +43,80 @@ static const char *objAsStringPtr(VALUE obj) {
     return RSTRING_PTR(str);
 }
 
+#ifdef __vita__
+// The image decoder reports SDLError; texture storage reports MKXPError.
+static bool vitaOutOfMemory(const Exception &error) {
+    return (error.type == Exception::SDLError ||
+            error.type == Exception::MKXPError) &&
+           error.msg.find(": out of memory ") != std::string::npos;
+}
+
+// Cached textures have no active bitmap owner, and bitmaps a game dropped
+// without disposing keep their storage until Ruby collects them. Reclaim
+// both. Collect with the VM lock held, outside the graphics lock and catch;
+// the explicit Ruby method also collects when a game disables auto GC.
+static void vitaReclaimImageMemory(const char *label) {
+    vitaErrorMemoryEvent("before-cache-reclaim", label);
+    GFX_GUARD_EXC(shState->texPool().clearCache(); Bitmap::reclaimMemory();)
+    vitaErrorMemoryEvent("after-cache-reclaim", label);
+    VALUE gc = rb_const_get(rb_cObject, rb_intern("GC"));
+    rb_funcall(gc, rb_intern("start"), 0);
+}
+
+static Bitmap *vitaBitmapOfSize(int width, int height) {
+    Bitmap *bitmap = 0;
+    bool retry = false;
+    try {
+        GFX_GUARD_EXC(bitmap = new Bitmap(width, height);)
+    } catch (const Exception &error) {
+        if (!vitaOutOfMemory(error))
+            throw;
+        retry = true;
+    }
+    if (retry) {
+        vitaErrorImageStart();
+        vitaErrorMemoryEvent("before-gc-retry", "Bitmap.new");
+        vitaReclaimImageMemory("Bitmap.new");
+        vitaErrorMemoryEvent("after-gc-before-retry", "Bitmap.new");
+        try {
+            GFX_GUARD_EXC(bitmap = new Bitmap(width, height);)
+        } catch (const Exception &) {
+            vitaErrorMemoryEvent("retry-failed", "Bitmap.new");
+            throw;
+        }
+        vitaErrorMemoryEvent("retry-succeeded", "Bitmap.new");
+    }
+    return bitmap;
+}
+#endif
+
 static Bitmap *bitmapFromFile(int argc, VALUE *argv) {
     char *filename;
     rb_get_args(argc, argv, "z", &filename RB_ARG_END);
     Bitmap *bitmap = 0;
 #ifdef __vita__
+    vitaErrorImageStart();
     bool retry = false;
     try {
         GFX_GUARD_EXC(bitmap = new Bitmap(filename);)
     } catch (const Exception &error) {
-        if (error.type != Exception::SDLError ||
-            error.msg.find(": out of memory ") == std::string::npos)
+        if (!vitaOutOfMemory(error))
             throw;
+        vitaErrorMemoryEvent("before-gc-retry", filename);
         retry = true;
     }
     if (retry) {
-        // Native image storage can run out before Ruby schedules a full GC.
-        // Collect with the VM lock held, outside the graphics lock and catch.
-        // The explicit Ruby method also collects when a game disables auto GC.
-        VALUE gc = rb_const_get(rb_cObject, rb_intern("GC"));
-        rb_funcall(gc, rb_intern("start"), 0);
+        vitaReclaimImageMemory(filename);
         // A compaction may move the string; obtain its pointer again.
         rb_get_args(argc, argv, "z", &filename RB_ARG_END);
-        GFX_GUARD_EXC(bitmap = new Bitmap(filename);)
+        vitaErrorMemoryEvent("after-gc-before-retry", filename);
+        try {
+            GFX_GUARD_EXC(bitmap = new Bitmap(filename);)
+        } catch (const Exception &) {
+            vitaErrorMemoryEvent("retry-failed", filename);
+            throw;
+        }
+        vitaErrorMemoryEvent("retry-succeeded", filename);
     }
 #else
     GFX_GUARD_EXC(bitmap = new Bitmap(filename);)
@@ -104,7 +159,11 @@ RB_METHOD_GUARD(bitmapInitialize) {
         int width, height;
         rb_get_args(argc, argv, "ii", &width, &height RB_ARG_END);
         
+#ifdef __vita__
+        b = vitaBitmapOfSize(width, height);
+#else
         GFX_GUARD_EXC(b = new Bitmap(width, height);)
+#endif
     }
     
     setPrivateData(self, b);

@@ -21,6 +21,7 @@
 */
 
 #include "binding-util.h"
+#include "bitmap.h"
 
 #include "exception.h"
 #include "sharedstate.h"
@@ -29,6 +30,84 @@
 #include <assert.h>
 #include <stdarg.h>
 #include <string.h>
+
+#if defined(__vita__) && !defined(MKXPZ_VITA_DIAGNOSTICS)
+#include <vitaGL.h>
+#include <psp2/kernel/processmgr.h>
+
+static VALUE vitaPressureCollect(VALUE) { return rb_gc_start(); }
+
+/* Graphics memory is invisible to Ruby's collector: a Bitmap is a few bytes
+ * of Ruby heap holding megabytes of texture storage. Games routinely drop
+ * bitmaps without disposing them (a sprite's dispose leaves its bitmap), so
+ * the texture pools can run dry long before Ruby decides to collect. Collect
+ * when the pools run low and have shrunk measurably since the last pass.
+ *
+ * Called only at Ruby C-method entry, before native pointers, GFX_LOCK or
+ * drop_gvl_guard. Never collect from an upload, finalizer or allocator. */
+void vitaGpuPressureSafePoint(const char *phase)
+{
+  static const size_t lowWater = 24u * 1024 * 1024;
+  static const size_t step = 8u * 1024 * 1024;
+  static const size_t exhausted = 2u * 1024 * 1024;
+  static bool collecting = false;
+  static size_t ceiling = 0; /* most free memory seen since the last pass */
+  static unsigned int creations = 0;
+  static uint64_t lastUs = 0;
+  static unsigned int frames = 0;
+  if (collecting) return;
+  /* Reading the pool figures walks both allocators, so they are sampled on
+   * every eighth frame and every fourth bitmap creation, not on each call. */
+  if (phase[0] == 'b') {
+    ++creations;
+    /* CPU-composed bitmaps live in the C heap, which the pool figures below
+     * do not see. Collect dropped ones before their budget fills. */
+    /* A collection only helps if dropped bitmaps piled up since the last
+     * one; a scene that simply keeps many live bitmaps must not pay for a
+     * full collection every few seconds. */
+    static size_t cpuAfterCollect = 0;
+    if (Bitmap::cpuPixelsNearBudget() &&
+        Bitmap::cpuPixelBytes() >= cpuAfterCollect + 8u * 1024 * 1024 &&
+        sceKernelGetProcessTimeWide() - lastUs >= 2000000) {
+      collecting = true;
+      int state = 0;
+      rb_protect(vitaPressureCollect, Qnil, &state);
+      collecting = false;
+      cpuAfterCollect = Bitmap::cpuPixelBytes();
+      creations = 0;
+      lastUs = sceKernelGetProcessTimeWide();
+      if (state) rb_jump_tag(state);
+      return;
+    }
+    if (Bitmap::cpuPixelBytes() < cpuAfterCollect)
+      cpuAfterCollect = Bitmap::cpuPixelBytes();
+    if (creations & 3) return;
+  } else if (phase[0] == 'g' && (++frames & 7)) {
+    return;
+  }
+  const size_t freeBytes = vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
+  if (freeBytes > ceiling) ceiling = freeBytes;
+  if (freeBytes >= lowWater) return;
+  bool collect = ceiling - freeBytes >= (ceiling / 2 < step ? ceiling / 2 : step) &&
+                 ceiling >= exhausted;
+  if (!collect && freeBytes < exhausted) {
+    /* Pools are spent and new storage is spilling into the C heap, where
+     * the pool figures no longer move. Pace by bitmap creations instead. */
+    collect = creations >= 8 &&
+              sceKernelGetProcessTimeWide() - lastUs >= 2000000;
+  }
+  if (!collect) return;
+  collecting = true;
+  int state = 0;
+  rb_protect(vitaPressureCollect, Qnil, &state);
+  collecting = false;
+  /* Released storage returns over the next few frames; measure from here. */
+  ceiling = vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
+  creations = 0;
+  lastUs = sceKernelGetProcessTimeWide();
+  if (state) rb_jump_tag(state);
+}
+#endif
 
 #ifdef MKXPZ_VITA_DIAGNOSTICS
 #include <vitaGL.h>

@@ -1,7 +1,10 @@
 #ifndef FLUIDFUN_H
 #define FLUIDFUN_H
 
-#ifdef SHARED_FLUID
+#if defined(MKXPZ_VITA_FLUIDLITE)
+# include <fluidlite.h>
+# define FLUIDSYNTH_VERSION_MAJOR FLUIDLITE_VERSION_MAJOR
+#elif defined(SHARED_FLUID)
 # include <fluidsynth.h>
 #else
 # define FLUIDSYNTH_VERSION_MAJOR 3

@@ -1,0 +1,25 @@
+TimGM6mb.sf2
+Copyright 2004 Tim Brechbill (https://www.timbrechbill.com)
+Copyright 2010 David Bolton <davidkbolton@gmail.com>
+License: GNU General Public License version 2 (COPYING).
+
+Source asset: TimGM6mb.sf2 from Debian timgm6mb-soundfont 1.3.
+https://deb.debian.org/debian/pool/main/t/timgm6mb-soundfont/timgm6mb-soundfont_1.3.orig.tar.gz
+Source archive SHA-256:
+af8f3a00e416dfb262bcaa904a1c84df04a51b72bbc1313aed012bc754bdf99b
+SoundFont SHA-256:
+c5378b62028c920cb11e4803327983fee2f2cdff5dc89c708e39da417e51c854
+Original source:
+https://github.com/musescore/musescore-old/commit/90c33ef9d87b3f5ff92efd3b07d89eb455fb1fef
+Debian copyright record:
+https://salsa.debian.org/multimedia-team/timgm6mb-soundfont/-/blob/debian/1.3-5/debian/copyright
+
+This package is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License version 2.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+The unmodified editable SoundFont asset is included in assets/TimGM6mb.sf2.

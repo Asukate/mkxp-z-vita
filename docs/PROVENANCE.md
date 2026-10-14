@@ -18,7 +18,7 @@ a disposable workspace prefix. The user supplies vitaSDK separately.
 Hardware logs, crash dumps, benchmarks, game data, and saves are not build
 inputs or part of the public source. The launcher VPK contains no games or saves.
 
-HardRPG 0.2.1 Alpha uses Title ID `HARDRPG01` and `ux0:/data/hardrpg/`.
+HardRPG uses Title ID `HARDRPG01` and `ux0:/data/hardrpg/`.
 Games and RTP can also be selected from external directories without moving
 them. No automatic save migration is performed. Shared engine code and
 original license/copyright headers are retained.

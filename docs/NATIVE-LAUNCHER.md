@@ -1,6 +1,6 @@
 # Native HardRPG launcher
 
-HardRPG 0.2.1 Alpha uses a C++ launcher with a FreeType text canvas and an
+HardRPG uses a C++ launcher with a FreeType text canvas and an
 SDL/vitaGL presenter. Browsing does not initialize Ruby, the RGSS game renderer
 or OpenAL. Games continue to use the same RGSS runtime.
 
@@ -21,7 +21,12 @@ preserves the previous selection.
 - L/R cycles All, XP, VX and VX Ace. Active filters are labelled above the list.
 - Square changes a game display name without renaming files, caches or saves.
   A blank name restores the original. Names persist in `game-names.json`.
-- Triangle refreshes. Start opens the storage browser; Square scans its folder
+- Triangle opens settings for the highlighted game. The game name remains
+  visible while changing controls, display, audio/MIDI or performance metrics.
+  RTP locations, rename and game information are available in the same menu.
+  Circle returns to the same game row.
+- The library scans automatically on each fresh app boot, including extra
+  search folders. Start opens the storage browser; Square scans its folder
   and adds references without moving game files.
 - The scrollbar shows the visible part of the list. Drag the front touchscreen
   to scroll; tap to select and tap again to open. Tabs and settings also accept
@@ -35,6 +40,12 @@ preparation displays progress and can be cancelled. Completed working copies
 are reused and never automatically evicted. See [library and save details](../launcher/README.md).
 
 ## Settings and errors
+
+Settings contains global defaults and shared library preferences. Game settings
+opened with Triangle save per-game overrides for display, audio/MIDI and metrics.
+Square on an override restores inheritance from the global default. Existing
+config fields are preserved. Wrapped single-game ZIPs can be configured before
+launch without extracting the archive; collections must be opened first.
 
 Display settings control aspect ratio, scaling and filtering. Extra game
 folders and custom RTP folders, collections or ZIPs persist in the same path
@@ -50,7 +61,7 @@ shown explicitly. Reports include the version, backend, engine and source
 build identifier plus the retained trace; game data, saves and network settings
 are not collected. A native crash without a trace cannot be listed.
 
-Hold L+R+Select for one second in a game to return to the launcher. Unsaved
+Hold L+R+Select in a game to return to the launcher. Unsaved
 progress is lost. Handled script failures also return to the menu. The splash
 appears only on a fresh app launch. About includes dated release notes.
 
@@ -77,7 +88,7 @@ python3 scripts/preview-native-launcher.py --work /path/to/native-preview --demo
 
 The metadata-only demo builds and runs the production model, UI and canvas.
 Arrow keys navigate, Enter selects, Escape goes back, Space is Square, R
-refreshes and Tab is Start. Use `--data-root` for a copied test library and
+opens game settings and Tab is Start. Use `--data-root` for a copied test library and
 `--browse-root` for another host folder. Launch prepares a ZIP if needed,
 writes a host handoff and closes the preview; it does not run a Vita game.
 Keep preview libraries separate from original game data.

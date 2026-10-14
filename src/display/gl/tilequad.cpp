@@ -21,6 +21,8 @@
 
 #include "tilequad.h"
 
+#include <limits.h>
+
 #include "gl-util.h"
 #include "quad.h"
 
@@ -42,8 +44,11 @@ int oneDimCount(int tileDimension,
 int twoDimCount(int tileW, int tileH,
                 int destW, int destH)
 {
-	return oneDimCount(tileW, destW) *
-	       oneDimCount(tileH, destH);
+	/* Saturate: the product of two large counts wraps a 32-bit int. */
+	const long long count = (long long) oneDimCount(tileW, destW) *
+	                        (long long) oneDimCount(tileH, destH);
+
+	return count > INT_MAX ? INT_MAX : (int) count;
 }
 
 int buildH(const IntRect &sourceRect,

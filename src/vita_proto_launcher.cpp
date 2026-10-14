@@ -48,10 +48,12 @@ bool safeExternal(const std::string &path) {
 
 bool protoLauncherPick(std::string &gameFolder, int &rgssVersion,
                        std::vector<std::string> &rtps, std::string &vitaConfigPath,
-                       std::map<std::string, std::string> &rtpRoots, bool consume) {
+                       std::map<std::string, std::string> &rtpRoots, bool consume,
+                       std::string *execName) {
     rtps.clear();
     rtpRoots.clear();
     vitaConfigPath.clear();
+    if (execName) *execName = "Game";
 
     // The launcher just exited with a choice: validate and consume it.
     FILE *pick = std::fopen(kPickPath, "rb");
@@ -71,6 +73,13 @@ bool protoLauncherPick(std::string &gameFolder, int &rgssVersion,
             bool validKey = key.size() == 16 && key.find_first_not_of("0123456789abcdef") == std::string::npos;
             bool validCache = source != "cache" || (path == "zip-" + key);
             bool validPath = source == "external" ? safeExternal(path) : safeRelative(path);
+            std::string selectedExec = "Game";
+            auto executable = object.find("execName");
+            if (executable != object.end()) {
+                selectedExec = executable->second.as_string();
+                if (!safeRelative(selectedExec) || selectedExec.find('/') != std::string::npos)
+                    throw std::invalid_argument("Invalid game executable name");
+            }
             std::vector<std::string> selectedRtps;
             std::map<std::string, std::string> selectedRoots;
             auto rtp = object.find("rtp");
@@ -95,6 +104,7 @@ bool protoLauncherPick(std::string &gameFolder, int &rgssVersion,
                 rgssVersion = version;
                 rtps = std::move(selectedRtps);
                 rtpRoots = std::move(selectedRoots);
+                if (execName) *execName = selectedExec;
                 return true;
             }
         } catch (const std::exception &) {

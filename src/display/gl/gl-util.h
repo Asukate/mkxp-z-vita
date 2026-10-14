@@ -28,6 +28,11 @@
 #include "sharedstate.h"
 #include "config.h"
 #include "vita_diagnostic.h"
+#include "exception.h"
+
+#ifdef __vita__
+extern "C" unsigned int vglGetTextureAllocFailures(void);
+#endif
 
 /* Struct wrapping GLuint for some light type safety */
 #define DEF_GL_ID \
@@ -111,11 +116,33 @@ namespace TEX
 		bind(ID(0));
 	}
 
+	/* vitaGL raises no GL error when texture storage cannot be allocated; it
+	 * leaves the texture without backing. Report that as an exception before
+	 * anything samples from the texture or renders to it. */
+	static inline unsigned int storageFailures()
+	{
+#ifdef __vita__
+		return vglGetTextureAllocFailures();
+#else
+		return 0;
+#endif
+	}
+
+	static inline void checkStorage(unsigned int failuresBefore, GLsizei width, GLsizei height)
+	{
+		if (storageFailures() != failuresBefore)
+			throw Exception(Exception::MKXPError,
+			                "Graphics memory: out of memory allocating %dx%d texture",
+			                width, height);
+	}
+
 	static inline void uploadImage(GLsizei width, GLsizei height, const void *data, GLenum format)
 	{
         FrameProfile::Scope profile(FrameProfile::TextureUpload, uint64_t(width > 0 ? width : 0) * (height > 0 ? height : 0));
 		texSumNote("uploadImage", width, height);
+		const unsigned int failures = storageFailures();
 		gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+		checkStorage(failures, width, height);
 #ifdef MKXPZ_VITA_DIAGNOSTICS
 		GLint id = 0;
 		gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &id);
@@ -134,7 +161,9 @@ namespace TEX
 	{
         FrameProfile::Scope profile(FrameProfile::TextureAllocate, uint64_t(width > 0 ? width : 0) * (height > 0 ? height : 0));
 		texSumNote("allocEmpty", width, height);
+		const unsigned int failures = storageFailures();
 		gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+		checkStorage(failures, width, height);
 #ifdef MKXPZ_VITA_DIAGNOSTICS
 		GLint id = 0;
 		gl.GetIntegerv(GL_TEXTURE_BINDING_2D, &id);
@@ -338,12 +367,43 @@ struct TEXFBO
 		vitaDiagLogVglMemory("texfbo_alloc_begin");
 		TEX::bind(obj.tex);
 		vitaFboDiag("alloc_texture_bound", obj.tex.gl, obj.fbo.gl, width, height);
-		TEX::allocEmpty(width, height);
+		try
+		{
+			TEX::allocEmpty(width, height);
+		}
+		catch (const Exception &)
+		{
+			discard(obj);
+			throw;
+		}
 		vitaDiagLogMemory("texfbo_alloc_done");
 		vitaDiagLogVglMemory("texfbo_alloc_done");
 		vitaFboDiag("alloc_teximage_done", obj.tex.gl, obj.fbo.gl, width, height);
 		obj.width = width;
 		obj.height = height;
+	}
+
+	/* Replace the texture's storage with an image of the object's size. */
+	static inline void uploadImage(TEXFBO &obj, int width, int height, const void *data, GLenum format)
+	{
+		TEX::bind(obj.tex);
+		try
+		{
+			TEX::uploadImage(width, height, data, format);
+		}
+		catch (const Exception &)
+		{
+			discard(obj);
+			throw;
+		}
+	}
+
+	/* A texture without storage must never be cached, sampled or rendered to;
+	 * its framebuffer would still address the storage it had before. */
+	static inline void discard(TEXFBO &obj)
+	{
+		fini(obj);
+		clear(obj);
 	}
 
 	static inline void linkFBO(TEXFBO &obj)

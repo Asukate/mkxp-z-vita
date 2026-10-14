@@ -1,11 +1,42 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.2.1 Alpha"
-#define HARDRPG_APP_VER "00.21"
-#define HARDRPG_RELEASE_UTC "2026-10-06 19:48 UTC"
+#define HARDRPG_VERSION "0.3.0 Alpha"
+#define HARDRPG_VERSION_TAG "v0.3.0-alpha"
+#define HARDRPG_APP_VER "00.30"
+#define HARDRPG_RELEASE_UTC "2026-10-14"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.2.1 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.3.0 Alpha - " HARDRPG_RELEASE_UTC,
+    "- Faster maps, menus and battles",
+    "- Much lower graphics memory use per sprite",
+    "- Games packaged for desktop mkxp run as shipped",
+    "- Faster app boot, library scan and return from games",
+    "- Safer graphics memory recovery",
+    "- Completed Fiber resources reclaimed promptly",
+    "- Memory and battle context in crash reports",
+    "- Version shown on LiveArea before launch",
+    "- Faster ZIP metadata and preparation",
+    "- Background RTP checks in RTP settings",
+    "- Case-insensitive archive asset fallback",
+    "- RPG Maker 2000/2003 via EasyRPG",
+    "- Native performance overlay",
+    "- Reduced translucent text warning overhead",
+    "- Triangle opens settings for the highlighted game",
+    "- Per-game display, audio and metrics settings",
+    "- Automatic library scan on app boot",
+    "- Optional per-game Vita control profiles",
+    "- Physical button remapping and run toggle",
+    "- Any button can send a keyboard key",
+    "- Tap to walk, per game",
+    "- Front and rear touch zones: whole, halves, corners",
+    "- Front touch buttons and virtual D-pad",
+    "- Rear touch trackpad",
+    "- Right-stick pointer controls",
+    "- Live controls tester",
+    "- Background release notices and changelog",
+    "- Native MIDI playback with a default General MIDI bank",
+    "",
+    "0.2.1 Alpha - 2026-10-06 19:48 UTC",
     "- Native launcher added",
     "- Game search added",
     "- Engine filters added",

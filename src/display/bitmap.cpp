@@ -22,6 +22,10 @@
 #include "bitmap.h"
 #include "frame_profile.h"
 
+#include <list>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include <SDL.h>
 #include <SDL_image.h>
 #include <SDL_ttf.h>
@@ -166,6 +170,8 @@ struct BitmapPrivate;
 static void clearArm(BitmapPrivate *p);
 static void clearRead(BitmapPrivate *p);
 static void clearFullOverwrite(BitmapPrivate *p);
+static void cpuSync(BitmapPrivate *p);
+static void cpuPromote(BitmapPrivate *p);
 
 struct BitmapPrivate
 {
@@ -267,6 +273,23 @@ struct BitmapPrivate
      * Bitmap::getGLTypes can materialize before sampling. */
     mutable bool pendingClear;
     mutable Vec4 pendingColor;
+
+    /* CPU-composed bitmap (see "CPU-composed bitmaps" below). While set,
+     * these pixels are the bitmap; the texture is only a copy for sampling
+     * and there is no framebuffer. */
+    SDL_Surface *cpu;
+    bool cpuDirty;
+    IntRect cpuDirtyRect;
+    /* Bounding box of everything drawn since the last full clear; pixels
+     * outside it are known to be transparent. Lets clear() erase and
+     * re-upload only what was drawn in a large, mostly empty bitmap. */
+    IntRect cpuContent;
+    /* Positions in the lists of CPU-composed bitmaps and of read-back
+     * copies, so memory pressure can find and release them. */
+    std::list<BitmapPrivate *>::iterator cpuIter, readIter;
+    bool readListed;
+    /* Frame of the last write to the CPU pixels (see Bitmap::frameTick). */
+    unsigned cpuStamp = 0;
     
     BitmapPrivate(Bitmap *self)
     : self(self),
@@ -276,7 +299,10 @@ struct BitmapPrivate
     surface(0),
     assumingRubyGC(false),
     pendingClear(false),
-    pendingColor()
+    pendingColor(),
+    cpu(0),
+    cpuDirty(false),
+    readListed(false)
     {
         format = SDL_AllocFormat(SDL_PIXELFORMAT_ABGR8888);
         
@@ -299,11 +325,18 @@ struct BitmapPrivate
     ~BitmapPrivate()
     {
         prepareCon.disconnect();
+        dropReadback();
+        releaseCpuPixels();
         SDL_FreeFormat(format);
         pixman_region_fini(&tainted);
     }
     
+    void releaseCpuPixels();
+    void dropReadback();
+
+    /* Callers render into or blit from the result: GPU storage is required. */
     TEXFBO &getGLTypes() {
+        cpuPromote(this);
         return (animation.enabled) ? animation.currentFrame() : gl;
     }
     
@@ -380,6 +413,7 @@ struct BitmapPrivate
         }
         /* Sampling this bitmap as a texture observes its pixels. */
         clearRead(this);
+        cpuSync(this);
         TEX::bind(gl.tex);
         if (selfLores && substituteLoresSize) {
             shader.setTexSize(Vec2i(selfLores->width(), selfLores->height()));
@@ -391,6 +425,7 @@ struct BitmapPrivate
     
     void bindFBO()
     {
+        cpuPromote(this);
         FBO::bind((animation.enabled) ? animation.currentFrame().fbo : gl.fbo);
     }
     
@@ -488,10 +523,7 @@ struct BitmapPrivate
     void onModified(bool freeSurface = true)
     {
         if (surface && freeSurface)
-        {
-            SDL_FreeSurface(surface);
-            surface = 0;
-        }
+            dropReadback();
         
         self->modified();
     }
@@ -594,6 +626,487 @@ static void clearFullOverwrite(BitmapPrivate *p)
     {
         p->pendingClear = false;
         FrameProfile::Scope fused(FrameProfile::ClearNextDraw);
+    }
+}
+
+
+/* ---- CPU-composed bitmaps ------------------------------------------------
+ *
+ * A bitmap made with Bitmap.new(width, height) starts as plain pixels in
+ * memory. Fills, clears, text, pixel access and blits whose source pixels
+ * are available in memory are done on the CPU, and the result is uploaded
+ * to a texture once, when something draws the bitmap.
+ *
+ * On the Vita every write to a GPU bitmap is its own render-target pass, and
+ * text adds a texture upload the GPU has to be flushed for. A window refresh
+ * with a hundred draw_text calls spent about 220 ms waiting for that; here
+ * it is a hundred small memory blends and one upload.
+ *
+ * The first operation without a CPU version (hue change, blur, a blit the
+ * GPU must do, direct use as a render target) hands the bitmap to the GPU
+ * for good; after that it behaves like any loaded image. */
+#ifdef __vita__
+#define MKXPZ_CPU_BITMAPS 1
+#endif
+
+/* CPU pixels come from the same heap as Ruby and the game's data, so the
+ * total is capped; past it, new bitmaps start on the GPU as before. */
+static size_t cpuBitmapBytes = 0;
+static const size_t cpuBitmapBudget = 56u * 1024 * 1024;
+static std::list<BitmapPrivate *> cpuBitmapList;
+static unsigned cpuFrame = 0;
+/* The part of cpuBitmapBytes that sits in the C heap: the SDL layer gives
+ * buffers of 128 KiB and more a kernel memory block of their own. */
+static size_t cpuHeapBytes = 0;
+static const size_t cpuHeapResident = 128u * 1024;
+static inline size_t cpuHeapShare(size_t bytes) { return bytes < cpuHeapResident ? bytes : 0; }
+
+/* Read-back copies of GPU bitmaps (get_pixel, blit sources), oldest first.
+ * They can always be made again, so they are held to a budget and dropped
+ * first when memory runs short. */
+static size_t readbackBytes = 0;
+static const size_t readbackBudget = 12u * 1024 * 1024;
+static std::list<BitmapPrivate *> readbackList;
+
+void BitmapPrivate::dropReadback()
+{
+    if (!surface)
+        return;
+    if (readListed)
+    {
+        readbackBytes -= (size_t)surface->w * surface->h * 4;
+        readbackList.erase(readIter);
+        readListed = false;
+    }
+    SDL_FreeSurface(surface);
+    surface = 0;
+}
+
+static void dropAllReadbacks()
+{
+    while (!readbackList.empty())
+        readbackList.front()->dropReadback();
+}
+
+static bool cpuBitmapEligible(int width, int height)
+{
+#ifdef MKXPZ_CPU_BITMAPS
+    return !shState->config().enableHires &&
+           cpuBitmapBytes + (size_t)width * height * 4 <= cpuBitmapBudget &&
+           (int64_t)width * height <= 1024 * 1024 &&
+           width <= glState.caps.maxTexSize && height <= glState.caps.maxTexSize;
+#else
+    (void)width; (void)height;
+    return false;
+#endif
+}
+
+void BitmapPrivate::releaseCpuPixels()
+{
+    if (!cpu)
+        return;
+    cpuBitmapBytes -= (size_t)cpu->w * cpu->h * 4;
+    cpuHeapBytes -= cpuHeapShare((size_t)cpu->w * cpu->h * 4);
+    cpuBitmapList.erase(cpuIter);
+    SDL_FreeSurface(cpu);
+    cpu = 0;
+}
+
+static IntRect cpuClip(const IntRect &rect, int width, int height)
+{
+    IntRect r = normalizedRect(rect);
+    const int x0 = std::max(r.x, 0), y0 = std::max(r.y, 0);
+    const int x1 = std::min<int64_t>((int64_t)r.x + r.w, width);
+    const int y1 = std::min<int64_t>((int64_t)r.y + r.h, height);
+    return IntRect(x0, y0, std::max(x1 - x0, 0), std::max(y1 - y0, 0));
+}
+
+/* rect must already lie inside the bitmap. */
+static void cpuMarkDirty(BitmapPrivate *p, const IntRect &rect)
+{
+    if (rect.w <= 0 || rect.h <= 0)
+        return;
+    p->cpuStamp = cpuFrame;
+    if (!p->cpuDirty)
+    {
+        p->cpuDirty = true;
+        p->cpuDirtyRect = rect;
+        return;
+    }
+    const IntRect &d = p->cpuDirtyRect;
+    const int x0 = std::min(d.x, rect.x), y0 = std::min(d.y, rect.y);
+    const int x1 = std::max(d.x + d.w, rect.x + rect.w);
+    const int y1 = std::max(d.y + d.h, rect.y + rect.h);
+    p->cpuDirtyRect = IntRect(x0, y0, x1 - x0, y1 - y0);
+}
+
+/* A write that may leave visible pixels in rect (already inside the bitmap). */
+static void cpuTouch(BitmapPrivate *p, const IntRect &rect)
+{
+    if (rect.w <= 0 || rect.h <= 0)
+        return;
+    cpuMarkDirty(p, rect);
+    IntRect &c = p->cpuContent;
+    if (c.w <= 0 || c.h <= 0)
+    {
+        c = rect;
+        return;
+    }
+    const int x0 = std::min(c.x, rect.x), y0 = std::min(c.y, rect.y);
+    const int x1 = std::max(c.x + c.w, rect.x + rect.w);
+    const int y1 = std::max(c.y + c.h, rect.y + rect.h);
+    c = IntRect(x0, y0, x1 - x0, y1 - y0);
+}
+
+/* The texture must be bound. */
+static void cpuUpload(BitmapPrivate *p, const IntRect &rect)
+{
+    SDL_Surface *s = p->cpu;
+    const uint8_t *first = (const uint8_t *)s->pixels + (size_t)rect.y * s->pitch;
+    if (rect.x == 0 && rect.w == s->w && s->pitch == s->w * 4)
+    {
+        TEX::uploadSubImage(0, rect.y, rect.w, rect.h, first, GL_RGBA);
+        return;
+    }
+    static std::vector<uint8_t> rows;
+    rows.resize((size_t)rect.w * rect.h * 4);
+    for (int y = 0; y < rect.h; ++y)
+        memcpy(&rows[(size_t)y * rect.w * 4], first + (size_t)y * s->pitch + (size_t)rect.x * 4,
+               (size_t)rect.w * 4);
+    TEX::uploadSubImage(rect.x, rect.y, rect.w, rect.h, rows.data(), GL_RGBA);
+}
+
+/* Bring the sampling texture up to date; called just before it is bound. */
+static void cpuSync(BitmapPrivate *p)
+{
+    if (!p->cpu || (!p->cpuDirty && p->gl.tex != TEX::ID(0)))
+        return;
+    if (p->gl.tex == TEX::ID(0))
+    {
+        p->gl.tex = TEX::gen();
+        TEX::bind(p->gl.tex);
+        TEX::setRepeat(false);
+        TEX::setSmooth(false);
+        try
+        {
+            try
+            {
+                TEX::allocEmpty(p->gl.width, p->gl.height);
+            }
+            catch (const Exception &)
+            {
+                /* Pooled render targets have no owner; give their storage
+                 * back and try once more. */
+                shState->texPool().clearCache();
+                TEX::bind(p->gl.tex);
+                TEX::allocEmpty(p->gl.width, p->gl.height);
+            }
+        }
+        catch (const Exception &)
+        {
+            TEX::del(p->gl.tex);
+            p->gl.tex = TEX::ID(0);
+            throw;
+        }
+        p->cpuDirty = true;
+        p->cpuDirtyRect = IntRect(0, 0, p->cpu->w, p->cpu->h);
+    }
+    else
+        TEX::bind(p->gl.tex);
+    cpuUpload(p, p->cpuDirtyRect);
+    p->cpuDirty = false;
+}
+
+/* vitaGL moves a texture to new storage when pixels are uploaded while the
+ * GPU may still read the old ones, but a framebuffer keeps the address it
+ * was attached with: later draws into the bitmap would land in the released
+ * storage and never show. Attach again after uploading into a render
+ * target. Same size, so the render target itself is kept. */
+static void relinkAfterUpload(TEXFBO &target)
+{
+#ifdef __vita__
+    if (target.fbo == FBO::ID(0) || target.tex == TEX::ID(0))
+        return;
+    const FBO::ID bound = FBO::boundFramebufferID;
+    TEXFBO::linkFBO(target);
+    FBO::bind(bound);
+#else
+    (void)target;
+#endif
+}
+
+/* Hand the bitmap to the GPU: from here on it is an ordinary render target. */
+static void cpuPromote(BitmapPrivate *p)
+{
+    if (!p->cpu)
+        return;
+    SDL_Surface *pixels = p->cpu;
+    /* This can run in the middle of a draw pass (a blit that samples this
+     * bitmap). Creating a render target binds its framebuffer, so put the
+     * caller's target back afterwards. */
+    const FBO::ID bound = FBO::boundFramebufferID;
+    /* May throw; the bitmap is still intact and CPU-composed then. */
+    TEXFBO full = shState->texPool().request(pixels->w, pixels->h);
+    FBO::bind(bound);
+    if (p->gl.tex != TEX::ID(0))
+        TEX::del(p->gl.tex);
+    p->gl = full;
+    p->gl.selfHires = nullptr;
+    p->cpuDirty = false;
+    TEX::bind(p->gl.tex);
+    TEX::uploadSubImage(0, 0, pixels->w, pixels->h, pixels->pixels, GL_RGBA);
+    relinkAfterUpload(p->gl);
+    p->releaseCpuPixels();
+    /* Which pixels are still transparent is no longer tracked. */
+    p->clearTaintedArea();
+    p->addTaintedArea(IntRect(0, 0, p->gl.width, p->gl.height));
+}
+
+static inline uint32_t cpuPack(const Vec4 &c)
+{
+    const uint32_t r = (uint32_t)lround(clamp<float>(c.x, 0, 1) * 255.0f);
+    const uint32_t g = (uint32_t)lround(clamp<float>(c.y, 0, 1) * 255.0f);
+    const uint32_t b = (uint32_t)lround(clamp<float>(c.z, 0, 1) * 255.0f);
+    const uint32_t a = (uint32_t)lround(clamp<float>(c.w, 0, 1) * 255.0f);
+    return r | (g << 8) | (b << 16) | (a << 24);
+}
+
+/* rect must already lie inside the surface. */
+static void cpuFill(SDL_Surface *s, const IntRect &rect, uint32_t pixel)
+{
+    for (int y = rect.y; y < rect.y + rect.h; ++y)
+        std::fill_n((uint32_t *)((uint8_t *)s->pixels + (size_t)y * s->pitch) + rect.x, rect.w, pixel);
+}
+
+/* The colour ramp is defined on the requested rect and sampled at pixel
+ * centres, like the interpolated quad the GPU path draws. */
+static void cpuGradient(SDL_Surface *s, const IntRect &rect, const IntRect &clip,
+                        const Vec4 &c1, const Vec4 &c2, bool vertical)
+{
+    const int extent = vertical ? rect.h : rect.w;
+    for (int y = clip.y; y < clip.y + clip.h; ++y)
+    {
+        uint32_t *row = (uint32_t *)((uint8_t *)s->pixels + (size_t)y * s->pitch);
+        for (int x = clip.x; x < clip.x + clip.w; ++x)
+        {
+            const float t = ((vertical ? y - rect.y : x - rect.x) + 0.5f) / extent;
+            row[x] = cpuPack(Vec4(c1.x + (c2.x - c1.x) * t, c1.y + (c2.y - c1.y) * t,
+                                  c1.z + (c2.z - c1.z) * t, c1.w + (c2.w - c1.w) * t));
+        }
+    }
+}
+
+/* 16.16 reciprocals of 1..255, so the blend needs no division (the Cortex-A9
+ * has no integer divide instruction). */
+static const uint32_t *cpuReciprocals()
+{
+    static uint32_t table[256];
+    if (!table[1])
+        for (uint32_t i = 1; i < 256; ++i)
+            table[i] = (65536 + i / 2) / i;
+    return table;
+}
+
+/* Source over destination for straight (not premultiplied) RGBA, the same
+ * result as the bitmapBlit shader: a = sa + da(1 - sa),
+ * rgb = (src*sa + dst*da(1 - sa)) / a. */
+static inline uint32_t cpuOver(uint32_t d, uint32_t s, uint32_t opacity, const uint32_t *recip)
+{
+    uint32_t sa = s >> 24;
+    if (opacity != 255)
+        sa = (sa * opacity + 127) / 255;
+    if (sa == 0)
+        return d;
+    const uint32_t da = d >> 24;
+    if (sa == 255 || da == 0)
+        return (s & 0x00FFFFFF) | (sa << 24);
+    const uint32_t co2 = (da * (255 - sa) + 127) / 255;
+    const uint32_t ra = sa + co2;
+    const uint32_t inv = recip[ra];
+    uint32_t out = ra << 24;
+    for (int shift = 0; shift < 24; shift += 8)
+    {
+        const uint32_t v = ((((s >> shift) & 0xFF) * sa + ((d >> shift) & 0xFF) * co2) * inv + 0x8000) >> 16;
+        out |= (v > 255 ? 255 : v) << shift;
+    }
+    return out;
+}
+
+static inline uint32_t cpuLerp(uint32_t a, uint32_t b, uint32_t f)
+{
+    /* f is 0..256 */
+    const uint32_t rb = ((a & 0x00FF00FF) * (256 - f) + (b & 0x00FF00FF) * f) >> 8;
+    const uint32_t ga = (((a >> 8) & 0x00FF00FF) * (256 - f) + ((b >> 8) & 0x00FF00FF) * f);
+    return (rb & 0x00FF00FF) | (ga & 0xFF00FF00);
+}
+
+/* A copy of a GPU bitmap's pixels in memory, kept until the bitmap changes.
+ * The caller has materialized any pending clear. */
+static bool readbackSurface(BitmapPrivate *p)
+{
+    if (p->surface)
+    {
+        if (p->readListed)
+            readbackList.splice(readbackList.end(), readbackList, p->readIter);
+        return true;
+    }
+    p->allocSurface();
+    if (!p->surface)
+    {
+        dropAllReadbacks();
+        p->allocSurface();
+        if (!p->surface)
+            return false;
+    }
+    readbackBytes += (size_t)p->surface->w * p->surface->h * 4;
+    p->readIter = readbackList.insert(readbackList.end(), p);
+    p->readListed = true;
+    while (readbackBytes > readbackBudget && readbackList.front() != p)
+        readbackList.front()->dropReadback();
+
+#ifdef __vita__
+        /*
+         * vitaGL keeps ordinary RGBA8 texture storage in CPU-visible mapped
+         * memory.  Reading that storage directly is both cheaper and safer
+         * than glReadPixels on Vita: the latter can return zeroes for an FBO
+         * texture (breaking VX Ace's windowskin colour sampling) and has also
+         * faulted the physical Vita GPU in diagnostic captures.
+         */
+        glFinish();
+        const Uint8 *texturePixels = static_cast<const Uint8 *>(
+            vglGetTexDataPointerByID(p->gl.tex.gl));
+        if (texturePixels)
+        {
+            const size_t sourcePitch =
+                static_cast<size_t>((p->gl.width + 7) & ~7) * 4;
+            const size_t copyWidth = static_cast<size_t>(p->gl.width) * 4;
+            Uint8 *surfacePixels = static_cast<Uint8 *>(p->surface->pixels);
+            for (int row = 0; row < p->gl.height; ++row)
+                std::memcpy(surfacePixels + row * p->surface->pitch,
+                            texturePixels + row * sourcePitch, copyWidth);
+        }
+        else
+        {
+            vitaDiagLog("BITMAP", "get_pixel_texture_data_missing tex=%u size=%dx%d",
+                        p->gl.tex.gl, p->gl.width, p->gl.height);
+            FBO::bind(p->gl.fbo);
+            glState.viewport.pushSet(IntRect(0, 0, p->gl.width, p->gl.height));
+            gl.ReadPixels(0, 0, p->gl.width, p->gl.height, GL_RGBA, GL_UNSIGNED_BYTE,
+                          p->surface->pixels);
+            glState.viewport.pop();
+        }
+#else
+        FBO::bind(p->gl.fbo);
+        glState.viewport.pushSet(IntRect(0, 0, p->gl.width, p->gl.height));
+        gl.ReadPixels(0, 0, p->gl.width, p->gl.height, GL_RGBA, GL_UNSIGNED_BYTE, p->surface->pixels);
+        glState.viewport.pop();
+#endif
+    return true;
+}
+
+/* Pixels of a blit source in memory, or null when only the GPU can do the
+ * blit. Loaded images are read back once and the copy is kept until they
+ * change; very large ones are left to the GPU. */
+static SDL_Surface *cpuSourcePixels(const Bitmap &source, BitmapPrivate *sp)
+{
+    if (source.megaSurface())
+        return source.megaSurface();
+    if (source.isAnimated() || source.hasHires())
+        return 0;
+    if (sp->cpu)
+        return sp->cpu;
+    if ((int64_t)sp->gl.width * sp->gl.height > 2048 * 1024)
+        return 0;
+    clearRead(sp);
+    return readbackSurface(sp) ? sp->surface : 0;
+}
+
+/* Blend src[sourceRect] over dst[destRect]. Both rects have positive size
+ * and were already shrunk to their bitmaps by the caller; they are clipped
+ * again here so a rounding step can never index outside either surface. */
+static void cpuBlit(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
+                    const IntRect &sourceRect, int opacity, bool smooth)
+{
+    const uint32_t *recip = cpuReciprocals();
+    const int x0 = std::max(destRect.x, 0), y0 = std::max(destRect.y, 0);
+    const int x1 = std::min(destRect.x + destRect.w, dst->w);
+    const int y1 = std::min(destRect.y + destRect.h, dst->h);
+    if (x1 <= x0 || y1 <= y0 || src->w <= 0 || src->h <= 0)
+        return;
+    const int sx0 = clamp(sourceRect.x, 0, src->w - 1), sy0 = clamp(sourceRect.y, 0, src->h - 1);
+    const int sx1 = clamp(sourceRect.x + sourceRect.w - 1, sx0, src->w - 1);
+    const int sy1 = clamp(sourceRect.y + sourceRect.h - 1, sy0, src->h - 1);
+    const uint8_t *sp = (const uint8_t *)src->pixels;
+    uint8_t *dp = (uint8_t *)dst->pixels;
+
+    if (sourceRect.w == destRect.w && sourceRect.h == destRect.h)
+    {
+        /* Clip once against the source as well, then run plain rows. */
+        const int offX = sourceRect.x - destRect.x, offY = sourceRect.y - destRect.y;
+        const int cx0 = std::max(x0, -offX), cx1 = std::min(x1, src->w - offX);
+        const int cy0 = std::max(y0, -offY), cy1 = std::min(y1, src->h - offY);
+        const int count = cx1 - cx0;
+        if (count <= 0)
+            return;
+        for (int y = cy0; y < cy1; ++y)
+        {
+            const uint32_t *in = (const uint32_t *)(sp + (size_t)(y + offY) * src->pitch) + cx0 + offX;
+            uint32_t *out = (uint32_t *)(dp + (size_t)y * dst->pitch) + cx0;
+            if (opacity == 255)
+            {
+                for (int i = 0; i < count; ++i)
+                {
+                    const uint32_t s = in[i];
+                    const uint32_t sa = s >> 24;
+                    if (sa == 0)
+                        continue;
+                    /* Opaque source, or nothing underneath: a plain copy. */
+                    if (sa == 255 || (out[i] >> 24) == 0)
+                        out[i] = s;
+                    else
+                        out[i] = cpuOver(out[i], s, 255, recip);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < count; ++i)
+                    if (in[i] >> 24)
+                        out[i] = cpuOver(out[i], in[i], opacity, recip);
+            }
+        }
+        return;
+    }
+
+    /* Scaled: map destination pixel centres into the source rect (16.16). */
+    const int64_t stepX = ((int64_t)sourceRect.w << 16) / destRect.w;
+    const int64_t stepY = ((int64_t)sourceRect.h << 16) / destRect.h;
+    for (int y = y0; y < y1; ++y)
+    {
+        int64_t v = (int64_t)(y - destRect.y) * stepY + stepY / 2 - (smooth ? 0x8000 : 0);
+        if (v < 0) v = 0;
+        int sy = sourceRect.y + (int)(v >> 16);
+        const uint32_t fy = smooth ? (uint32_t)((v & 0xFFFF) >> 8) : 0;
+        sy = clamp(sy, sy0, sy1);
+        const int syn = std::min(sy + 1, sy1);
+        const uint32_t *srow = (const uint32_t *)(sp + (size_t)sy * src->pitch);
+        const uint32_t *srown = (const uint32_t *)(sp + (size_t)syn * src->pitch);
+        uint32_t *drow = (uint32_t *)(dp + (size_t)y * dst->pitch);
+        for (int x = x0; x < x1; ++x)
+        {
+            int64_t u = (int64_t)(x - destRect.x) * stepX + stepX / 2 - (smooth ? 0x8000 : 0);
+            if (u < 0) u = 0;
+            int sx = clamp(sourceRect.x + (int)(u >> 16), sx0, sx1);
+            uint32_t s;
+            if (smooth)
+            {
+                const uint32_t fx = (uint32_t)((u & 0xFFFF) >> 8);
+                const int sxn = std::min(sx + 1, sx1);
+                s = cpuLerp(cpuLerp(srow[sx], srow[sxn], fx), cpuLerp(srown[sx], srown[sxn], fx), fy);
+            }
+            else
+                s = srow[sx];
+            drow[x] = cpuOver(drow[x], s, opacity, recip);
+        }
     }
 }
 
@@ -763,8 +1276,7 @@ Bitmap::Bitmap(const char *filename)
                 throw e;
             }
             
-            TEX::bind(texfbo.tex);
-            TEX::uploadImage(handler.gif->width, handler.gif->height, handler.gif->frame_image, GL_RGBA);
+            TEXFBO::uploadImage(texfbo, handler.gif->width, handler.gif->height, handler.gif->frame_image, GL_RGBA);
             gif_finalise(handler.gif);
             delete handler.gif;
             delete handler.gif_data;
@@ -823,8 +1335,7 @@ Bitmap::Bitmap(const char *filename)
                 throw e;
             }
             
-            TEX::bind(texfbo.tex);
-            TEX::uploadImage(p->animation.width, p->animation.height, handler.gif->frame_image, GL_RGBA);
+            TEXFBO::uploadImage(texfbo, p->animation.width, p->animation.height, handler.gif->frame_image, GL_RGBA);
             p->animation.frames.push_back(texfbo);
         }
         
@@ -866,6 +1377,30 @@ Bitmap::Bitmap(int width, int height, bool isHires)
         int hiresHeight = (int)lround(scalingFactor * height);
         hiresBitmap = new Bitmap(hiresWidth, hiresHeight, true);
         hiresBitmap->setLores(this);
+    }
+
+    if (!hiresBitmap && !isHires && cpuBitmapEligible(width, height))
+    {
+        BitmapPrivate *composed = new BitmapPrivate(this);
+        /* SDL_CreateRGBSurface zero-fills: the bitmap starts transparent. */
+        composed->cpu = SDL_CreateRGBSurface(0, width, height, composed->format->BitsPerPixel,
+                                             composed->format->Rmask, composed->format->Gmask,
+                                             composed->format->Bmask, composed->format->Amask);
+        if (composed->cpu)
+        {
+            p = composed;
+            cpuBitmapBytes += (size_t)width * height * 4;
+            cpuHeapBytes += cpuHeapShare((size_t)width * height * 4);
+            p->cpuIter = cpuBitmapList.insert(cpuBitmapList.end(), p);
+            p->cpuStamp = cpuFrame;
+            p->gl.width = width;
+            p->gl.height = height;
+            return;
+        }
+        /* No heap for the pixels: release what can be made again and let
+         * the GPU hold this bitmap, as it did before. */
+        delete composed;
+        dropAllReadbacks();
     }
 
     TEXFBO tex;
@@ -918,6 +1453,7 @@ Bitmap::Bitmap(void *pixeldata, int width, int height)
         try
         {
             tex = shState->texPool().request(surface->w, surface->h);
+            TEXFBO::uploadImage(tex, tex.width, tex.height, surface->pixels, GL_RGBA);
         }
         catch (const Exception &e)
         {
@@ -930,8 +1466,6 @@ Bitmap::Bitmap(void *pixeldata, int width, int height)
         p->gl = tex;
         vitaDiagLog("BITMAP", "ctor gl assigned");
         
-        TEX::bind(p->gl.tex);
-        TEX::uploadImage(p->gl.width, p->gl.height, surface->pixels, GL_RGBA);
         vitaDiagLog("BITMAP", "ctor upload done");
         
         SDL_FreeSurface(surface);
@@ -953,6 +1487,33 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
     }
 
     p = new BitmapPrivate(this);
+
+    if (!other.isAnimated() && other.p->cpu)
+    {
+        /* A copy of a CPU-composed bitmap is CPU-composed too. */
+        SDL_Surface *from = other.p->cpu;
+        if (cpuBitmapEligible(from->w, from->h))
+            p->cpu = SDL_CreateRGBSurface(0, from->w, from->h, p->format->BitsPerPixel,
+                                          p->format->Rmask, p->format->Gmask,
+                                          p->format->Bmask, p->format->Amask);
+        if (p->cpu)
+        {
+            for (int y = 0; y < from->h; ++y)
+                memcpy((uint8_t *)p->cpu->pixels + (size_t)y * p->cpu->pitch,
+                       (const uint8_t *)from->pixels + (size_t)y * from->pitch, (size_t)from->w * 4);
+            cpuBitmapBytes += (size_t)from->w * from->h * 4;
+            cpuHeapBytes += cpuHeapShare((size_t)from->w * from->h * 4);
+            p->cpuIter = cpuBitmapList.insert(cpuBitmapList.end(), p);
+            p->cpuStamp = cpuFrame;
+            p->gl.width = from->w;
+            p->gl.height = from->h;
+            p->cpuContent = other.p->cpuContent;
+            p->addTaintedArea(rect());
+            return;
+        }
+        /* No room on the CPU side: copy on the GPU, as before. */
+        cpuPromote(other.p);
+    }
     
     // TODO: Clean me up
     if (!other.isAnimated() || frame >= -1) {
@@ -1097,6 +1658,7 @@ void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool for
         try
         {
             tex = shState->texPool().request(imgSurf->w, imgSurf->h);
+            TEXFBO::uploadImage(tex, tex.width, tex.height, imgSurf->pixels, GL_RGBA);
         }
         catch (const Exception &e)
         {
@@ -1112,9 +1674,6 @@ void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool for
         if (p->selfHires != nullptr) {
             p->gl.selfHires = &p->selfHires->getGLTypes();
         }
-        
-        TEX::bind(p->gl.tex);
-        TEX::uploadImage(p->gl.width, p->gl.height, imgSurf->pixels, GL_RGBA);
         
         SDL_FreeSurface(imgSurf);
     }
@@ -1386,7 +1945,30 @@ void Bitmap::stretchBlt(IntRect destRect,
     if(shrinkRects(sourceRect.y, sourceRect.h, source.height(), destRect.y, destRect.h, height()))
         return;
     
+    if (p->cpu)
+    {
+        SDL_Surface *pixels = 0;
+        if (mode == NORMAL && source.p != p && sourceRect.w > 0 && sourceRect.h > 0 &&
+            destRect.w > 0 && destRect.h > 0)
+            pixels = cpuSourcePixels(source, source.p);
+        if (pixels)
+        {
+            cpuBlit(p->cpu, destRect, pixels, sourceRect, opacity,
+                    smooth && !(sourceRect.w == destRect.w && sourceRect.h == destRect.h));
+            const IntRect changed = cpuClip(destRect, p->cpu->w, p->cpu->h);
+            p->addTaintedArea(changed);
+            cpuTouch(p, changed);
+            p->onModified();
+            return;
+        }
+        cpuPromote(p);
+    }
+
     SDL_Surface *srcSurf = source.megaSurface();
+    /* A CPU-composed source drawn into a GPU bitmap is uploaded from its
+     * pixels, like text and mega surfaces, and stays CPU-composed. */
+    if (!srcSurf && !source.isAnimated() && source.p->cpu)
+        srcSurf = source.p->cpu;
     SDL_Surface *blitTemp = 0;
     /* Source pixels are observed; dest is overwritten by the blit below,
      * so the pending clear fuses with it. Source first so a self-blit
@@ -1551,6 +2133,7 @@ void Bitmap::stretchBlt(IntRect destRect,
                     TEX::uploadSubImage(destRect.x, destRect.y,
                                         destRect.w, destRect.h,
                                         srcSurf->pixels, GL_RGBA);
+                    relinkAfterUpload(getGLTypes());
                     vitaDiagLog("DEBUG-aoni", "direct-upload tex=%dx%d rect=%d,%d %dx%d upbar=%u upbar_us=%llu",
                                 p->gl.width, p->gl.height,
                                 destRect.x, destRect.y, destRect.w, destRect.h,
@@ -1746,6 +2329,19 @@ void Bitmap::fillRect(const IntRect &rect, const Vec4 &color)
         p->selfHires->fillRect(IntRect(destX, destY, destWidth, destHeight), color);
     }
 
+    if (p->cpu)
+    {
+        const IntRect clip = cpuClip(rect, p->cpu->w, p->cpu->h);
+        cpuFill(p->cpu, clip, cpuPack(color));
+        if (color.w == 0)
+            p->substractTaintedArea(clip);
+        else
+            p->addTaintedArea(clip);
+        cpuTouch(p, clip);
+        p->onModified();
+        return;
+    }
+
     /* Clear untouched pixels before painting this partial rectangle. */
     { FrameProfile::Scope partial(FrameProfile::ClearPartial); }
     clearBeforePartialWrite(p);
@@ -1787,6 +2383,18 @@ void Bitmap::gradientFillRect(const IntRect &rect,
         destHeight = rect.h * p->selfHires->height() / height();
 
         p->selfHires->gradientFillRect(IntRect(destX, destY, destWidth, destHeight), color1, color2, vertical);
+    }
+
+    if (p->cpu)
+    {
+        const IntRect whole = normalizedRect(rect);
+        const IntRect clip = cpuClip(rect, p->cpu->w, p->cpu->h);
+        if (clip.w > 0 && clip.h > 0)
+            cpuGradient(p->cpu, whole, clip, color1, color2, vertical);
+        p->addTaintedArea(clip);
+        cpuTouch(p, clip);
+        p->onModified();
+        return;
     }
 
     /* Clear untouched pixels before painting this partial gradient. */
@@ -1849,6 +2457,15 @@ void Bitmap::clearRect(const IntRect &rect)
         p->selfHires->clearRect(IntRect(destX, destY, destWidth, destHeight));
     }
 
+    if (p->cpu)
+    {
+        const IntRect clip = cpuClip(rect, p->cpu->w, p->cpu->h);
+        cpuFill(p->cpu, clip, 0);
+        cpuMarkDirty(p, clip);
+        p->onModified();
+        return;
+    }
+
     /* The partial scissored clear cannot replace a pending full clear. */
     { FrameProfile::Scope partial(FrameProfile::ClearPartial); }
     clearBeforePartialWrite(p);
@@ -1861,6 +2478,8 @@ void Bitmap::clearRect(const IntRect &rect)
 void Bitmap::blur()
 {
     guardDisposed();
+    /* No CPU version of this operation. */
+    cpuPromote(p);
     
     GUARD_MEGA;
     GUARD_ANIMATED;
@@ -1916,6 +2535,8 @@ void Bitmap::blur()
 void Bitmap::radialBlur(int angle, int divisions)
 {
     guardDisposed();
+    /* No CPU version of this operation. */
+    cpuPromote(p);
     
     GUARD_MEGA;
     GUARD_ANIMATED;
@@ -2028,6 +2649,21 @@ void Bitmap::clear()
         p->selfHires->clear();
     }
 
+    if (p->cpu)
+    {
+        /* Only what was drawn can be visible; erase and re-upload just that. */
+        const IntRect drawn = p->cpuContent;
+        if (drawn.w > 0 && drawn.h > 0)
+        {
+            cpuFill(p->cpu, drawn, 0);
+            cpuMarkDirty(p, drawn);
+        }
+        p->cpuContent = IntRect(0, 0, 0, 0);
+        p->clearTaintedArea();
+        p->onModified();
+        return;
+    }
+
     /* Deferred: record intent only. Tainted bookkeeping and modification
      * notification stay immediate so dimensions, disposal checks and
      * observers behave as before; no GPU work happens here. */
@@ -2098,52 +2734,22 @@ Color Bitmap::getPixel(int x, int y) const
     if (x < 0 || y < 0 || x >= width() || y >= height())
         return Vec4();
 
+    if (p->cpu)
+    {
+        const uint32_t pixel = getPixelAt(p->cpu, p->format, x, y);
+        return Color((pixel >> p->format->Rshift) & 0xFF,
+                     (pixel >> p->format->Gshift) & 0xFF,
+                     (pixel >> p->format->Bshift) & 0xFF,
+                     (pixel >> p->format->Ashift) & 0xFF);
+    }
+
     /* Pixel observation; materialize a pending clear first. */
     clearRead(p);
 
-    if (!p->surface)
-    {
-        p->allocSurface();
+    if (!readbackSurface(p))
+        throw Exception(Exception::MKXPError, "Bitmap#get_pixel: out of memory copying %dx%d pixels",
+                        p->gl.width, p->gl.height);
 
-#ifdef __vita__
-        /*
-         * vitaGL keeps ordinary RGBA8 texture storage in CPU-visible mapped
-         * memory.  Reading that storage directly is both cheaper and safer
-         * than glReadPixels on Vita: the latter can return zeroes for an FBO
-         * texture (breaking VX Ace's windowskin colour sampling) and has also
-         * faulted the physical Vita GPU in diagnostic captures.
-         */
-        glFinish();
-        const Uint8 *texturePixels = static_cast<const Uint8 *>(
-            vglGetTexDataPointerByID(p->gl.tex.gl));
-        if (texturePixels)
-        {
-            const size_t sourcePitch =
-                static_cast<size_t>((width() + 7) & ~7) * 4;
-            const size_t copyWidth = static_cast<size_t>(width()) * 4;
-            Uint8 *surfacePixels = static_cast<Uint8 *>(p->surface->pixels);
-            for (int row = 0; row < height(); ++row)
-                std::memcpy(surfacePixels + row * p->surface->pitch,
-                            texturePixels + row * sourcePitch, copyWidth);
-        }
-        else
-        {
-            vitaDiagLog("BITMAP", "get_pixel_texture_data_missing tex=%u size=%dx%d",
-                        p->gl.tex.gl, width(), height());
-            FBO::bind(p->gl.fbo);
-            glState.viewport.pushSet(IntRect(0, 0, width(), height()));
-            gl.ReadPixels(0, 0, width(), height(), GL_RGBA, GL_UNSIGNED_BYTE,
-                          p->surface->pixels);
-            glState.viewport.pop();
-        }
-#else
-        FBO::bind(p->gl.fbo);
-        glState.viewport.pushSet(IntRect(0, 0, width(), height()));
-        gl.ReadPixels(0, 0, width(), height(), GL_RGBA, GL_UNSIGNED_BYTE, p->surface->pixels);
-        glState.viewport.pop();
-#endif
-    }
-    
     uint32_t pixel = getPixelAt(p->surface, p->format, x, y);
     
     return Color((pixel >> p->format->Rshift) & 0xFF,
@@ -2187,8 +2793,20 @@ void Bitmap::setPixel(int x, int y, const Color &color)
         (uint8_t) clamp<double>(color.alpha, 0, 255)
     };
     
+    if (p->cpu)
+    {
+        if (x < 0 || y < 0 || x >= p->cpu->w || y >= p->cpu->h)
+            return;
+        getPixelAt(p->cpu, p->format, x, y) = SDL_MapRGBA(p->format, pixel[0], pixel[1], pixel[2], pixel[3]);
+        p->addTaintedArea(IntRect(x, y, 1, 1));
+        cpuTouch(p, IntRect(x, y, 1, 1));
+        p->onModified(false);
+        return;
+    }
+
     TEX::bind(p->gl.tex);
     TEX::uploadSubImage(x, y, 1, 1, &pixel, GL_RGBA);
+    relinkAfterUpload(p->gl);
     
     p->addTaintedArea(IntRect(x, y, 1, 1));
     
@@ -2209,6 +2827,13 @@ bool Bitmap::getRaw(void *output, int output_size)
     if (output_size != width()*height()*4) return false;
     
     guardDisposed();
+    if (p->cpu)
+    {
+        for (int y = 0; y < p->cpu->h; ++y)
+            memcpy((uint8_t *)output + (size_t)y * p->cpu->w * 4,
+                   (const uint8_t *)p->cpu->pixels + (size_t)y * p->cpu->pitch, (size_t)p->cpu->w * 4);
+        return true;
+    }
     
     if (hasHires()) {
         Debug() << "GAME BUG: Game is calling getRaw on low-res Bitmap; you may want to patch the game to improve graphics quality.";
@@ -2258,6 +2883,8 @@ bool Bitmap::getRaw(void *output, int output_size)
 void Bitmap::replaceRaw(void *pixel_data, int size)
 {
     guardDisposed();
+    /* No CPU version of this operation. */
+    cpuPromote(p);
     
     GUARD_MEGA;
     
@@ -2280,8 +2907,8 @@ void Bitmap::replaceRaw(void *pixel_data, int size)
         FrameProfile::Scope fused(FrameProfile::ClearNextDraw);
     }
 
-    TEX::bind(getGLTypes().tex);
-    TEX::uploadImage(w, h, pixel_data, GL_RGBA);
+    TEXFBO::uploadImage(getGLTypes(), w, h, pixel_data, GL_RGBA);
+    relinkAfterUpload(getGLTypes());
     
     taintArea(IntRect(0,0,w,h));
     p->onModified();
@@ -2290,6 +2917,8 @@ void Bitmap::replaceRaw(void *pixel_data, int size)
 void Bitmap::saveToFile(const char *filename)
 {
     guardDisposed();
+    /* No CPU version of this operation. */
+    cpuPromote(p);
     
     if (hasHires()) {
         Debug() << "GAME BUG: Game is calling saveToFile on low-res Bitmap; you may want to patch the game to improve graphics quality.";
@@ -2353,6 +2982,8 @@ void Bitmap::saveToFile(const char *filename)
 void Bitmap::hueChange(int hue)
 {
     guardDisposed();
+    /* No CPU version of this operation. */
+    cpuPromote(p);
     
     GUARD_MEGA;
     GUARD_ANIMATED;
@@ -2402,6 +3033,79 @@ void Bitmap::drawText(int x, int y,
                       const char *str, int align)
 {
     drawText(IntRect(x, y, width, height), str, align);
+}
+
+/* ---- rendered text cache ---------------------------------------------------
+ *
+ * Rasterizing a string (FreeType, then shadow and outline composition) takes
+ * about a millisecond on the Vita, and games redraw the same strings over
+ * and over: a status window refresh repeats every name and number it showed
+ * a second ago. Finished text surfaces are kept, most recently used last,
+ * under a small byte budget. The key holds everything the pixels depend on. */
+struct TextCacheEntry
+{
+    SDL_Surface *surface;
+    std::list<const std::string *>::iterator order;
+};
+static std::unordered_map<std::string, TextCacheEntry> textCache;
+static std::list<const std::string *> textCacheOrder;
+static size_t textCacheBytes = 0;
+static const size_t textCacheBudget = 4u * 1024 * 1024;
+
+/* Text surfaces are 32-bit; a copy is one small allocation and a memcpy. */
+static SDL_Surface *textCacheCopy(SDL_Surface *from)
+{
+    SDL_Surface *copy = SDL_CreateRGBSurface(0, from->w, from->h, from->format->BitsPerPixel,
+                                             from->format->Rmask, from->format->Gmask,
+                                             from->format->Bmask, from->format->Amask);
+    if (copy)
+        for (int y = 0; y < from->h; ++y)
+            memcpy((uint8_t *)copy->pixels + (size_t)y * copy->pitch,
+                   (const uint8_t *)from->pixels + (size_t)y * from->pitch, (size_t)from->w * 4);
+    return copy;
+}
+
+/* A copy the caller owns, or null when the text has to be rendered. */
+static SDL_Surface *textCacheFind(const std::string &key)
+{
+    std::unordered_map<std::string, TextCacheEntry>::iterator it = textCache.find(key);
+    if (it == textCache.end())
+        return 0;
+    textCacheOrder.splice(textCacheOrder.end(), textCacheOrder, it->second.order);
+    return textCacheCopy(it->second.surface);
+}
+
+static void textCacheStore(const std::string &key, SDL_Surface *surface)
+{
+    const size_t bytes = (size_t)surface->pitch * surface->h;
+    if (surface->format->BitsPerPixel != 32 || bytes > textCacheBudget / 8 || textCache.count(key))
+        return;
+    while (textCacheBytes + bytes > textCacheBudget && !textCacheOrder.empty())
+    {
+        std::unordered_map<std::string, TextCacheEntry>::iterator old = textCache.find(*textCacheOrder.front());
+        textCacheOrder.pop_front();
+        textCacheBytes -= (size_t)old->second.surface->pitch * old->second.surface->h;
+        SDL_FreeSurface(old->second.surface);
+        textCache.erase(old);
+    }
+    /* The cache keeps its own copy; the caller still owns the original. */
+    surface = textCacheCopy(surface);
+    if (!surface)
+        return;
+    std::pair<std::unordered_map<std::string, TextCacheEntry>::iterator, bool> added =
+        textCache.insert(std::make_pair(key, TextCacheEntry()));
+    added.first->second.surface = surface;
+    added.first->second.order = textCacheOrder.insert(textCacheOrder.end(), &added.first->first);
+    textCacheBytes += bytes;
+}
+
+static void textCacheClear()
+{
+    for (std::unordered_map<std::string, TextCacheEntry>::iterator it = textCache.begin(); it != textCache.end(); ++it)
+        SDL_FreeSurface(it->second.surface);
+    textCache.clear();
+    textCacheOrder.clear();
+    textCacheBytes = 0;
 }
 
 static std::string fixupString(const char *str)
@@ -2711,7 +3415,7 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
         co = outColor.toSDLColor();
 
         if (c.a != 255) {
-            Debug() << "BUG: Bitmap drawText with outline and translucent text is broken";
+            vitaDiagLog("TEXT", "draw_text uses approximate translucent outline blending");
         }
 
         if (c.a != 255 || co.a != 255) {
@@ -2813,9 +3517,31 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
     
     timing.stage(1);
     profile.stage(FrameProfile::TextPrep + 2);
-    SDL_Surface *txtSurf;
-    
-    if (p->font->isSolid())
+    /* Everything the finished text surface depends on. The outline pass
+     * crops by the rect, so its size is part of the key. */
+    std::string textKey(str);
+    {
+        const SDL_Color keyColor = fontColor.toSDLColor(), keyOut = outColor.toSDLColor();
+        struct
+        {
+            TTF_Font *font; int size, w, h, outline;
+            uint8_t color[4], out[4], bold, italic, solid, shadow, crop;
+        } fields;
+        memset(&fields, 0, sizeof(fields)); /* padding is part of the key */
+        fields.font = sdlFont; fields.size = p->font->getSize();
+        fields.w = rect.w; fields.h = rect.h; fields.outline = scaledOutlineSize;
+        fields.color[0] = keyColor.r; fields.color[1] = keyColor.g; fields.color[2] = keyColor.b; fields.color[3] = keyColor.a;
+        fields.out[0] = keyOut.r; fields.out[1] = keyOut.g; fields.out[2] = keyOut.b; fields.out[3] = keyOut.a;
+        fields.bold = p->font->getBold(); fields.italic = p->font->getItalic(); fields.solid = p->font->isSolid();
+        fields.shadow = p->font->getShadow(); fields.crop = shState->config().fontOutlineCrop;
+        textKey.push_back('\0');
+        textKey.append((const char *)&fields, sizeof(fields));
+    }
+    SDL_Surface *txtSurf = textCacheFind(textKey);
+    const bool textCached = txtSurf != 0;
+    if (textCached)
+        ;
+    else if (p->font->isSolid())
         txtSurf = TTF_RenderUTF8_Solid(sdlFont, str, c);
     else
         txtSurf = TTF_RenderUTF8_Blended(sdlFont, str, c);
@@ -2830,12 +3556,13 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
                 (void *)txtSurf, txtSurf->w, txtSurf->h,
                 txtSurf->format ? txtSurf->format->format : 0);
 
-    p->ensureFormat(txtSurf, SDL_PIXELFORMAT_ABGR8888);
+    if (!textCached)
+        p->ensureFormat(txtSurf, SDL_PIXELFORMAT_ABGR8888);
     vitaDiagLog("TEXTFLOW", "draw_text_format_done text=%p size=%dx%d format=%08x",
                 (void *)txtSurf, txtSurf->w, txtSurf->h,
                 txtSurf->format ? txtSurf->format->format : 0);
     
-    if (p->font->getShadow())
+    if (!textCached && p->font->getShadow())
     {
         int scaledShadowSize = 1;
         if (p->selfLores) {
@@ -2880,7 +3607,7 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
 
     timing.stage(3);
     profile.stage(FrameProfile::TextPrep + 4);
-    if (scaledOutlineSize)
+    if (scaledOutlineSize && !textCached)
     {
         SDL_Surface *outline;
         TTF_Font *sdlOutline;
@@ -2939,6 +3666,9 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
         txtSurf = outline;
     }
     
+    if (!textCached)
+        textCacheStore(textKey, txtSurf);
+
     timing.stage(4);
     profile.stage(FrameProfile::TextPrep + 5);
     IntRect destRect(alignX, alignY,
@@ -3094,7 +3824,7 @@ SDL_Surface *Bitmap::surface() const
         Debug() << "BUG: High-res Bitmap surface not implemented";
     }
 
-    return p->surface;
+    return p->cpu ? p->cpu : p->surface;
 }
 
 SDL_Surface *Bitmap::megaSurface() const
@@ -3235,6 +3965,8 @@ int Bitmap::currentFrameI() const
 int Bitmap::addFrame(Bitmap &source, int position)
 {
     guardDisposed();
+    /* No CPU version of this operation. */
+    cpuPromote(p);
     source.guardDisposed();
     
     GUARD_MEGA;
@@ -3267,16 +3999,13 @@ int Bitmap::addFrame(Bitmap &source, int position)
         
         p->animation.frames.push_back(p->gl);
         
-        if (p->surface)
-            SDL_FreeSurface(p->surface);
+        p->dropReadback();
         p->gl = TEXFBO();
     }
     
     if (source.surface()) {
-        TEX::bind(newframe.tex);
-        TEX::uploadImage(source.width(), source.height(), source.surface()->pixels, GL_RGBA);
-        SDL_FreeSurface(p->surface);
-        p->surface = 0;
+        TEXFBO::uploadImage(newframe, source.width(), source.height(), source.surface()->pixels, GL_RGBA);
+        p->dropReadback();
     }
     else {
         /* Source frame pixels observed by the copy pass; materialize. */
@@ -3309,6 +4038,11 @@ void Bitmap::removeFrame(int position) {
     if (hasHires()) {
         Debug() << "BUG: High-res Bitmap removeFrame not implemented";
     }
+
+    /* The last frame cannot go: the index below would be -1 or 0 of an empty vector. */
+    if (p->animation.frames.size() < 2)
+        throw Exception(Exception::MKXPError,
+                        "Cannot remove the only frame of an animated bitmap");
 
     int pos = (position < 0) ? (int)p->animation.frames.size() - 1 : clamp(position, 0, (int)(p->animation.frames.size() - 1));
     shState->texPool().release(p->animation.frames[pos]);
@@ -3441,6 +4175,8 @@ bool Bitmap::getLooping() const
 void Bitmap::kglInvert()
 {
     guardDisposed();
+    /* No CPU version of this operation. */
+    cpuPromote(p);
     GUARD_ANIMATED;
 
     if (hasHires()) {
@@ -3489,6 +4225,8 @@ void Bitmap::kglInvert()
 void Bitmap::kglCompressAlpha()
 {
     guardDisposed();
+    /* No CPU version of this operation. */
+    cpuPromote(p);
     GUARD_ANIMATED;
 
     if (hasHires()) {
@@ -3539,6 +4277,8 @@ void Bitmap::kglCompressAlpha()
 int Bitmap::kglShadowShaderH(int x1, int x2, int y, bool soft)
 {
     guardDisposed();
+    /* No CPU version of this operation. */
+    cpuPromote(p);
     GUARD_ANIMATED;
 
     if (hasHires()) {
@@ -3657,6 +4397,8 @@ int Bitmap::kglShadowShaderH(int x1, int x2, int y, bool soft)
 int Bitmap::kglShadowShaderV(int y1, int y2, int x, bool wall, bool soft)
 {
     guardDisposed();
+    /* No CPU version of this operation. */
+    cpuPromote(p);
     GUARD_ANIMATED;
 
     if (hasHires()) {
@@ -3794,6 +4536,89 @@ void Bitmap::taintArea(const IntRect &rect)
     p->addTaintedArea(rect);
 }
 
+
+/* Called when an image could not be allocated: give back every pixel copy
+ * that can be made again, and move CPU-composed bitmaps to the GPU. */
+void Bitmap::reclaimMemory()
+{
+    textCacheClear();
+    dropAllReadbacks();
+    try
+    {
+        while (!cpuBitmapList.empty())
+            cpuPromote(cpuBitmapList.front());
+    }
+    catch (const Exception &)
+    {
+        /* Graphics memory is short too; keep the rest where they are. */
+    }
+}
+
+/* Once per frame. A CPU-composed bitmap that has been drawn keeps two copies:
+ * its pixels here and the texture they were uploaded to. The pixels only
+ * matter while the game keeps writing to it. A game that composes thousands
+ * of small bitmaps once and then just shows them (To the Moon) fills the C
+ * heap with those copies: 56 MiB of them left no room for anything else.
+ *
+ * So when the small ones, which are the ones in the heap, pass 12 MiB, those
+ * not written for five seconds are handed to the GPU, which frees their
+ * pixels. Large bitmaps are left alone: they do not weigh on the heap, and
+ * handing over a full-screen one costs a visible hitch (measured in a BLACK
+ * SOULS battle). A few per frame, so it never shows as a stall. */
+void Bitmap::frameTick()
+{
+    ++cpuFrame;
+    if (cpuHeapBytes <= 12u * 1024 * 1024)
+        return;
+    int promoted = 0;
+    for (int looked = 0; looked < 24 && promoted < 3 && !cpuBitmapList.empty(); ++looked)
+    {
+        BitmapPrivate *oldest = cpuBitmapList.front();
+        const size_t bytes = (size_t)oldest->cpu->w * oldest->cpu->h * 4;
+        /* Large, still being written, never shown, or changed since the last
+         * upload: nothing to gain now; look again after the others. */
+        if (bytes >= cpuHeapResident || cpuFrame - oldest->cpuStamp <= 300 ||
+            oldest->gl.tex == TEX::ID(0) || oldest->cpuDirty)
+        {
+            cpuBitmapList.splice(cpuBitmapList.end(), cpuBitmapList, oldest->cpuIter);
+            continue;
+        }
+        try
+        {
+            cpuPromote(oldest);
+            ++promoted;
+        }
+        catch (const Exception &)
+        {
+            /* Graphics memory is short; leave things as they are. */
+            return;
+        }
+    }
+}
+
+/* True when CPU-composed bitmaps hold most of their budget. Bitmaps a game
+ * dropped without disposing keep their pixels until Ruby collects them, so
+ * the binding collects when this turns true. */
+bool Bitmap::cpuPixelsNearBudget()
+{
+    return cpuBitmapBytes > cpuBitmapBudget / 4 * 3;
+}
+
+size_t Bitmap::cpuPixelBytes()
+{
+    return cpuBitmapBytes;
+}
+
+/* For the memory snapshot: CPU-composed bitmaps (count, bytes), read-back
+ * copies (bytes) and cached text (bytes). */
+extern "C" void vitaBitmapMemoryFigures(size_t figures[4])
+{
+    figures[0] = cpuBitmapList.size();
+    figures[1] = cpuBitmapBytes;
+    figures[2] = readbackBytes;
+    figures[3] = textCacheBytes;
+}
+
 int Bitmap::maxSize(){
     return glState.caps.maxTexSize;
 }
@@ -3827,6 +4652,12 @@ void Bitmap::releaseResources()
         p->animation.playing = false;
         for (TEXFBO &tex : p->animation.frames)
             shState->texPool().release(tex);
+    }
+    else if (p->cpu)
+    {
+        /* No framebuffer was ever made; the pixels go with the private data. */
+        if (p->gl.tex != TEX::ID(0))
+            TEX::del(p->gl.tex);
     }
     else
         shState->texPool().release(p->gl);

@@ -26,6 +26,8 @@
 #include "filesystem.h"
 #include "sharedstate.h"
 #include "src/util/util.h"
+#include "data-stream.h"
+#include <climits>
 
 #if RAPI_FULL > 187
 #include "ruby/encoding.h"
@@ -39,10 +41,7 @@
 #endif
 
 static void fileIntFreeInstance(void *inst) {
-    SDL_RWops *ops = static_cast<SDL_RWops *>(inst);
-    
-    SDL_RWclose(ops);
-    SDL_FreeRW(ops);
+    delete static_cast<DataStream *>(inst);
 }
 
 #if RAPI_FULL > 187
@@ -66,20 +65,29 @@ static VALUE fileIntForPath(const char *path, bool rubyExc) {
         throw e;
     }
     
-    setPrivateData(obj, ops);
+    DataStream *stream;
+    try {
+        stream = new DataStream(ops);
+    } catch (...) {
+        SDL_RWclose(ops);
+        SDL_FreeRW(ops);
+        throw;
+    }
+    setPrivateData(obj, stream);
     
     return obj;
 }
 
 #if RAPI_MAJOR >= 2
 typedef struct {
-    SDL_RWops *ops;
+    DataStream *stream;
     void *dst;
     int length;
+    size_t result;
 } fileIntReadCbArgs;
 
 void call_RWread_cb(fileIntReadCbArgs *args) {
-    SDL_RWread(args->ops, args->dst, 1, args->length);
+    args->result = args->stream->read(args->dst, args->length);
 }
 #endif
 
@@ -88,38 +96,36 @@ RB_METHOD(fileIntRead) {
     int length = -1;
     rb_get_args(argc, argv, "|i", &length RB_ARG_END);
     
-    SDL_RWops *ops = getPrivateData<SDL_RWops>(self);
+    DataStream *stream = getPrivateData<DataStream>(self);
+    if (stream->closed()) rb_raise(rb_eIOError, "closed stream");
+    if (argc && length < 0) rb_raise(rb_eArgError, "negative length");
     
     if (length == -1) {
-        Sint64 cur = SDL_RWtell(ops);
-        Sint64 end = SDL_RWseek(ops, 0, SEEK_END);
-        
-        // Sometimes SDL_RWseek will fail for no reason
-        // with encrypted archives, so let's just ask
-        // for the size up front
-        if (end < 0)
-            end = ops->size(ops);
-        
-        length = end - cur;
-        SDL_RWseek(ops, cur, SEEK_SET);
+        Sint64 remaining = stream->remaining();
+        if (remaining < 0 || remaining > INT_MAX)
+            rb_raise(rb_eIOError, "invalid stream size");
+        length = int(remaining);
     }
     
     if (length == 0)
-        return Qnil;
+        return rb_str_new("", 0);
     
     VALUE data = rb_str_new(0, length);
     
     
     
 #if RAPI_MAJOR >= 2
-    fileIntReadCbArgs cbargs {ops, RSTRING_PTR(data), length};
+    fileIntReadCbArgs cbargs {stream, RSTRING_PTR(data), length, 0};
     rb_thread_call_without_gvl([](void* args) -> void* {
         call_RWread_cb((fileIntReadCbArgs*)args);
         return 0;
     }, (void*)&cbargs, 0, 0);
+    size_t count = cbargs.result;
 #else
-    SDL_RWread(ops, RSTRING_PTR(data), 1, length);
+    size_t count = stream->read(RSTRING_PTR(data), length);
 #endif
+    rb_str_set_len(data, count);
+    if (!count && argc) return Qnil;
     
     return data;
 }
@@ -127,8 +133,7 @@ RB_METHOD(fileIntRead) {
 RB_METHOD(fileIntClose) {
     RB_UNUSED_PARAM;
     
-    SDL_RWops *ops = getPrivateData<SDL_RWops>(self);
-    SDL_RWclose(ops);
+    getPrivateData<DataStream>(self)->close();
     
     return Qnil;
 }
@@ -136,48 +141,41 @@ RB_METHOD(fileIntClose) {
 RB_METHOD(fileIntGetByte) {
     RB_UNUSED_PARAM;
     
-    SDL_RWops *ops = getPrivateData<SDL_RWops>(self);
-    
-    unsigned char byte;
-    size_t result = SDL_RWread(ops, &byte, 1, 1);
-    
-    return (result == 1) ? rb_fix_new(byte) : Qnil;
+    DataStream *stream = getPrivateData<DataStream>(self);
+    if (stream->closed()) rb_raise(rb_eIOError, "closed stream");
+    int byte = stream->getByte();
+    return byte >= 0 ? rb_fix_new(byte) : Qnil;
 }
 
 RB_METHOD(fileIntBinmode) {
     RB_UNUSED_PARAM;
     
-    return Qnil;
+    return self;
 }
 
 #if RAPI_FULL <= 187
 RB_METHOD(fileIntPos) {
-    SDL_RWops *ops = getPrivateData<SDL_RWops>(self);
-    
-    long long pos = SDL_RWtell(ops); // Will return -1 if it doesn't work
+    DataStream *stream = getPrivateData<DataStream>(self);
+    if (stream->closed()) rb_raise(rb_eIOError, "closed stream");
+    long long pos = stream->position();
     return LL2NUM(pos);
 }
 #endif
 
-VALUE
-kernelLoadDataInt(const char *filename, bool rubyExc, bool raw) {
-    //rb_gc_start();
-
+static VALUE fileIntLoad(VALUE port) {
+    VALUE marsh = rb_const_get(rb_cObject, rb_intern("Marshal"));
+    VALUE data = fileIntRead(0, nullptr, port);
+    return rb_funcall2(marsh, rb_intern("load"), 1, &data);
+}
+static VALUE fileIntRaw(VALUE port) {
+    return fileIntRead(0, nullptr, port);
+}
+static VALUE fileIntEnsureClose(VALUE port) {
+    return fileIntClose(0, nullptr, port);
+}
+VALUE kernelLoadDataInt(const char *filename, bool rubyExc, bool raw) {
     VALUE port = fileIntForPath(filename, rubyExc);
-    VALUE result;
-    if (!raw) {
-        VALUE marsh = rb_const_get(rb_cObject, rb_intern("Marshal"));
-        
-        // FIXME need to catch exceptions here with begin rescue
-        VALUE data = fileIntRead(0, 0, port);
-        result = rb_funcall2(marsh, rb_intern("load"), 1, &data);
-    } else {
-        result = fileIntRead(0, 0, port);
-    }
-    
-    rb_funcall2(port, rb_intern("close"), 0, NULL);
-    
-    return result;
+    return rb_ensure(raw ? fileIntRaw : fileIntLoad, port, fileIntEnsureClose, port);
 }
 
 RB_METHOD_GUARD(kernelLoadData) {

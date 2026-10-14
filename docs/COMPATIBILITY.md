@@ -1,45 +1,56 @@
 # Game compatibility
 
-HardRPG runs RPG Maker XP, VX and VX Ace games. Hardware retesting through
-October 6, 2026 reported no new regressions and improved performance in BLACK
-SOULS, BLACK SOULS II and Red Hood Woods. Earlier game-specific failures are
-retained below unless their failing route was explicitly retested.
-Compatibility varies by game and version; reaching a title or testing a save
-is not a full-game completion claim.
+Results from testing on a real PS Vita with HardRPG **0.3.0 Alpha**. Games
+change between versions and editions, so your copy may behave differently.
+"Runs" means the game has been played on the Vita.
 
-| Game | Observed behavior |
+| Status | Meaning |
 | --- | --- |
-| Black Souls 1 | Runs; combat and menu performance substantially improved in 0.2.1. |
-| Black Souls 2 | Runs; menu decorations and HP/MP bars corrected, with improved performance. Earlier crashes outside the retested routes remain unverified. |
-| FNAFBS Final Mix | Stops after night selection. |
-| Hylics | Runs; performance and font issues. |
-| The Witch's House | Runs; visual corruption in some areas. |
-| To the Moon | Fails when Begin is pressed. |
-| Pokemon Infinite Fusion | Fails before the main menu. |
-| Red Hood's Woods | Runs; performance improved in 0.2.1. |
-| Ao Oni | Runs; repeated inventory returns retain walls and floors with the shared renderer fix. |
-| LISA The Painful (original VX Ace edition) | Reaches the main menu, but crashes when starting a new game. The Unity Definitive Edition is not supported. |
-| Mogeko Castle (English VX Ace edition) | Runs. |
+| ✅ Runs | Plays well in testing. |
+| 🟡 Partial | Plays, with known problems or parts not yet tested. |
+| ⛔ Not supported | Does not start, or stops early. |
 
-The README gallery includes captures from earlier hardware testing. See
-[validation](VALIDATION.md) for the tested scope. Exact FPS and full-game
-completion are not established for this suite.
+## RPG Maker XP, VX and VX Ace
 
-Hold L + R + Select for one second to return to the launcher. Handled script
-errors retain a backtrace that can be viewed and exported from error history.
-Native crashes may not produce a report.
+Of these, only Ao Oni has been played from start to finish on the Vita. The
+others have been played for a while but not end to end, so problems later in
+those games are still possible.
 
-The launcher scans `ux0:/data/hardrpg/games/` by default. Its browser can
-reference existing games on other folders and storage devices. Settings
-can add persistent game search folders and select existing RTP folders or
-ZIPs. Game data, RTP and saves are not included in the VPK.
+| Game | Engine | Status | Notes |
+| --- | --- | --- | --- |
+| BLACK SOULS | VX Ace | 🟡 Partial | Faster maps, menus and battles in 0.3.0. |
+| BLACK SOULS II | VX Ace | 🟡 Partial | |
+| Ao Oni | XP | ✅ Runs | Played from start to finish. |
+| The Witch's House | VX | 🟡 Partial | Some visual glitches in a few areas. |
+| To the Moon | XP | 🟡 Partial | Some slowdowns. |
+| LISA: The Painful (original VX Ace edition) | VX Ace | 🟡 Partial | Map W/A/S/D for combo attacks in Controls. The Unity *Definitive Edition* is not an RPG Maker game and does not run. |
+| FNaF b Final Mix | VX Ace | ✅ Runs | |
+| Red Hood's Woods | VX Ace | ✅ Runs | |
+| Hylics | VX Ace | 🟡 Partial | Some slow areas and font differences. |
+| Mogeko Castle (English VX Ace edition) | VX Ace | ✅ Runs | |
 
-ZIP games are extracted into `ux0:/data/hardrpg/cache/` and reused on later
-launches. That working copy may contain saves and is not automatically
-deleted. RTP ZIPs are read directly without creating an extracted copy.
-Per-game configuration lives under `ux0:/data/hardrpg/config/` and is merged
-after the packaged defaults. See [launcher details](../launcher/README.md).
+## RPG Maker 2000 and 2003 (EasyRPG)
 
-For further tests, record the launcher version/VPK hash, game version and
-engine, the route tested, audio, save/load, and any reproducible failure.
-The Steam compatibility fallback is not a complete Steamworks implementation.
+These run through the bundled EasyRPG Player.
+
+| Game | Engine | Status | Notes |
+| --- | --- | --- | --- |
+| OFF | 2000/2003 | ✅ Runs | |
+| Ib | 2000/2003 | ✅ Runs | |
+| Yume Nikki | 2000/2003 | ✅ Runs | |
+| Flow | 2000/2003 | ✅ Runs | |
+
+## Not supported yet
+
+> [!WARNING]
+> **Pokémon Essentials games are a work in progress.** Pokémon Infinite Fusion
+> and other games built on Pokémon Essentials do not run in 0.3.0.
+
+## Tested a game?
+
+Results for games not listed here are welcome. Open an
+[issue](https://github.com/Asukate/mkxp-z-vita/issues) with the game's name,
+version and where it came from, the HardRPG version, what worked and what did
+not. An exported error report and a save file from just before a problem make
+it much easier to fix; see
+[Something went wrong?](../README.md#something-went-wrong).

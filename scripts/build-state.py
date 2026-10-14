@@ -34,12 +34,22 @@ def state(kind, ws, profile):
     version = sdk / 'version_info.txt'
     result['sdk_version'] = version.read_text() if version.exists() else 'unavailable'
     if kind == 'dependencies':
-        result['inputs_sha256'] = digest(inputs('deps', 'linux/toolchain-vita.cmake',
-            'scripts/bootstrap-vita.sh', 'scripts/ruby-merge-archive.sh', 'scripts/ruby-install-headers.sh',
-            ))
+        # EasyRPG inputs are verified separately by easyrpg-state.py.
+        dependency_inputs = inputs('deps', 'linux/toolchain-vita.cmake',
+            'scripts/bootstrap-vita.sh', 'scripts/ruby-merge-archive.sh', 'scripts/ruby-install-headers.sh')
+        result['inputs_sha256'] = digest(p for p in dependency_inputs
+            if 'deps/patches/easyrpg/' not in str(p.relative_to(ROOT)))
     else:
         options = json.loads((ws / f'build/mkxp-z-parity-{profile}/meson-info/intro-buildoptions.json').read_text())
+        result['midi_synth_sha256'] = hashlib.sha256((sdk / 'arm-vita-eabi/lib/libfluidlite.a').read_bytes()).hexdigest()
         result['native_launcher'] = next(o['value'] for o in options if o['name'] == 'native_launcher')
+        result['vita_diagnostics'] = next(o['value'] for o in options if o['name'] == 'vita_diagnostics')
+        if result['native_launcher']:
+            network = ws / 'release-network/prefix/lib/libcurl.a'
+            result['release_network_archives'] = {'libcurl.a': hashlib.sha256(network.read_bytes()).hexdigest()}
+            for name in ('mbedtls', 'mbedx509', 'mbedcrypto'):
+                archive = sdk / f'arm-vita-eabi/lib/lib{name}.a'
+                result['release_network_archives'][archive.name] = hashlib.sha256(archive.read_bytes()).hexdigest()
         result['revision'] = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
         result['inputs_sha256'] = digest(inputs('src', 'binding', 'shader', 'assets', 'launcher',
             'scripts', 'linux', 'meson.build', 'meson_options.txt'))

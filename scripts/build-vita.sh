@@ -56,6 +56,8 @@ cpp_args = ['-marm', '-mcpu=cortex-a9', '-mfpu=neon', '-mfloat-abi=hard', '-O3',
 cpp_link_args = ['-Wl,-q', '-Wl,--allow-multiple-definition', '-L$PREFIX/lib']
 EOF2
 
+if [[ "$NATIVE" == true ]]; then bash "$SCRIPT_DIR/bootstrap-release-network.sh" "$WS" "$JOBS"; fi
+NETWORK="$WS/release-network/prefix/lib"
 if [[ ! -f "$BUILD/build.ninja" ]]; then
     meson setup "$BUILD" "$CAND_SRC" \
         --cross-file="$CAND_SRC/linux/meson-vita.txt" \
@@ -63,12 +65,15 @@ if [[ ! -f "$BUILD/build.ninja" ]]; then
         -Dbuildtype=release -Denable-https=false \
         -Dshared_fluid=false -Dvita_diagnostics=false -Dproto_launcher=true \
         -Dnative_launcher="$NATIVE" \
-        -Dvita_libdir="$PREFIX/lib" \
+        -Dvita_libdir="$PREFIX/lib" -Dvita_network_libdir="$NETWORK" \
         -Dvita_sdk_libdir="$VITASDK/arm-vita-eabi/lib"
 else
-    meson setup --reconfigure "$BUILD" "$CAND_SRC" -Dvita_diagnostics=false -Dproto_launcher=true -Dnative_launcher="$NATIVE"
+    meson setup --clearcache --reconfigure "$BUILD" "$CAND_SRC" -Dvita_diagnostics=false -Dproto_launcher=true -Dnative_launcher="$NATIVE" -Dvita_network_libdir="$NETWORK"
 fi
 ninja -C "$BUILD" -j"$JOBS"
+if [[ "$NATIVE" == true ]]; then
+    python3 "$CAND_SRC/tests/vita-launcher-threading.py" "$VITASDK/bin/arm-vita-eabi-nm" "$BUILD/mkxp-z"
+fi
 python3 "$SCRIPT_DIR/build-state.py" engine "$WS" "$PROFILE"
 printf '=== BUILD %s complete ===\n' "$PROFILE"
 ls -lh "$BUILD/mkxp-z"
