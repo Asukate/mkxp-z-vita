@@ -13,7 +13,7 @@ index 67b3a23..7360536 100644
              coroutine_type=arm32
          ],
 diff --git a/cont.c b/cont.c
-index 4b18ddd..6b16cf8 100644
+index 4b18ddd..5d27bce 100644
 --- a/cont.c
 +++ b/cont.c
 @@ -16,6 +16,10 @@
@@ -123,7 +123,7 @@ index 4b18ddd..6b16cf8 100644
  #else
          if (mprotect(page, RB_PAGE_SIZE, PROT_NONE) < 0) {
              munmap(allocation->base, count*stride);
-@@ -608,6 +684,11 @@ fiber_pool_allocation_free(struct fiber_pool_allocation * allocation)
+@@ -608,10 +684,29 @@ fiber_pool_allocation_free(struct fiber_pool_allocation * allocation)
  static struct fiber_pool_stack
  fiber_pool_stack_acquire(struct fiber_pool * fiber_pool)
  {
@@ -135,7 +135,25 @@ index 4b18ddd..6b16cf8 100644
      struct fiber_pool_vacancy * vacancy = fiber_pool_vacancy_pop(fiber_pool);
  
      if (DEBUG) fprintf(stderr, "fiber_pool_stack_acquire: %p used=%"PRIuSIZE"\n", (void*)fiber_pool->vacancies, fiber_pool->used);
-@@ -703,6 +784,10 @@ fiber_pool_stack_release(struct fiber_pool_stack * stack)
+ 
++#if defined(__vita__) && !defined(COROUTINE_PTHREAD_CONTEXT)
++    if (!vacancy && vita_fiber_arena.claimed) {
++        /* The arena cannot grow. A Fiber abandoned before it finished (an
++         * RGSS interpreter replaced on a map change) keeps its stack until
++         * the Fiber object is collected, and those pile up in the old
++         * generation between major GCs. Collect them before giving up. */
++        rb_gc();
++        vacancy = fiber_pool_vacancy_pop(fiber_pool);
++        if (!vacancy) {
++            rb_raise(rb_eFiberError, "all %"PRIuSIZE" Fiber stacks are in use", fiber_pool->count);
++        }
++    }
++#endif
++
+     if (!vacancy) {
+         const size_t maximum = FIBER_POOL_ALLOCATION_MAXIMUM_SIZE;
+         const size_t minimum = fiber_pool->initial_count;
+@@ -703,6 +798,10 @@ fiber_pool_stack_release(struct fiber_pool_stack * stack)
  
      allocation->used -= 1;
  
@@ -146,7 +164,7 @@ index 4b18ddd..6b16cf8 100644
      // Release address space and/or dirty memory:
      if (allocation->used == 0) {
          fiber_pool_allocation_free(allocation);
-@@ -710,6 +795,7 @@ fiber_pool_stack_release(struct fiber_pool_stack * stack)
+@@ -710,6 +809,7 @@ fiber_pool_stack_release(struct fiber_pool_stack * stack)
      else if (stack->pool->free_stacks) {
          fiber_pool_stack_free(&vacancy->stack);
      }
@@ -154,7 +172,7 @@ index 4b18ddd..6b16cf8 100644
  #else
      // This is entirely optional, but clears the dirty flag from the stack memory, so it won't get swapped to disk when there is memory pressure:
      if (stack->pool->free_stacks) {
-@@ -750,6 +836,36 @@ fiber_entry(struct coroutine_context * from, struct coroutine_context * to)
+@@ -750,6 +850,36 @@ fiber_entry(struct coroutine_context * from, struct coroutine_context * to)
      rb_fiber_t *fiber = to->argument;
      rb_thread_t *thread = fiber->cont.saved_ec.thread_ptr;
  
@@ -191,7 +209,7 @@ index 4b18ddd..6b16cf8 100644
  #ifdef COROUTINE_PTHREAD_CONTEXT
      ruby_thread_set_native(thread);
  #endif
-@@ -2306,12 +2422,15 @@ fiber_switch(rb_fiber_t *fiber, int argc, const VALUE *argv, int kw_splat, rb_fi
+@@ -2306,12 +2436,15 @@ fiber_switch(rb_fiber_t *fiber, int argc, const VALUE *argv, int kw_splat, rb_fi
  
      fiber_store(fiber, th);
  
