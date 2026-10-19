@@ -24,6 +24,16 @@
 #include "binding-util.h"
 #include "exception.h"
 
+/* RPG::BGM/BGS#replay pass @pos, which is nil for any file not captured by
+ * .last (RPG::BGS.new, database entries). RGSS3 starts those from 0; Little
+ * Braver's region BGS script died here with "Argument 3: Expected float". */
+static double audioPosArg(VALUE pos) {
+	double out = 0.0;
+	if (!NIL_P(pos))
+		rb_float_arg(pos, &out, 3);
+	return out;
+}
+
 #define DEF_PLAY_STOP_POS(entity) \
 	RB_METHOD_GUARD(audio_##entity##Play) \
 	{ \
@@ -31,9 +41,9 @@
 		const char *filename; \
 		int volume = 100; \
 		int pitch = 100; \
-		double pos = 0.0; \
-		rb_get_args(argc, argv, "z|iif", &filename, &volume, &pitch, &pos RB_ARG_END); \
-		shState->audio().entity##Play(filename, volume, pitch, pos); \
+		VALUE pos = Qnil; \
+		rb_get_args(argc, argv, "z|iio", &filename, &volume, &pitch, &pos RB_ARG_END); \
+		shState->audio().entity##Play(filename, volume, pitch, audioPosArg(pos)); \
 		return Qnil; \
 	} \
 	RB_METHOD_GUARD_END \
@@ -95,10 +105,10 @@ RB_METHOD_GUARD(audio_bgmPlay)
     const char *filename;
     int volume = 100;
     int pitch = 100;
-    double pos = 0.0;
+    VALUE pos = Qnil;
     VALUE track = Qnil;
-    rb_get_args(argc, argv, "z|iifo", &filename, &volume, &pitch, &pos, &track RB_ARG_END);
-    shState->audio().bgmPlay(filename, volume, pitch, pos, MAYBE_NIL_TRACK(track));
+    rb_get_args(argc, argv, "z|iioo", &filename, &volume, &pitch, &pos, &track RB_ARG_END);
+    shState->audio().bgmPlay(filename, volume, pitch, audioPosArg(pos), MAYBE_NIL_TRACK(track));
     return Qnil;
 }
 RB_METHOD_GUARD_END
