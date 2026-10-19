@@ -14,6 +14,7 @@
   "useScriptNames": false,
   "printFPS": false,
   "preloadScript": [
+    "app0:/legacy_ruby_compat.rb",
     "app0:/time_strftime_guard.rb",
     "app0:/performance_patch.rb",
     "app0:/vita_controls.rb"

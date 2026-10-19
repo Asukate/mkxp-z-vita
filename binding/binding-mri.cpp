@@ -1221,6 +1221,34 @@ bool evalScript(VALUE string, const char *filename)
 
 #define SCRIPT_SECTION_FMT (rgssVer >= 3 ? "{%04ld}" : "Section%03ld")
 
+static VALUE legacySyntaxRepairHelper(VALUE arg) {
+    VALUE *args = reinterpret_cast<VALUE *>(arg);
+    VALUE message = rb_funcall(args[1], rb_intern("message"), 0);
+    VALUE repairer = rb_const_get(rb_cObject, rb_intern("HardRPGLegacySyntax"));
+    return rb_funcall(repairer, rb_intern("repair"), 2, args[0], message);
+}
+
+/* Ruby 3.1 rejects syntax the RGSS Rubies (1.8, 1.9) only warned about. A
+ * SyntaxError is raised before any of the section runs, so the preloaded
+ * launcher/legacy_ruby_compat.rb may rewrite the reported lines and the
+ * section is evaluated again. On success the old error is cleared. */
+static bool repairLegacySyntax(VALUE &string) {
+    VALUE exc = rb_errinfo();
+    if (!rb_obj_is_kind_of(exc, rb_eSyntaxError) ||
+        !rb_const_defined(rb_cObject, rb_intern("HardRPGLegacySyntax")))
+        return false;
+    VALUE args[] = {string, exc};
+    int state = 0;
+    VALUE repaired = rb_protect(legacySyntaxRepairHelper, (VALUE)args, &state);
+    if (state || !RB_TYPE_P(repaired, RUBY_T_STRING)) {
+        rb_set_errinfo(exc);
+        return false;
+    }
+    rb_set_errinfo(Qnil);
+    string = repaired;
+    return true;
+}
+
 
 static void runRMXPScripts(BacktraceData &btData) {
     const Config &conf = shState->rtData().config;
@@ -1424,6 +1452,15 @@ static void runRMXPScripts(BacktraceData &btData) {
             int state;
             
             evalString(string, fname, &state);
+            for (int repairs = 0; state && repairs < 16 && repairLegacySyntax(string); ++repairs) {
+                vitaDiagLog("RUBY", "rgss_legacy_syntax_repair index=%ld name=%s pass=%d",
+                            i, scriptName, repairs + 1);
+                evalString(string, fname, &state);
+                /* Keep the repair for resets and for games that read
+                 * $RGSS_SCRIPTS themselves. */
+                if (!state)
+                    rb_ary_store(script, 3, string);
+            }
             if (state)
                 break;
         }
