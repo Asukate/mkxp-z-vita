@@ -1,7 +1,7 @@
 # HardRPG launcher
 
 The red Games/Settings/About/Exit menu fills 960×544. The native
-**HardRPG 0.3.0 Alpha** uses a C++ launcher; games still run in the
+**HardRPG 0.3.1 Alpha** uses a C++ launcher; games still run in the
 RGSS engine. The original `library.rb`/`picker.rb` launcher remains an
 alternative build. Selecting a game restarts the engine into its folder.
 About displays the version, author, repository and dated one-line release notes.

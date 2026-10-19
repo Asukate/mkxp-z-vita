@@ -1,6 +1,7 @@
 # Game compatibility
 
-Results from testing on a real PS Vita with HardRPG **0.3.0 Alpha**. Games
+Results from testing on a real PS Vita with HardRPG **0.3.1 Alpha**; most
+were tested on 0.3.0 and nothing in 0.3.1 changes them. Games
 change between versions and editions, so your copy may behave differently.
 "Runs" means the game has been played on the Vita.
 
@@ -28,6 +29,8 @@ those games are still possible.
 | Red Hood's Woods | VX Ace | ✅ Runs | |
 | Hylics | VX Ace | 🟡 Partial | Some slow areas and font differences. |
 | Mogeko Castle (English VX Ace edition) | VX Ace | ✅ Runs | |
+| The Endless Empty | VX Ace | 🟡 Partial | Starts in 0.3.1 (stopped at startup in 0.3.0). Not played further yet. |
+| VorlorN | XP | 🟡 Partial | Starts in 0.3.1 (stopped at startup in 0.3.0). Not played further yet. |
 
 ## RPG Maker 2000 and 2003 (EasyRPG)
 
@@ -44,7 +47,7 @@ These run through the bundled EasyRPG Player.
 
 > [!WARNING]
 > **Pokémon Essentials games are a work in progress.** Pokémon Infinite Fusion
-> and other games built on Pokémon Essentials do not run in 0.3.0.
+> and other games built on Pokémon Essentials do not run yet.
 
 ## Tested a game?
 

@@ -130,7 +130,13 @@ download first if it is a `.zip`, then:
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.3.0 Alpha** is the current release. What's new:
+**0.3.1 Alpha** is the current release, a pre-release that fixes five crashes
+reported in [issue #3](https://github.com/Asukate/mkxp-z-vita/issues/3): The
+Endless Empty and VorlorN now start, and PALETTA, Little Braver and Flash
+Cycling should no longer crash where they did. See the
+[0.3.1 release notes](docs/RELEASE-NOTES-0.3.1.md).
+
+New in 0.3.0:
 
 - **Faster games:** smoother maps, quicker menus and battles.
 - **More games run:** To the Moon and LISA now work.
@@ -139,7 +145,7 @@ download first if it is a `.zip`, then:
   the touch screen or rear pad into buttons, or tap the map to walk there.
 - **Per-game settings:** display, audio and controls for each game.
 
-Full list: [release notes](docs/RELEASE-NOTES-0.3.0.md).
+Full list: [0.3.0 release notes](docs/RELEASE-NOTES-0.3.0.md).
 
 ## Using HardRPG
 

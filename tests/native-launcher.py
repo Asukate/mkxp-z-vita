@@ -626,7 +626,7 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(len(reports),2)
         for report in reports:
             exported = report.read_bytes()
-            self.assertIn(b'HardRPG 0.3.0 Alpha',exported)
+            self.assertIn(b'HardRPG 0.3.1 Alpha',exported)
             self.assertTrue(exported.endswith(body))
         self.assertEqual((self.root/'last-error.txt.prev').read_bytes(),body)
         self.assertGreater(state['errorLines'],12)
@@ -1017,18 +1017,18 @@ puts JSON.generate(result)
         self.assertEqual((state['menu'],state['focus']),(0,1))
 
     def test_release_notices_are_version_ordered_scrollable_and_dismissible(self):
-        release={'draft':False,'prerelease':True,'tag_name':'v0.3.1-alpha',
+        release={'draft':False,'prerelease':True,'tag_name':'v0.3.2-alpha',
             'name':'Next Alpha','body':'\n'.join('Change '+str(i) for i in range(30)),
-            'html_url':'https://github.com/Asukate/mkxp-z-vita/releases/tag/v0.3.1-alpha'}
+            'html_url':'https://github.com/Asukate/mkxp-z-vita/releases/tag/v0.3.2-alpha'}
         fixture=self.storage/'releases.json';fixture.write_text(json.dumps([release]))
         state=self.run_binary('--release-fixture',fixture,'--actions','down,down')
-        self.assertEqual(state['releaseTag'],'v0.3.1-alpha')
+        self.assertEqual(state['releaseTag'],'v0.3.2-alpha')
         self.assertGreater(state['releaseLines'],30)
         self.assertEqual(state['releaseScroll'],2)
         state=self.run_binary('--release-fixture',fixture,'--actions','cross')
         self.assertEqual(state['releaseLines'],0)
         self.assertFalse(state['launchRequested'])
-        release['tag_name']='v0.3.0-alpha';fixture.write_text(json.dumps([release]))
+        release['tag_name']='v0.3.1-alpha';fixture.write_text(json.dumps([release]))
         self.assertEqual(self.run_binary('--release-fixture',fixture)['releaseLines'],0)
 
     def test_startup_release_check_setting_persists(self):
