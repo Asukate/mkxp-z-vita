@@ -41,6 +41,8 @@ struct Config {
     bool displayFPS;
     bool printFPS;
     int performanceMetrics;
+    // L+R (or a button mapped to Fast forward) runs the game at up to 2x.
+    bool fastForward;
     
     bool winResizable;
     bool fullscreen;

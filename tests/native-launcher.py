@@ -337,6 +337,22 @@ class NativeLauncher(unittest.TestCase):
             self.assertIn('error', self.cmd('set-display', key='performanceMetrics', value=invalid))
             self.assertEqual(file.read_bytes(), before)
 
+    def test_fast_forward_switches_persist_and_validate(self):
+        file = self.root / 'launcher-config.json'
+        file.write_text(json.dumps(dict(preloadScript=['keep.rb'])))
+        route = 'down,right,down,down,down,down,cross,down'
+        self.ui(route + ',cross')
+        self.assertIs(json.loads(file.read_text())['fastForward'], False)
+        self.ui(route + ',right')
+        self.assertIs(json.loads(file.read_text())['fastForward'], True)
+        self.ui(route + ',left,square')
+        self.assertEqual(json.loads(file.read_text()),
+                         dict(preloadScript=['keep.rb'], fastForward=True))
+        before = file.read_bytes()
+        for invalid in [0, 1, 'on', None]:
+            self.assertIn('error', self.cmd('set-display', key='fastForward', value=invalid))
+            self.assertEqual(file.read_bytes(), before)
+
     def test_stale_game_ini_yields_to_the_ini_that_has_the_archive(self):
         # The Windows To the Moon: Game.ini is left over, the data is "To the Moon.rgssad".
         ini = '[Game]\nTitle=Renamed XP\nLibrary=RGSS102E.dll\nScripts=Data\\Scripts.rxdata\n'

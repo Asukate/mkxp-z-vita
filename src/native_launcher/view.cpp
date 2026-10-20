@@ -181,7 +181,7 @@ void View::settings(const UI &u) {
     const char *names[] = {"Controls",
                            "Display",
                            "Audio / MIDI",
-                           "Performance metrics",
+                           "Performance and speed",
                            "RTP locations (shared)",
                            "Rename",
                            "Game information",
@@ -329,8 +329,8 @@ void View::settings(const UI &u) {
          18);
     hint = u.gameOptions ? "Cross/Left/Right: change   Square: inherit   Circle: game settings" : "Cross/Left/Right: change   Square: default   Circle: Settings";
   } else if (u.page == Page::Metrics) {
-    text(194, 104, 716, 35, u.gameOptions ? "Metrics: " + u.gameEntry.name : "Performance metrics", 25);
-    if (u.focus == Focus::Settings) highlight(151, true);
+    text(194, 104, 716, 35, u.gameOptions ? "Performance: " + u.gameEntry.name : "Performance and speed", 25);
+    if (u.focus == Focus::Settings) highlight(151 + u.setting * 42, true);
     int mode = 0;
     auto i = u.displayValues.as_object().find("performanceMetrics");
     if (i != u.displayValues.as_object().end() && i->second.is_integer() &&
@@ -340,12 +340,24 @@ void View::settings(const UI &u) {
     text(202, 151, 220, 35, "Overlay", 24);
     fill(434, 159, 1, 19, {133, 65, 78});
     text(458, 151, 440, 35, modes[mode], 23);
-    text(202, 211, 696, 28, "FPS: frames presented each second.", 21);
-    text(202, 253, 696, 28, "MS: average time between frames, including waits.", 21);
-    text(202, 295, 696, 28, "Peak: longest frame in roughly the last 5 seconds (ms).", 21);
-    text(202, 350, 696, 28, "Uses an empty border when it fits; otherwise a corner panel.", 18);
-    text(202, 392, 696, 28, "Applies on the next game launch. Off by default.", 20);
-    hint = u.gameOptions ? "Cross/Left/Right: change   Square: inherit   Circle: game settings" : "Cross/Left/Right: change   Square: off   Circle: Settings";
+    auto ff = u.displayValues.as_object().find("fastForward");
+    bool fast = ff == u.displayValues.as_object().end() || !ff->second.is_boolean() ||
+                ff->second.as_boolean();
+    text(202, 193, 220, 35, "Fast forward", 24);
+    fill(434, 201, 1, 19, {133, 65, 78});
+    text(458, 193, 440, 35, fast ? "On (L+R)" : "Off", 23);
+    if (u.setting == 1) {
+      text(202, 253, 696, 28, "L+R switches up to 2x speed; >> shows while on.", 21);
+      text(202, 295, 696, 28, "Busy maps run as fast as they can, below 2x.", 21);
+      text(202, 337, 696, 28, "Any button can also be mapped to Fast forward in Controls.", 18);
+    } else {
+      text(202, 253, 696, 28, "FPS: frames presented each second.", 21);
+      text(202, 295, 696, 28, "MS: average time between frames, including waits.", 21);
+      text(202, 337, 696, 28, "Peak: longest frame in roughly the last 5 seconds (ms).", 21);
+      text(202, 371, 696, 28, "Uses an empty border when it fits; otherwise a corner panel.", 18);
+    }
+    text(202, 405, 696, 28, "Applies on the next game launch.", 20);
+    hint = u.gameOptions ? "Cross/Left/Right: change   Square: inherit   Circle: game settings" : "Cross/Left/Right: change   Square: default   Circle: Settings";
   } else if (u.page == Page::Folders) {
     text(194, 104, 716, 35, "Game folders", 28);
     text(194, 142, 716, 26, "Default: " + u.model.paths.at("games"), 18,
@@ -403,7 +415,7 @@ void View::settings(const UI &u) {
   } else {
     text(194, 104, 716, 35, "Preferences", 26);
     const char *names[] = {"Game display", "RTP locations", "Game folders",
-                           "Game error history", "Performance metrics", "Release checks"};
+                           "Game error history", "Performance and speed", "Release checks"};
     for (int i = 0; i < 6; ++i) {
       int y = 151 + i * 42;
       if (i == u.setting && u.focus == Focus::Settings)

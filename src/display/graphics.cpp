@@ -22,6 +22,8 @@
 
 #include "graphics.h"
 #include "performance-overlay.h"
+#include "fast-forward.h"
+#include "fast-forward-badge.h"
 #include "vita_resume.h"
 
 #include "alstream.h"
@@ -72,6 +74,8 @@ struct VitaGLTexturePrefix
 #ifdef __vita__
 #include <psp2/kernel/processmgr.h>
 #include <psp2/display.h>
+#include <psp2/ctrl.h>
+#include "vita_input.h"
 #endif
 #include "util.h"
 #include "input.h"
@@ -1429,6 +1433,8 @@ struct GraphicsPrivate {
     
     double last_update;
     PerformanceOverlay performanceOverlay;
+    hardrpg::FastForward fastForward;
+    FastForwardBadge fastForwardBadge;
     
     
     FPSLimiter fpsLimiter;
@@ -1478,6 +1484,7 @@ struct GraphicsPrivate {
     integerLastMileScaling(rtData->config.integerScaling.lastMileScaling) {
         avgFPSData = std::vector<double>();
         avgFPSLock = SDL_CreateMutex();
+        fastForward.allowed = rtData->config.fastForward;
         glResourceLock = SDL_CreateMutex();
         
         if (integerScaleActive) {
@@ -1637,6 +1644,8 @@ struct GraphicsPrivate {
             performanceOverlay.draw(threadData->config.performanceMetrics,
                                     winSize.x, winSize.y, scOffset.x, scOffset.y,
                                     scSize.x, scSize.y);
+        if (fastForward.active)
+            fastForwardBadge.draw(winSize.x, winSize.y);
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("FPS_DELAY_BEGIN");
 #endif
@@ -1754,7 +1763,50 @@ struct GraphicsPrivate {
                               !forceNearestNeighbor && GLMeta::smoothScalingMethod(scaleIsSpecial) == Bilinear);
     }
     
+    /* Fast forward: the frame passes without being drawn. Counted like a
+     * drawn one, so Input repeat timing, which follows the measured rate,
+     * stays the same in real time. */
+    bool skipFastForwardFrame() {
+        if (!fastForward.skip())
+            return false;
+        { FrameProfile::Scope pacing(FrameProfile::Pacing); fpsLimiter.delay(); }
+        ++frameCount;
+        Bitmap::frameTick();
+        threadData->ethread->notifyFrame();
+        updateAvgFPS();
+        return true;
+    }
+    
+    /* Reads the switches once per Graphics.update and sets the pace. */
+    void updateFastForward() {
+        if (!fastForward.allowed)
+            return;
+        bool l = false, r = false, select = false;
+#ifdef __vita__
+        SceCtrlData pad = {};
+        if (sceCtrlPeekBufferPositive(0, &pad, 1) > 0) {
+            l = pad.buttons & SCE_CTRL_LTRIGGER;
+            r = pad.buttons & SCE_CTRL_RTRIGGER;
+            select = pad.buttons & SCE_CTRL_SELECT;
+        }
+        const bool mapped = vitaFastForwardHeld();
+#else
+        const bool mapped = false;
+#endif
+        if (fastForward.update(l, r, select, mapped))
+            applyFrameRate();
+    }
+    
+    void applyFrameRate() {
+        if (threadData->config.syncToRefreshrate || threadData->config.fixedFramerate > 0)
+            return;
+        fpsLimiter.setDesiredFPS(fastForward.rate(frameRate));
+        fpsLimiter.resetFrameAdjust();
+    }
+    
     void redrawScreen() {
+        if (skipFastForwardFrame())
+            return;
         FrameProfile::Scope profile(FrameProfile::ScreenBlit);
         screen.composite();
 #ifdef MKXPZ_VITA_DIAGNOSTICS
@@ -2315,7 +2367,7 @@ void Graphics::update(bool checkForShutdown) {
         p->checkShutDownReset();
     
     p->checkSyncLock();
-    
+    p->updateFastForward();
     
 #ifdef MKXPZ_STEAM
     if (STEAMSHIM_alive())
@@ -2458,6 +2510,9 @@ void Graphics::transition(int duration, const char *filename, int vague) {
         }
         
         p->checkSyncLock();
+        p->updateFastForward();
+        if (p->skipFastForwardFrame())
+            continue;
         
         const float prog = i * (1.0f / duration);
         
@@ -2518,7 +2573,7 @@ void Graphics::setFrameRate(int value) {
     if (p->threadData->config.fixedFramerate > 0)
         return;
     
-    p->fpsLimiter.setDesiredFPS(p->frameRate);
+    p->fpsLimiter.setDesiredFPS(p->fastForward.rate(p->frameRate));
     //shState->input().recalcRepeat((unsigned int)p->frameRate);
 }
 
@@ -2529,6 +2584,7 @@ double Graphics::averageFrameRate() {
 void Graphics::wait(int duration) {
     for (int i = 0; i < duration; ++i) {
         p->checkShutDownReset();
+        p->updateFastForward();
         p->redrawScreen();
     }
 }

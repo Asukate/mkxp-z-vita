@@ -1302,13 +1302,14 @@ void Input::update()
         }
     }
     vitaSetMappedKeys(p->vitaResult.keys);
+    vitaSetFastForwardHeld(p->vitaResult.actions[hardrpg::controlFastForward]);
 #endif
     /* Poll all bindings */
     p->pollBindings(repeatCand);
 #ifdef __vita__
     if (vitaControlProfile().enabled) {
         for (const auto &action : hardrpg::controlActions) {
-            if (!action.code) continue;
+            if (!action.code || action.code == hardrpg::controlFastForward) continue;
             auto code = static_cast<ButtonCode>(action.code);
             auto &state = p->getState(code);
             auto &old = p->getOldState(code);

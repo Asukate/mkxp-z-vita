@@ -23,7 +23,11 @@ static const ControlAction controlActions[] = {
     {14, "X"},  {15, "Y"},          {16, "Z"},          {17, "L"},
     {18, "R"},  {21, "SHIFT"},      {22, "CTRL"},       {23, "ALT"},
     {25, "F5"}, {26, "F6"},         {27, "F7"},         {28, "F8"},
-    {29, "F9"}, {38, "Mouse left"}, {40, "Mouse right"}};
+    {29, "F9"}, {38, "Mouse left"}, {40, "Mouse right"},
+    {43, "Fast forward"}};
+// Not an RPG Maker button: the engine's fast forward (see
+// display/fast-forward.h), which L+R also switches.
+static const int controlFastForward = 43;
 // A mapping is either an RPG Maker action (the codes above) or a keyboard
 // key, for games that read the keyboard themselves (LISA) or whose own key
 // bindings are what the player knows. A key is controlKeyBase plus its USB
@@ -40,17 +44,18 @@ struct ControlPick {
   float x, w;
 };
 static const ControlPick controlPicks[] = {
-    {13, "Confirm", 0, 0.00f, 1.75f},
-    {12, "Cancel", 0, 1.75f, 1.75f},
-    {11, "Run", 0, 3.50f, 1.25f},
-    {14, "X=A", 0, 4.75f, 1.00f},
-    {15, "Y=S", 0, 5.75f, 1.00f},
-    {16, "Z=D", 0, 6.75f, 1.00f},
-    {17, "L=Q", 0, 7.75f, 1.00f},
-    {18, "R=W", 0, 8.75f, 1.00f},
-    {38, "Mouse L", 0, 9.75f, 1.75f},
-    {40, "Mouse R", 0, 11.50f, 1.75f},
-    {0, "Off", 0, 13.25f, 1.25f},
+    {13, "Confirm", 0, 0.00f, 1.50f},
+    {12, "Cancel", 0, 1.50f, 1.50f},
+    {11, "Run", 0, 3.00f, 1.25f},
+    {14, "X=A", 0, 4.25f, 1.00f},
+    {15, "Y=S", 0, 5.25f, 1.00f},
+    {16, "Z=D", 0, 6.25f, 1.00f},
+    {17, "L=Q", 0, 7.25f, 1.00f},
+    {18, "R=W", 0, 8.25f, 1.00f},
+    {38, "Mouse L", 0, 9.25f, 1.50f},
+    {40, "Mouse R", 0, 10.75f, 1.50f},
+    {43, "Fast fwd", 0, 12.25f, 1.75f},
+    {0, "Off", 0, 14.00f, 1.00f},
     {1041, "Esc", 1, 0.00f, 1.50f},
     {1058, "F1", 1, 1.50f, 1.00f},
     {1059, "F2", 1, 2.50f, 1.00f},
@@ -346,7 +351,7 @@ struct ControlSample {
   std::vector<ControlContact> front, rear;
 };
 struct ControlResult {
-  std::array<bool, 43> actions{};
+  std::array<bool, 44> actions{};
   // Keyboard keys held through a key mapping, by scancode.
   std::array<bool, 256> keys{};
   bool pointer = false;
@@ -455,7 +460,7 @@ public:
     }
     out.pointer = p.front == 2 || p.rear == 2 || p.rightPointer;
     auto press = [&](int action) {
-      if (action > 0 && action < 43)
+      if (action > 0 && action < 44)
         out.actions[action] = true;
       else if (controlIsKey(action))
         out.keys[action - controlKeyBase] = true;

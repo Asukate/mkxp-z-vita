@@ -1279,7 +1279,8 @@ void Model::changeDisplay(const std::string &name, const Json &value) {
   if (name == "performanceMetrics") {
     if (!value.is_integer() || value.as_integer() < 0 || value.as_integer() > 2)
       throw std::runtime_error("Invalid performance metrics mode");
-  } else if ((name == "fixedAspectRatio" || name == "integerScalingActive")
+  } else if ((name == "fixedAspectRatio" || name == "integerScalingActive" ||
+              name == "fastForward")
           ? !value.is_boolean()
           : name != "smoothScaling" || !value.is_integer() ||
                 value.as_integer() < 0 || value.as_integer() > 1)
@@ -1308,7 +1309,7 @@ void Model::changeGameSetting(const Entry &entry, const std::string &name,
     throw std::runtime_error("Select a game to change its settings.");
   bool boolean = name == "fixedAspectRatio" || name == "integerScalingActive" ||
                  name == "enableAudio" || name == "midiChorus" ||
-                 name == "midiReverb";
+                 name == "midiReverb" || name == "fastForward";
   bool integer = name == "smoothScaling" || name == "performanceMetrics";
   if ((!boolean && !integer) ||
       (!reset && (boolean ? !value.is_boolean()

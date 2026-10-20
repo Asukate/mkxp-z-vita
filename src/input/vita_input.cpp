@@ -134,6 +134,11 @@ namespace {
 std::array<bool, 256> mappedKeys{};
 }
 void vitaSetMappedKeys(const std::array<bool, 256> &keys) { mappedKeys = keys; }
+namespace {
+bool fastForwardHeld = false;
+}
+void vitaSetFastForwardHeld(bool held) { fastForwardHeld = held; }
+bool vitaFastForwardHeld() { return fastForwardHeld; }
 bool vitaMappedKey(int scancode) {
   return scancode > 0 && scancode < 256 && mappedKeys[scancode];
 }

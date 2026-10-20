@@ -14,5 +14,8 @@ bool vitaControlScancode(int scancode);
 /* Keyboard keys held this frame through a key mapping in the control profile. */
 void vitaSetMappedKeys(const std::array<bool, 256> &keys);
 bool vitaMappedKey(int scancode);
+// An input mapped to Fast forward is held (read by Graphics each frame).
+void vitaSetFastForwardHeld(bool held);
+bool vitaFastForwardHeld();
 
 #endif

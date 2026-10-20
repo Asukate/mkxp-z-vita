@@ -218,7 +218,7 @@ void UI::scroll(int rows) {
     int count = page == Page::Errors    ? errors.size()
                 : page == Page::Folders ? 1 + gameFolders.size()
                 : page == Page::Home    ? 6
-                : page == Page::Metrics ? 1
+                : page == Page::Metrics ? 2
                                         : 3;
     setting = std::max(0, std::min(setting + rows, std::max(0, count - 1)));
     settingFirst = std::max(0, std::min(settingFirst, setting));
@@ -323,7 +323,7 @@ void UI::touch(int x, int y) {
     int count = page == Page::Home      ? 6
                 : page == Page::Updates ? 3
                 : page == Page::Display ? 3
-                : page == Page::Metrics ? 1
+                : page == Page::Metrics ? 2
                 : page == Page::Rtp ? rtpPackCount
                 : page == Page::Folders ? 1 + gameFolders.size()
                                         : errors.size();
@@ -389,7 +389,7 @@ void UI::openGameMenu() {
 }
 int UI::optionRows() const {
   return page == Page::Game       ? gameOptionsCount()
-         : page == Page::Metrics  ? 1
+         : page == Page::Metrics  ? 2
          : page == Page::Rtp      ? rtpPackCount
          : page == Page::GameInfo ? 0
          : page == Page::Remove   ? 2
@@ -882,6 +882,21 @@ void UI::changeDisplay(int step, bool reset) {
                 : "Display settings saved for the next game launch.";
 }
 void UI::changeMetrics(int step, bool reset) {
+  if (setting == 1) {
+    auto found = displayValues.as_object().find("fastForward");
+    bool on = found == displayValues.as_object().end() || !found->second.is_boolean() ||
+              found->second.as_boolean();
+    Json value(reset ? true : !on);
+    if (gameOptions)
+      model.changeGameSetting(gameEntry, "fastForward", value, reset);
+    else
+      model.changeDisplay("fastForward", value);
+    displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
+    message = gameOptions
+                  ? "Saved for " + gameEntry.name + ". Applies on next launch."
+                  : "Fast forward saved for the next game launch.";
+    return;
+  }
   auto i = displayValues.as_object().find("performanceMetrics");
   int mode = 0;
   if (i != displayValues.as_object().end() && i->second.is_integer() &&
@@ -1191,7 +1206,7 @@ void UI::action(Button b) {
                page == Page::Errors    ? errors.size()
                : page == Page::Folders ? 1 + gameFolders.size()
                : page == Page::Home    ? 6
-               : page == Page::Metrics ? 1
+               : page == Page::Metrics ? 2
                                        : 3,
                7, step);
       } else
