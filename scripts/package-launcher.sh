@@ -100,6 +100,7 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/launcher/legacy_ruby_compat.rb=legacy_ruby_compat.rb" \
     -a "$ROOT/launcher/time_strftime_guard.rb=time_strftime_guard.rb" \
     -a "$ROOT/launcher/performance_patch.rb=performance_patch.rb" \
+    -a "$ROOT/launcher/sprite_fastpath.rb=sprite_fastpath.rb" \
     -a "$ROOT/launcher/vita_controls.rb=vita_controls.rb" \
     -a "$ROOT/launcher/vita_tap_to_walk.rb=vita_tap_to_walk.rb" \
     -a "$ROOT/assets/ca-certificates.crt=ca-certificates.crt" \

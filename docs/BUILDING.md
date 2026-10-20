@@ -86,7 +86,8 @@ It does not publish a release or install anything on a device.
 Packaging verifies the static payload SHA-256 manifest, launcher backend,
 the HardRPG SFO title, app version and requested Title ID. Alternative RGSS
 packages also verify the picker source round-trip through Ruby Marshal/zlib.
-The VPK contains the engine, launcher backend, two preloads, font,
+The VPK contains the engine, launcher backend, Ruby preloads (listed in
+launcher/mkxp.json), font,
 LiveArea assets, and license notices. Games, RTP, saves,
 and Sony firmware modules are supplied separately.
 
