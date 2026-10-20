@@ -75,6 +75,29 @@ module HardRPGSpriteFastPath
       @status = "off (#{e.class})"
     end
 
+    # Methods the shorter update relies on. If a script redefines one after the fast path switched on
+    # (a game that runs frames while its scripts are still loading), every sprite goes back to the
+    # game's own update from then on.
+    VXA_WATCH = %i[update_bitmap graphic_changed? update_src_rect update_position update_other setup_new_effect
+                   move_animation vxace_sp1_update_position].freeze
+    XP_WATCH = %i[screen_x screen_y screen_z bush_depth jumping?].freeze
+
+    def watch(klass, names)
+      klass.singleton_class.prepend(Module.new do
+        define_method(:method_added) do |name|
+          super(name)
+          # Subclasses inherit this hook; only the watched class's own methods count.
+          HardRPGSpriteFastPath.changed(klass, name) if equal?(klass) && names.include?(name)
+        end
+      end)
+    end
+
+    def changed(klass, name)
+      return if $hardrpg_sprite_fastpath_off
+      $hardrpg_sprite_fastpath_off = true
+      @status = "off (#{klass}##{name} changed after start)"
+    end
+
     def install_vxa
       target = :update
       unless default?(Sprite_Character, :update, VXA[:update])
@@ -88,29 +111,38 @@ module HardRPGSpriteFastPath
            default?(Sprite_Character, :vxace_sp1_update_position, VXA_JP_POSITION))
       end
       return @status = "off (custom #{custom.join(', ')})" unless custom.empty?
-      base = Sprite_Base.instance_method(:update)
+      # The base sprite update: a real super for the default update; MOG keeps the default update under
+      # another name, where super would look for Sprite_Base#mog_anti_lag_update, so it is called directly.
+      base_call = target == :update ? 'super' : 'HardRPGSpriteFastPath.sprite_base_update.bind_call(self)'
+      @sprite_base_update = Sprite_Base.instance_method(:update)
       Sprite_Character.send(:alias_method, :hardrpg_default_update, target)
-      Sprite_Character.send(:define_method, target) do
-        c = @character
-        return hardrpg_default_update unless c
-        base.bind_call(self)
-        return if @tile_id == 0 && @character_name && @character_name.empty? && @balloon_duration == 0 && !@animation &&
-                  c.tile_id == 0 && c.character_name.empty? && c.character_index == @character_index &&
-                  c.animation_id <= 0 && c.balloon_id <= 0
-        update_bitmap
-        update_src_rect
-        sx = c.screen_x
-        sy = c.screen_y
-        move_animation(sx - x, sy - y) if @animation
-        self.x = sx
-        self.y = sy
-        self.z = c.screen_z
-        update_other
-        update_balloon
-        setup_new_effect
-      end
+      Sprite_Character.class_eval(<<~RUBY, __FILE__, __LINE__ + 1)
+        def #{target}
+          c = @character
+          return hardrpg_default_update if !c || $hardrpg_sprite_fastpath_off
+          #{base_call}
+          return if @tile_id == 0 && @character_name && @character_name.empty? && @balloon_duration == 0 && !@animation &&
+                    c.tile_id == 0 && c.character_name.empty? && c.character_index == @character_index &&
+                    c.animation_id <= 0 && c.balloon_id <= 0
+          update_bitmap
+          update_src_rect
+          sx = c.screen_x
+          sy = c.screen_y
+          move_animation(sx - x, sy - y) if @animation
+          self.x = sx
+          self.y = sy
+          self.z = c.screen_z
+          update_other
+          update_balloon
+          setup_new_effect
+        end
+      RUBY
+      watch(Sprite_Character, VXA_WATCH)
+      watch(Sprite_Base, [:update]) if target != :update
       @status = target == :update ? 'on (VX Ace)' : 'on (VX Ace, MOG Anti Lag)'
     end
+
+    def sprite_base_update; @sprite_base_update; end
 
     def install_xp
       return @status = 'off (custom update)' unless default?(Sprite_Character, :update, XP_SPRITE_UPDATE)
@@ -121,7 +153,7 @@ module HardRPGSpriteFastPath
         def update
           c = @character
           m = $game_map
-          if @hardrpg_seen && @tile_id == c.tile_id && @character_name == c.character_name &&
+          if @hardrpg_seen && !$hardrpg_sprite_fastpath_off && @tile_id == c.tile_id && @character_name == c.character_name &&
              @character_hue == c.character_hue && c.real_x == @hardrpg_rx && c.real_y == @hardrpg_ry &&
              m.display_x == @hardrpg_dx && m.display_y == @hardrpg_dy && c.pattern == @hardrpg_pattern &&
              c.direction == @hardrpg_direction && c.opacity == @hardrpg_opacity && c.blend_type == @hardrpg_blend &&
@@ -145,12 +177,14 @@ module HardRPGSpriteFastPath
           @hardrpg_on_top = c.instance_variable_get(:@always_on_top)
         end
       end
+      watch(Game_Character, XP_WATCH)
       @status = 'on (XP)'
     end
   end
 end
 
-# Installed at the first frame, once every script section has defined its classes.
+# Installed at the first frame; by then a game's script sections have normally all run (the change
+# guard above covers games that draw frames earlier).
 class << Graphics
   alias_method :hardrpg_sprite_fastpath_update, :update
   def update(*args)

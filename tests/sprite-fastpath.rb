@@ -115,6 +115,11 @@ xp_digests
 HardRPGSpriteFastPath.install
 check('XP: installs on the default scripts', HardRPGSpriteFastPath.status == 'on (XP)')
 check('XP: every sprite matches the full update in every frame', xp_run == reference)
+Game_Character.class_eval { def screen_x; 777; end }
+check('XP: a later Game_Character#screen_x change switches it off',
+      HardRPGSpriteFastPath.status == 'off (Game_Character#screen_x changed after start)')
+check('XP: after that every sprite takes the new position', xp_run.last.all? { |row| row[0] == 777 })
+$hardrpg_sprite_fastpath_off = nil
 
 # A game that edited one Game_Character method keeps the full update.
 Object.send(:remove_const, :Sprite_Character)
@@ -236,4 +241,19 @@ vxa_digests(:plain)
 Sprite_Character.class_eval { def update_other; self.opacity = 1; end }
 HardRPGSpriteFastPath.install
 check('VX Ace: an edited update_other keeps the game\'s update', HardRPGSpriteFastPath.status == 'off (custom update_other)')
+# A script that redefines a method the fast path relies on after it switched on (a game drawing frames
+# while its scripts still load) sends every sprite back to the game's own update.
+$hardrpg_sprite_fastpath_off = nil
+load_fastpath
+vxa_digests(:plain)
+HardRPGSpriteFastPath.install
+Class.new(Sprite_Character) { def update_position; end }  # a subclass's own method is not a change
+check('VX Ace: a subclass defining update_position leaves it on', HardRPGSpriteFastPath.status == 'on (VX Ace)')
+Sprite_Character.class_eval { def update_position; self.x = 1234; end }
+check('VX Ace: a later update_position change switches it off',
+      HardRPGSpriteFastPath.status == 'off (Sprite_Character#update_position changed after start)')
+sprite = Sprite_Character.new(nil, VXA::Character.new('Actor1', 100))
+sprite.update
+check('VX Ace: after that the game\'s own update runs', sprite.x == 1234)
+$hardrpg_sprite_fastpath_off = nil
 puts 'sprite-fastpath: all checks passed'
