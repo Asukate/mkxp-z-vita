@@ -28,6 +28,13 @@
 #include <psp2/rtc.h>
 #include "input/vita_input.h"
 #include "vita_startup_timer.h"
+#include "display/gl/program-cache.h"
+#include "shader-cache-build-id.h"
+#include <sys/stat.h>
+#include <vector>
+#include <string>
+extern "C" void glGetProgramBinary(GLuint, GLsizei, GLsizei *, GLenum *, void *);
+extern "C" void glProgramBinary(GLuint, GLenum, const void *, GLsizei);
 #include <psp2/kernel/sysmem.h>
 extern "C" GLboolean vglInitWithCustomSizes(int pool_size, int width, int height,
                                             int ram_pool_size, int cdram_pool_size,
@@ -77,7 +84,31 @@ class Presenter {
   };
   std::map<const Image *, Texture> textures;
   uint32_t frame = 0;
-  GLuint link(const char *vs, const char *fs, const char *a0, const char *a1) {
+  // Linked programs are kept in the engine's program cache, so a launch only
+  // compiles them (and only then loads the shader compiler) after an update.
+  GLuint link(const char *name, const char *vs, const char *fs, const char *a0, const char *a1) {
+#ifdef __vita__
+    std::string key(MKXPZ_SHADER_CACHE_BUILD);
+    for (const char *part : {name, vs, fs, a0, a1 ? a1 : ""}) {
+      key += part;
+      key.push_back('\0');
+    }
+    char path[96];
+    std::snprintf(path, sizeof path, "ux0:/data/mkxpz-cache/programs-v1/%08x.bin",
+                  unsigned(ProgramCache::checksum(name, std::strlen(name))));
+    {
+      std::vector<uint8_t> binary;
+      if (ProgramCache::load(path, key, binary)) {
+        GLuint p = glCreateProgram();
+        glProgramBinary(p, 0, binary.data(), binary.size());
+        GLint ok = GL_FALSE;
+        glGetProgramiv(p, GL_LINK_STATUS, &ok);
+        if (ok)
+          return p;
+        glDeleteProgram(p);
+      }
+    }
+#endif
     GLuint vertex = shader(GL_VERTEX_SHADER, vs), fragment = 0;
     try {
       fragment = shader(GL_FRAGMENT_SHADER, fs);
@@ -98,6 +129,23 @@ class Presenter {
     glGetProgramiv(p, GL_LINK_STATUS, &ok);
     if (!ok)
       throw std::runtime_error("Cannot link launcher shader");
+#ifdef __vita__
+    GLint size = 0;
+    glGetProgramiv(p, 0x8741 /* GL_PROGRAM_BINARY_LENGTH */, &size);
+    if (size > 0 && unsigned(size) <= ProgramCache::MaxBinary) {
+      try {
+        std::vector<uint8_t> binary(size);
+        GLsizei written = 0;
+        GLenum format = 0;
+        glGetProgramBinary(p, size, &written, &format, binary.data());
+        if (written == size) {
+          mkdir("ux0:/data/mkxpz-cache", 0777);
+          mkdir("ux0:/data/mkxpz-cache/programs-v1", 0777);
+          ProgramCache::save(path, key, binary);
+        }
+      } catch (const std::bad_alloc &) { /* The cache is optional. */ }
+    }
+#endif
     return p;
   }
   // One texture per Image object. When its pixels change (a text layer drawn
@@ -180,34 +228,16 @@ public:
       vitaStartupTimerMark("launcher_gl_ready");
 #endif
       SDL_GL_SetSwapInterval(1);
-      GLuint vertex = shader(
-          GL_VERTEX_SHADER,
+      program = link(
+          "launcher-canvas",
           "attribute vec2 position; attribute vec2 texcoord; varying vec2 uv; "
-          "void main(){uv=texcoord;gl_Position=vec4(position,0.0,1.0);}");
-      GLuint fragment = 0;
-      try {
-        fragment = shader(
-            GL_FRAGMENT_SHADER,
-            "precision mediump float; varying vec2 uv; uniform sampler2D "
-            "canvas; void main(){gl_FragColor=texture2D(canvas,uv);}");
-      } catch (...) {
-        glDeleteShader(vertex);
-        throw;
-      }
-      program = glCreateProgram();
-      glAttachShader(program, vertex);
-      glAttachShader(program, fragment);
-      glBindAttribLocation(program, 0, "position");
-      glBindAttribLocation(program, 1, "texcoord");
-      glLinkProgram(program);
-      glDeleteShader(vertex);
-      glDeleteShader(fragment);
-      GLint ok;
-      glGetProgramiv(program, GL_LINK_STATUS, &ok);
-      if (!ok)
-        throw std::runtime_error("Cannot link launcher shader");
+          "void main(){uv=texcoord;gl_Position=vec4(position,0.0,1.0);}",
+          "precision mediump float; varying vec2 uv; uniform sampler2D "
+          "canvas; void main(){gl_FragColor=texture2D(canvas,uv);}",
+          "position", "texcoord");
       canvasLocation = glGetUniformLocation(program, "canvas");
       quadProgram = link(
+          "launcher-quad",
           "attribute vec2 corner; uniform vec4 rect; varying vec2 local; "
           "void main(){local=corner;vec2 p=rect.xy+corner*rect.zw;"
           "gl_Position=vec4(p.x/480.0-1.0,1.0-p.y/272.0,0.0,1.0);}",

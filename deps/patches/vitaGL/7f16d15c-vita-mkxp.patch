@@ -1,6 +1,6 @@
 diff -ruN --no-dereference a/Makefile b/Makefile
---- a/Makefile
-+++ b/Makefile
+--- a/Makefile	2026-05-12 21:04:08.000000000 -0300
++++ b/Makefile	2026-10-20 14:24:59.156591217 -0300
 @@ -152,7 +152,7 @@
  endif
  
@@ -11,8 +11,8 @@ diff -ruN --no-dereference a/Makefile b/Makefile
  
  ifeq ($(HAVE_WRAPPED_ALLOCATORS),1)
 diff -ruN --no-dereference a/source/buffers.c b/source/buffers.c
---- a/source/buffers.c
-+++ b/source/buffers.c
+--- a/source/buffers.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/buffers.c	2026-10-20 14:24:59.156666728 -0300
 @@ -229,6 +229,59 @@
  	}
  }
@@ -74,9 +74,22 @@ diff -ruN --no-dereference a/source/buffers.c b/source/buffers.c
  #ifndef SKIP_ERROR_HANDLING
  	if (n < 0) {
 diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
---- a/source/custom_shaders.c
-+++ b/source/custom_shaders.c
-@@ -709,7 +709,7 @@
+--- a/source/custom_shaders.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/custom_shaders.c	2026-10-20 14:25:08.731203784 -0300
+@@ -616,7 +616,11 @@
+ #define vgl_compile_shader(shd, sv) compile_shader(shd, sv)
+ static inline __attribute__((always_inline)) void compile_shader(shader *s, GLboolean save_bindings) {
+ #endif
+-	// Compiling shader source
++	// Compiling shader source; the compiler is loaded on first use.
++	if (!is_shark_online && !start_shader_compiler()) {
++		s->prog = NULL;
++		return;
++	}
+ 	s->prog = shark_compile_shader_extended((const char *)s->source, &s->size, s->type == GL_FRAGMENT_SHADER ? SHARK_FRAGMENT_SHADER : SHARK_VERTEX_SHADER, compiler_opts, compiler_fastmath, compiler_fastprecision, compiler_fastint);
+ 	if (s->prog) {
+ 		vgl_free(s->source);
+@@ -709,7 +713,7 @@
  			}
  #endif
  #ifndef TEXTURES_SPEEDHACK
@@ -85,7 +98,7 @@ diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
  #endif
  			sampler *smp = samplers[(int)p->frag_texunits[i]->data];
  			if (smp) {
-@@ -761,7 +761,7 @@
+@@ -761,7 +765,7 @@
  			}
  #endif
  #ifndef TEXTURES_SPEEDHACK
@@ -94,7 +107,7 @@ diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
  #endif
  			sampler *smp = samplers[(int)p->vert_texunits[i]->data];
  			if (smp) {
-@@ -926,7 +926,7 @@
+@@ -926,7 +930,7 @@
  			}
  #endif
  #ifndef TEXTURES_SPEEDHACK
@@ -103,7 +116,7 @@ diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
  #endif
  			sampler *smp = samplers[(int)p->frag_texunits[i]->data];
  			if (smp) {
-@@ -978,7 +978,7 @@
+@@ -978,7 +982,7 @@
  			}
  #endif
  #ifndef TEXTURES_SPEEDHACK
@@ -112,7 +125,7 @@ diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
  #endif
  			sampler *smp = samplers[(int)p->vert_texunits[i]->data];
  			if (smp) {
-@@ -1172,7 +1172,7 @@
+@@ -1172,7 +1176,7 @@
  			}
  #endif
  #ifndef TEXTURES_SPEEDHACK
@@ -121,7 +134,7 @@ diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
  #endif
  			sampler *smp = samplers[(int)p->frag_texunits[i]->data];
  			if (smp) {
-@@ -1224,7 +1224,7 @@
+@@ -1224,7 +1228,7 @@
  			}
  #endif
  #ifndef TEXTURES_SPEEDHACK
@@ -130,7 +143,7 @@ diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
  #endif
  			sampler *smp = samplers[(int)p->vert_texunits[i]->data];
  			if (smp) {
-@@ -1440,7 +1440,7 @@
+@@ -1440,7 +1444,7 @@
  #endif
  			texture *tex = &texture_slots[texture_units[i].tex_id[0]];
  #ifndef TEXTURES_SPEEDHACK
@@ -139,9 +152,21 @@ diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
  #endif
  			sceGxmSetFragmentTexture(gxm_context, i, &tex->gxm_tex);
  #ifdef HAVE_GLSL_TEXTURE_SIZE
+@@ -1718,11 +1722,6 @@
+ }
+ 
+ void glCompileShader(GLuint handle) {
+-	// If vitaShaRK is not enabled, we try to initialize it
+-	if (!is_shark_online && !start_shader_compiler()) {
+-		SET_GL_ERROR(GL_INVALID_OPERATION)
+-	}
+-	
+ 	// Grabbing passed shader
+ 	shader *s = &shaders[handle - 1];
+ 	
 diff -ruN --no-dereference a/source/draw.c b/source/draw.c
---- a/source/draw.c
-+++ b/source/draw.c
+--- a/source/draw.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/draw.c	2026-10-20 14:24:59.156975014 -0300
 @@ -642,7 +642,7 @@
  			if (texture_slots[tex_unit->tex_id[0]].status != TEX_VALID)
  				return;
@@ -152,8 +177,8 @@ diff -ruN --no-dereference a/source/draw.c b/source/draw.c
  			sceGxmSetFragmentTexture(gxm_context, 0, &texture_slots[tex_unit->tex_id[0]].gxm_tex);
  			sceGxmSetVertexStream(gxm_context, 1, texture_object);
 diff -ruN --no-dereference a/source/ffp.c b/source/ffp.c
---- a/source/ffp.c
-+++ b/source/ffp.c
+--- a/source/ffp.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/ffp.c	2026-10-20 14:24:59.157089748 -0300
 @@ -1184,7 +1184,7 @@
  		restore_tex_cache(tex);
  #endif
@@ -200,8 +225,8 @@ diff -ruN --no-dereference a/source/ffp.c b/source/ffp.c
  		sampler *smp = samplers[0];
  		if (smp) {
 diff -ruN --no-dereference a/source/framebuffers.c b/source/framebuffers.c
---- a/source/framebuffers.c
-+++ b/source/framebuffers.c
+--- a/source/framebuffers.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/framebuffers.c	2026-10-20 14:24:59.157253283 -0300
 @@ -31,6 +31,18 @@
  framebuffer *active_write_fb = NULL; // Current write framebuffer in use
  renderbuffer *active_rb = NULL; // Current renderbuffer in use
@@ -307,8 +332,8 @@ diff -ruN --no-dereference a/source/framebuffers.c b/source/framebuffers.c
  			fb->depthbuffer_ptr = NULL;
  			fb->is_depth_hidden = GL_FALSE;
 diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
---- a/source/gxm.c
-+++ b/source/gxm.c
+--- a/source/gxm.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/gxm.c	2026-10-20 14:25:08.716911304 -0300
 @@ -23,6 +23,20 @@
  
  #include "shared.h"
@@ -480,7 +505,37 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  		sceKernelSignalSema(gc_mutex[1], 1);
  	}
  #ifndef HAVE_PTHREAD
-@@ -536,6 +597,51 @@
+@@ -322,6 +383,13 @@
+ #endif
+ 	}
+ 
++#if defined(HAVE_SHARK_LOG) || defined(LOG_ERRORS)
++	// Started lazily (first shader that must be compiled), so the log hook is installed here.
++	if (is_shark_online) {
++		shark_install_log_cb(shark_log_cb);
++		shark_set_warnings_level(SHARK_WARN_HIGH);
++	}
++#endif
+ 	return is_shark_online;
+ }
+ 
+@@ -346,13 +414,8 @@
+ 	sceRazorGpuCaptureEnableSalvage("ux0:data/vitagl_gpucrash.sgx");
+ #endif
+ 
+-	// Initializing runtime shader compiler
+-	if (start_shader_compiler()) {
+-#if defined(HAVE_SHARK_LOG) || defined(LOG_ERRORS)
+-		shark_install_log_cb(shark_log_cb);
+-		shark_set_warnings_level(SHARK_WARN_HIGH);
+-#endif
+-	}
++	// The runtime shader compiler (libshacccg) is loaded by start_shader_compiler() the first
++	// time a shader has to be compiled; a boot whose programs all come from glProgramBinary never loads it.
+ 
+ #ifndef HAVE_SINGLE_THREADED_GC
+ 	// Initializing garbage collector
+@@ -536,6 +599,51 @@
  #endif
  }
  
@@ -532,7 +587,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  void init_display_depth_stencil_surfaces(void) {
  	init_depth_stencil_buffer(DISPLAY_WIDTH, DISPLAY_HEIGHT, &gxm_depth_stencil_surface, GL_TRUE);
  }
-@@ -581,11 +687,26 @@
+@@ -581,11 +689,26 @@
  	// Ends current gxm scene
  	query_fence.value++;
  	sceGxmEndScene(gxm_context, NULL, &query_fence);
@@ -559,7 +614,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  	if (in_use_framebuffer != active_write_fb || needs_scene_reset || dirty_framebuffer || dirty_query) {
  		dirty_framebuffer = GL_FALSE;
  		dirty_query = GL_FALSE;
-@@ -594,6 +715,7 @@
+@@ -594,6 +717,7 @@
  		is_fbo_float = in_use_framebuffer ? in_use_framebuffer->is_float : GL_FALSE;
  
  		// Ending drawing scene
@@ -567,7 +622,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  		if (needs_end_scene) {
  			scene_end();
  		} else {
-@@ -606,6 +728,7 @@
+@@ -606,6 +730,7 @@
  			}
  			needs_end_scene = GL_TRUE;
  		}
@@ -575,7 +630,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  
  #ifndef SKIP_SPLASHSCREEN	
  		// If we're running the boot splashscreen, we need to terminate it first
-@@ -619,6 +742,7 @@
+@@ -619,6 +744,7 @@
  		}
  #endif
  
@@ -583,7 +638,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  		// Starting drawing scene
  		is_rendering_display = !active_write_fb;
  		if (is_rendering_display) { // Default framebuffer is used
-@@ -638,8 +762,54 @@
+@@ -638,8 +764,54 @@
  			}
  #endif
  		} else {
@@ -639,7 +694,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  				init_depth_stencil_buffer(active_write_fb->width, active_write_fb->height, &active_write_fb->depthbuffer, GL_FALSE);
  				active_write_fb->depthbuffer_ptr = &active_write_fb->depthbuffer;
  				active_write_fb->is_depth_hidden = GL_TRUE;
-@@ -689,6 +859,7 @@
+@@ -689,6 +861,7 @@
  				vgl_log("%s:%d Scene reset failed due to sceGxmBeginScene erroring (%s) on framebuffer 0x%08X.\n", __FILE__, __LINE__, get_gxm_error_literal(r), active_write_fb);
  #endif
  		}
@@ -647,7 +702,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  
  		// Setting back current viewport if enabled cause sceGxm will reset it at sceGxmEndScene call
  		if (old_framebuffer != in_use_framebuffer) {
-@@ -758,6 +929,7 @@
+@@ -758,6 +931,7 @@
  }
  
  void vglSwapBuffers(GLboolean has_commondialog) {
@@ -655,7 +710,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  #ifndef SKIP_SPLASHSCREEN
  	// Ignore display swaps during splashscreen since we handle them in the splashscreen thread
  	if (is_splashscreen_active)
-@@ -807,6 +979,7 @@
+@@ -807,6 +981,7 @@
  
  	if (!needs_scene_reset)
  		scene_end();
@@ -663,7 +718,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  
  	if (has_commondialog) {
  		// Populating SceCommonDialog parameters
-@@ -926,7 +1099,9 @@
+@@ -926,7 +1101,9 @@
  #ifdef HAVE_PROFILING
  		tick = sceKernelGetProcessTimeLow();
  #endif
@@ -673,7 +728,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  #ifdef HAVE_PROFILING
  		gpu_stall_cnt += sceKernelGetProcessTimeLow() - tick;
  #endif
-@@ -935,8 +1110,10 @@
+@@ -935,8 +1112,10 @@
  #endif
  		gxm_front_buffer_index = gxm_back_buffer_index;
  		gxm_back_buffer_index = (gxm_back_buffer_index + 1) % gxm_display_buffer_count;
@@ -684,7 +739,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  	
  	// Perform resolution change if there's one pending
  	if (NEW_DISPLAY_WIDTH) {
-@@ -968,10 +1145,23 @@
+@@ -968,10 +1147,23 @@
  }
  
  void glFinish(void) {
@@ -710,7 +765,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
  }
  
  void glReleaseShaderCompiler(void) {
-@@ -1003,4 +1193,4 @@
+@@ -1003,4 +1195,4 @@
  	}
  #endif
  	gxm_display_rt_size = size;
@@ -718,8 +773,8 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
 \ No newline at end of file
 +}
 diff -ruN --no-dereference a/source/misc.c b/source/misc.c
---- a/source/misc.c
-+++ b/source/misc.c
+--- a/source/misc.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/misc.c	2026-10-20 14:24:59.157502819 -0300
 @@ -23,6 +23,19 @@
  
  #include "shared.h"
@@ -791,8 +846,8 @@ diff -ruN --no-dereference a/source/misc.c b/source/misc.c
  
  void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
 diff -ruN --no-dereference a/source/shared.h b/source/shared.h
---- a/source/shared.h
-+++ b/source/shared.h
+--- a/source/shared.h	2026-05-12 21:04:08.000000000 -0300
++++ b/source/shared.h	2026-10-20 14:24:59.157585844 -0300
 @@ -47,7 +47,9 @@
  #define FRAME_PURGE_LIST_SIZE 16384 // Number of elements a single frame can hold
  #define FRAME_PURGE_RENDERTARGETS_LIST_SIZE 128 // Number of rendertargets a single frame can hold
@@ -868,8 +923,8 @@ diff -ruN --no-dereference a/source/shared.h b/source/shared.h
  typedef struct {
  	GLenum mode;
 diff -ruN --no-dereference a/source/textures.c b/source/textures.c
---- a/source/textures.c
-+++ b/source/textures.c
+--- a/source/textures.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/textures.c	2026-10-20 14:24:59.157703383 -0300
 @@ -23,6 +23,18 @@
  
  #include "shared.h"
@@ -1040,8 +1095,8 @@ diff -ruN --no-dereference a/source/textures.c b/source/textures.c
 +	return vgl_texture_alloc_failures;
 +}
 diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
---- a/source/utils/gpu_utils.c
-+++ b/source/utils/gpu_utils.c
+--- a/source/utils/gpu_utils.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/utils/gpu_utils.c	2026-10-20 14:24:59.157841341 -0300
 @@ -85,16 +85,50 @@
  }
  
@@ -1113,8 +1168,8 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
  }
  
 diff -ruN --no-dereference a/source/utils/gpu_utils.h b/source/utils/gpu_utils.h
---- a/source/utils/gpu_utils.h
-+++ b/source/utils/gpu_utils.h
+--- a/source/utils/gpu_utils.h	2026-05-12 21:04:08.000000000 -0300
++++ b/source/utils/gpu_utils.h	2026-10-20 14:24:59.157901804 -0300
 @@ -37,6 +37,13 @@
  // Alloc a generic memblock into sceGxm mapped memory with alignment
  void *gpu_alloc_mapped_aligned(size_t alignment, size_t size, vglMemType type);
@@ -1130,8 +1185,8 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.h b/source/utils/gpu_utils.h
  static inline __attribute__((always_inline)) void *gpu_alloc_mapped(size_t size, vglMemType type) {
  	return gpu_alloc_mapped_aligned(MEM_ALIGNMENT, size, type);
 diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
---- a/source/utils/mem_utils.c
-+++ b/source/utils/mem_utils.c
+--- a/source/utils/mem_utils.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/utils/mem_utils.c	2026-10-20 14:24:59.157941738 -0300
 @@ -496,6 +496,8 @@
  }
  
@@ -1162,8 +1217,8 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  	return NULL;
  }
 diff -ruN --no-dereference a/source/vitaGL.h b/source/vitaGL.h
---- a/source/vitaGL.h
-+++ b/source/vitaGL.h
+--- a/source/vitaGL.h	2026-05-12 21:04:08.000000000 -0300
++++ b/source/vitaGL.h	2026-10-20 14:24:59.158011298 -0300
 @@ -1078,6 +1078,22 @@
  // Get the internal texture data pointer of a GL texture.
  void *vglGetTexDataPointer(GLenum target);
