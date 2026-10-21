@@ -40,10 +40,10 @@ FILES = [('Graphics/Characters/Hero.png', b'hero'),
          ('Exact/child.bin', b'child'), ('exact', b'file'),
          ('Graphics/日本.png', b'unicode'), ('Graphics/É.png', b'accent')]
 
-def archive_v1():
+def archive_v1(files=FILES):
     out = bytearray(b'RGSSAD\0\1')
     key = 0xdeadcafe
-    for name, payload in FILES:
+    for name, payload in files:
         name = name.encode()
         out.extend(word(len(name) ^ key)); key = next_key(key)
         for byte in name:
@@ -66,10 +66,18 @@ def archive_v3():
     out.extend(word(key)); out.extend(data)
     return out
 
+LAUNCHER = shlex.split(subprocess.check_output(
+    ['pkg-config', '--cflags', '--libs', 'libpng', 'libturbojpeg', 'libwebp', 'libcurl'], text=True))
 lifecycle = compile('zip-lifecycle', ['tests/native-zip-lifecycle.cpp',
     'src/native_launcher/model.cpp', 'src/native_launcher/ui.cpp',
-    'src/native_launcher/text_input.cpp'], ['-Wl,--wrap=PHYSFS_mount'])
+    'src/native_launcher/home.cpp', 'src/native_launcher/art_fetch.cpp',
+    'src/native_launcher/image.cpp', 'src/native_launcher/text_input.cpp'],
+    ['-Wl,--wrap=PHYSFS_mount', *LAUNCHER])
 casefold = compile('rgss-casefold', ['tests/rgss-casefold.cpp', 'src/crypto/rgssad.cpp'])
+# The Vita build keeps RGSS1/2 entry tables in ux0:/data/hardrpg/cache;
+# on the desktop that is a relative path, so this runs in its own folder.
+casefold_cached = compile('rgss-casefold-cached', ['tests/rgss-casefold.cpp', 'src/crypto/rgssad.cpp'],
+                          ['-D__vita__', '-lz'])
 with tempfile.TemporaryDirectory(prefix='archive-feedback-', dir=WORK) as temporary:
     parent = Path(temporary)
     for wrapped in [False, True]:
@@ -93,4 +101,25 @@ with tempfile.TemporaryDirectory(prefix='archive-feedback-', dir=WORK) as tempor
     for extension, data in [('rgssad', archive_v1()), ('rgss2a', archive_v1()), ('rgss3a', archive_v3())]:
         archive = parent / ('Fixture.'+extension); archive.write_bytes(data)
         subprocess.check_call([str(casefold), str(archive)])
+    # The cached table is used only while the archive is unchanged: the same
+    # path, size and modification time, the same first entry and the same end.
+    cache_root = parent / 'cache-run'; (cache_root/'ux0:').mkdir(parents=True)
+    index_dir = cache_root/'ux0:/data/hardrpg/cache/rgssad-v1'
+    archive = cache_root / 'Fixture.rgssad'
+    def check(files, mtime):
+        archive.write_bytes(archive_v1(files)); os.utime(archive, (mtime, mtime))
+        subprocess.check_call([str(casefold_cached), str(archive)], cwd=cache_root)
+    check(FILES, 1_600_000_000)
+    indexes = list(index_dir.glob('*.idx'))
+    assert len(indexes) == 1, indexes
+    check(FILES, 1_600_000_000)  # read from the table
+    # Same size and time, other order: the first entry differs, so it rescans.
+    check(list(reversed(FILES)), 1_600_000_000)
+    # Same first entry, other order of the rest, newer time: rescans.
+    check(FILES[:1] + list(reversed(FILES[1:])), 1_600_000_100)
+    # A damaged table is ignored and replaced.
+    damaged = bytearray(indexes[0].read_bytes()); damaged[20] ^= 0xff
+    indexes[0].write_bytes(damaged)
+    check(FILES[:1] + list(reversed(FILES[1:])), 1_600_000_100)
+    assert indexes[0].read_bytes() != bytes(damaged)
 print('ZIP and RGSS archive regression probes passed')

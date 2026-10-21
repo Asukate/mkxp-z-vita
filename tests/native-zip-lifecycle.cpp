@@ -20,12 +20,13 @@ extern "C" int __wrap_PHYSFS_mount(const char*p,const char*m,int a){
 int main(int argc,char**argv){
  assert(argc==2);hardrpg::Paths paths;paths.root=argv[1];
  paths.storage={std::string(argv[1])+"/"};
- hardrpg::UI ui(paths);ui.action(hardrpg::Button::Right);
- auto before=mounts.load();ui.action(hardrpg::Button::Triangle);
+ // The game's settings (Triangle, then Game settings, on the home screen).
+ hardrpg::UI ui(paths);
+ auto before=mounts.load();ui.openGameMenu(0);
  auto first=mounts.load()-before;assert(ui.gameOptions);std::cout<<"settings mounts="<<first<<std::endl;
  assert(first==1);
  ui.action(hardrpg::Button::Circle);before=mounts.load();
- ui.action(hardrpg::Button::Triangle);assert(mounts==before);
+ ui.openGameMenu(0);assert(mounts==before);
  ui.editName=[](const std::string&,std::string&out){out="New title";return true;};
  ui.setting=5;before=mounts.load();ui.action(hardrpg::Button::Cross);assert(mounts==before);
  unsigned enumerated=0;bool cancelled=false;
