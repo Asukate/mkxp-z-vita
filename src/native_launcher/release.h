@@ -1,12 +1,20 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.3.1 Alpha"
-#define HARDRPG_VERSION_TAG "v0.3.1-alpha"
-#define HARDRPG_APP_VER "00.31"
-#define HARDRPG_RELEASE_UTC "2026-10-19"
+#define HARDRPG_VERSION "0.4.0 Alpha"
+#define HARDRPG_VERSION_TAG "v0.4.0-alpha"
+#define HARDRPG_APP_VER "00.40"
+#define HARDRPG_RELEASE_UTC "2026-10-20"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.3.1 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.4.0 Alpha - " HARDRPG_RELEASE_UTC,
+    "- New home screen: covers, artwork, search and filters",
+    "- Faster app start and game launch",
+    "- Games start faster after their first boot",
+    "- Fast forward with L+R",
+    "- Faster character sprites in games with default scripts",
+    "- Quitting a 2000/2003 game returns to the library",
+    "",
+    "0.3.1 Alpha - 2026-10-19",
     "- Scripts written for Ruby 1.8/1.9 load (issue #3)",
     "- Audio replay with no saved position works",
     "- Long sessions no longer run out of Fiber stacks",
