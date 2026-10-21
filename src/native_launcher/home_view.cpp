@@ -5,6 +5,7 @@
 // and alphas, so the Vita's GPU draws them every frame for free. Text and
 // icons are drawn on the CPU into layers, and only when their content changes.
 #include "home_layout.h"
+#include "i18n.h"
 #include "release.h"
 #include "util/json5pp.hpp"
 #include "view.h"
@@ -43,39 +44,39 @@ std::string initials(const std::string &name) {
 }
 std::string playtime(int64_t seconds, bool suffix = true) {
   if (seconds <= 0)
-    return suffix ? "Not played yet" : "-";
+    return suffix ? tr("Not played yet") : "-";
   int64_t minutes = seconds / 60;
   char buf[40];
   if (minutes < 60)
-    std::snprintf(buf, sizeof buf, "%lld min%s", (long long)std::max<int64_t>(1, minutes), suffix ? " played" : "");
+    std::snprintf(buf, sizeof buf, "%lld min", (long long)std::max<int64_t>(1, minutes));
   else
-    std::snprintf(buf, sizeof buf, "%lld h %02lld min%s", (long long)(minutes / 60), (long long)(minutes % 60), suffix ? " played" : "");
-  return buf;
+    std::snprintf(buf, sizeof buf, "%lld h %02lld min", (long long)(minutes / 60), (long long)(minutes % 60));
+  return suffix ? trf("{} played", {buf}) : buf;
 }
 std::string lastPlayed(int64_t when) {
   if (!when)
-    return "Never";
+    return tr("Never");
   int64_t days = (int64_t(std::time(nullptr)) - when) / 86400;
   if (days <= 0)
-    return "Today";
+    return tr("Today");
   if (days == 1)
-    return "Yesterday";
+    return tr("Yesterday");
   if (days < 7)
-    return std::to_string(days) + " days ago";
+    return trf("{} days ago", {std::to_string(days)});
   if (days < 14)
-    return "Last week";
+    return tr("Last week");
   if (days < 60)
-    return std::to_string(days / 7) + " weeks ago";
-  return std::to_string(days / 30) + " months ago";
+    return trf("{} weeks ago", {std::to_string(days / 7)});
+  return trf("{} months ago", {std::to_string(days / 30)});
 }
 // Short names for the engine tabs, so more engines fit in the toolbar.
 const char *engineTab(int version) {
   static const char *names[] = {"All", "XP", "VX", "Ace", "2k/2k3"};
-  return version >= 0 && version <= 4 ? names[version] : "?";
+  return version >= 0 && version <= 4 ? tr(names[version]) : "?";
 }
 const char *engineName(int version) {
   static const char *names[] = {"Collection", "XP", "VX", "VX Ace", "2000/2003"};
-  return version >= 0 && version <= 4 ? names[version] : "Game";
+  return tr(version >= 0 && version <= 4 ? names[version] : "Game");
 }
 inline void over(uint8_t *d, int r, int g, int b, int a) {
   // Premultiplied source over a premultiplied destination (opaque or not).
@@ -507,10 +508,10 @@ void View::buildHome(const UI &u) {
       if (alpha <= 0.004)
         continue;
       if (i == count) {
-        if (beginLayer(addLayer, "add", 216, 120)) {
+        if (beginLayer(addLayer, std::string("add|") + languageCode(language()), 216, 120)) {
           rect(81, 0, 54, 54, white, 26, 27);
           blit(icon("plus-31"), 93, 12);
-          label(108, 70, "Add games", 17, {207, 207, 211}, 255, false, 0);
+          label(108, 70, tr("Add games"), 17, {207, 207, 211}, 255, false, 0, 210);
           endLayer();
         }
         solid(white, r.x, r.y, r.w, r.h, 0.05 * alpha, 8);
@@ -530,12 +531,12 @@ void View::buildHome(const UI &u) {
       auto r = card(target, u.home.position, details, side);
       double fadeOut = 1 - details;
       solid(ruby, r.x + r.w / 2 - 22, r.y + r.h + 7, 44, 3, fadeOut, 1);
-      std::string title = current ? current->name : "Add games";
+      std::string title = current ? current->name : tr("Add games");
       bool fav = current && u.favourites.count(u.entryKey(*current));
-      std::string sub = "Scan a folder on your memory card";
+      std::string sub = tr("Scan a folder on your memory card");
       if (current) {
         auto a = u.activity.find(u.entryKey(*current));
-        sub = current->kind == Kind::Folder ? "Collection" : playtime(a == u.activity.end() ? 0 : a->second.seconds);
+        sub = current->kind == Kind::Folder ? tr("Collection") : playtime(a == u.activity.end() ? 0 : a->second.seconds);
       }
       int maxW = side > 0.5 ? 440 : 860;
       // The layer is only as wide as its text: less to draw and upload.
@@ -572,10 +573,10 @@ void View::buildHome(const UI &u) {
       double w = cardW * grow, h = cardH * grow, gx = x - (w - cardW) / 2, gy = y - (h - cardH) / 2;
       size_t first = scene.size();
       if (i == count) {
-        if (beginLayer(addLayer, "add", 216, 120)) {
+        if (beginLayer(addLayer, std::string("add|") + languageCode(language()), 216, 120)) {
           rect(81, 0, 54, 54, white, 26, 27);
           blit(icon("plus-31"), 93, 12);
-          label(108, 70, "Add games", 17, {207, 207, 211}, 255, false, 0);
+          label(108, 70, tr("Add games"), 17, {207, 207, 211}, 255, false, 0, 210);
           endLayer();
         }
         solid(white, gx, gy, w, h, 0.05, 8);
@@ -636,7 +637,7 @@ void View::buildHome(const UI &u) {
     bool fav = u.favourites.count(u.entryKey(*current));
     std::string key = u.entryKey(*current) + "|" + std::to_string(fav) + "|" + std::to_string(stat.seconds) + "|" +
                       std::to_string(stat.last) + "|" + std::to_string(a.logo.id) + "|" + a.info + "|" +
-                      std::to_string(a.shots.size());
+                      std::to_string(a.shots.size()) + "|" + languageCode(language());
     if (beginLayer(detailsLayer, key, width - detailsX - 16, playY - detailsY + buttonH)) {
       int w = width - detailsX - 40;
       // Facts downloaded with the artwork, blended from several sources.
@@ -674,12 +675,12 @@ void View::buildHome(const UI &u) {
       if (fav) {
         int fx = std::min(w - 110, measure(line, 15)) + 16;
         blitScaled(icon("star-24:ruby"), fx, y + 1, 16, 16);
-        label(fx + 20, y, "Favourite", 15, rubyHi);
+        label(fx + 20, y, tr("Favourite"), 15, rubyHi);
       }
       y += 22;
       std::string credits = genres;
       if (!publisher.empty() && publisher != developer)
-        credits += (credits.empty() ? "" : "  \xc2\xb7  ") + std::string("Published by ") + publisher;
+        credits += (credits.empty() ? "" : "  \xc2\xb7  ") + trf("Published by {}", {publisher});
       if (!credits.empty()) {
         label(0, y, credits, 13, faint, 255, false, -1, w);
         y += 20;
@@ -687,10 +688,10 @@ void View::buildHome(const UI &u) {
       y += 12;
       struct Fact {
         std::string value, name;
-      } facts[] = {{playtime(stat.seconds, false), "Play time"},
-                   {lastPlayed(stat.last), "Last played"},
-                   {current->kind == Kind::Zip ? "ZIP" : current->kind == Kind::Folder ? "Collection" : "Folder", "Source"},
-                   {engineName(current->version), "Engine"}};
+      } facts[] = {{playtime(stat.seconds, false), tr("Play time")},
+                   {lastPlayed(stat.last), tr("Last played")},
+                   {current->kind == Kind::Zip ? "ZIP" : tr(current->kind == Kind::Folder ? "Collection" : "Folder"), tr("Source")},
+                   {engineName(current->version), tr("Engine")}};
       int fx = 0;
       for (auto &f : facts) {
         label(fx, y, f.value, 23, white, 255, true);
@@ -710,14 +711,14 @@ void View::buildHome(const UI &u) {
           label(0, y + i * 20, text, 15, {208, 208, 212}, 255, false, -1, w);
         }
       }
-      label(0, by - 24, sources.empty() ? current->node.path() : current->node.path() + "  \xc2\xb7  details from " + sources, 12, faint,
+      label(0, by - 24, sources.empty() ? current->node.path() : current->node.path() + "  \xc2\xb7  " + trf("details from {}", {sources}), 12, faint,
             255, false, -1, w);
       rect(0, by, playW, buttonH, ruby, 255, 6);
       blit(icon("btn-cross-26"), 11, by + 9);
-      label(44, by + 12, "Play", 17, white);
+      label(44, by + 12, tr("Play"), 17, white, 255, false, -1, playW - 50);
       rect(optionsX - detailsX, by, optionsW, buttonH, white, 31, 6);
       blit(icon("btn-triangle-26"), optionsX - detailsX + 11, by + 9);
-      label(optionsX - detailsX + 44, by + 12, "Options", 17, white);
+      label(optionsX - detailsX + 44, by + 12, tr("Options"), 17, white, 255, false, -1, optionsW - 50);
       endLayer();
     }
     layerQuad(detailsLayer, detailsX + (1 - details) * 24, detailsY, details);
@@ -739,7 +740,7 @@ void View::buildHome(const UI &u) {
   if (details < 0.99) {
     auto tabs = u.engineTabs();
     bool filtered = u.home.hiddenEngines || u.home.favouritesOnly || u.home.unplayedOnly || u.home.sort != Home::Recent || u.home.direction != 1;
-    std::string key = std::to_string(u.home.grid) + "|" + std::to_string(u.engineFilter) + "|" + std::to_string(int(u.home.zone)) + "|" +
+    std::string key = std::string(languageCode(language())) + "|" + std::to_string(u.home.grid) + "|" + std::to_string(u.engineFilter) + "|" + std::to_string(int(u.home.zone)) + "|" +
                       std::to_string(u.home.toolbarFocus) + "|" + std::to_string(filtered) + "|" + std::to_string(u.home.panel);
     for (int t : tabs)
       key += "," + std::to_string(t);
@@ -750,7 +751,11 @@ void View::buildHome(const UI &u) {
       blit(icon(u.home.grid ? "view-carousel-31" : "view-grid-31"), viewX + 10, 10);
       rect(addX, 0, addW, barH, white, bar(1) ? 56 : 28, 25);
       blit(icon("plus-31"), addX + 13, 10);
-      label(addX + 51, 14, "Add games", 19, {238, 238, 240});
+      // The button holds "Add games"; a language too long for it says "Add".
+      std::string addText = tr("Add games");
+      if (measure(addText, 19) > addW - 58)
+        addText = tr("Add");
+      label(addX + 51, 14, addText, 19, {238, 238, 240}, 255, false, -1, addW - 58);
       // Tabs size to their names and sit between Add games and search. When
       // more engines exist than fit, a window of them slides to keep the
       // selected one in view, with a fade at the cut edge.
@@ -813,7 +818,7 @@ void View::buildHome(const UI &u) {
   if (u.showFrameTime) {
     if (beginLayer(frameLayer, u.frameText, 420, 22)) {
       rect(0, 0, 420, 22, {0, 0, 0}, 160, 6);
-      label(8, 3, u.frameText.empty() ? "Measuring..." : u.frameText, 13, {120, 230, 160});
+      label(8, 3, u.frameText.empty() ? tr("Measuring...") : u.frameText, 13, {120, 230, 160});
       endLayer();
     }
     layerQuad(frameLayer, 270, 20);
@@ -834,8 +839,8 @@ void View::buildHome(const UI &u) {
   if (!u.launchingName.empty()) {
     solid({0, 0, 0}, 0, 0, width, height, 0.8);
     if (beginLayer(messageLayer, "launch|" + u.launchingName + "|" + u.preparationLabel, width, 90)) {
-      label(480, 0, "Starting " + u.launchingName, 28, white, 255, true, 0, 900);
-      label(480, 44, u.preparationLabel.empty() ? "Loading" : u.preparationLabel, 16, muted, 255, false, 0, 900);
+      label(480, 0, trf("Starting {}", {u.launchingName}), 28, white, 255, true, 0, 900);
+      label(480, 44, u.preparationLabel.empty() ? tr("Loading") : u.preparationLabel, 16, muted, 255, false, 0, 900);
       endLayer();
     }
     layerQuad(messageLayer, 0, 232);
@@ -862,30 +867,30 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
     dim.y = float(topHeight), dim.w = float(width), dim.h = float(hintsY - topHeight), dim.alpha = 0.97f;
     dim.color = {12, 12, 14};
     scene.push_back(dim);
-    std::string key = "artwork|" + u.artChoices.key + "|" + std::to_string(u.artRow);
+    std::string key = "artwork|" + u.artChoices.key + "|" + std::to_string(u.artRow) + "|" + languageCode(language());
     for (int k = 0; k < 3; ++k)
       key += "|" + std::to_string(u.artPick[k]);
     if (beginLayer(panelLayer, key, width, hintsY - topHeight)) {
-      label(30, 12, "Choose artwork", 26, white, 255, true);
-      label(30 + measure("Choose artwork", 26, true) + 14, 20, u.artChoices.name, 15, muted, 255, false, -1, 560);
+      label(30, 12, tr("Choose artwork"), 26, white, 255, true);
+      label(30 + measure(tr("Choose artwork"), 26, true) + 14, 20, u.artChoices.name, 15, muted, 255, false, -1, 560);
       const char *rowNames[] = {"Cover", "Background", "Logo"};
       for (int k = 0; k < 3; ++k) {
         auto &o = u.artChoices.options[k];
         int x, y, w, h;
         pickerSlot(k, 0, x, y, w, h);
         y -= topHeight;
-        label(30, y + h / 2 - 9, rowNames[k], 17, u.artRow == k ? white : muted, 255, true);
+        label(30, y + h / 2 - 9, tr(rowNames[k]), 17, u.artRow == k ? white : muted, 255, true, -1, pickerX - 38);
         if (u.artRow == k)
           rect(30, y + h / 2 + 14, 24, 3, ruby, 255, 1);
         if (o.empty())
-          label(x, y + h / 2 - 8, "Nothing found", 14, faint);
+          label(x, y + h / 2 - 8, tr("Nothing found"), 14, faint);
         for (int i = 0; i < int(o.size()); ++i) {
           pickerSlot(k, i, x, y, w, h);
           y -= topHeight;
           bool picked = u.artPick[k] == i;
           if (picked)
             rect(x - 4, y - 4, w + 8, h + 8, white, u.artRow == k ? 230 : 110, 9);
-          label(x + w / 2, y + h + 4, o[i].source, 12, picked ? white : muted, 255, false, 0);
+          label(x + w / 2, y + h + 4, tr(o[i].source), 12, picked ? white : muted, 255, false, 0);
         }
       }
       endLayer();
@@ -920,7 +925,7 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
     if (!e)
       return;
     bool fav = u.favourites.count(u.entryKey(*e));
-    std::string key = "options|" + u.entryKey(*e) + "|" + std::to_string(fav) + "|" + std::to_string(u.home.panelFocus);
+    std::string key = "options|" + u.entryKey(*e) + "|" + std::to_string(fav) + "|" + std::to_string(u.home.panelFocus) + "|" + languageCode(language());
     if (beginLayer(panelLayer, key, menuW, 30 + 5 * menuRowH + 8)) {
       rect(0, 0, menuW, 30 + 5 * menuRowH + 8, {22, 22, 24}, 248, 12);
       label(14, 9, e->name, 12, faint, 255, false, -1, menuW - 28);
@@ -932,7 +937,7 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
           rect(6, y, menuW - 12, menuRowH - 4, white, 30, 8);
         if (i == 0)
           blitScaled(icon(fav ? "star-24:ruby" : "star-24"), 18, y + 12, 17, 17);
-        label(44, y + 11, rows[i], 16, {228, 228, 230});
+        label(44, y + 11, tr(rows[i]), 16, {228, 228, 230}, 255, false, -1, menuW - 56);
       }
       endLayer();
     }
@@ -952,13 +957,13 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
   }
   std::string key = "filter|" + std::to_string(list.size()) + "|" + std::to_string(u.home.hiddenEngines) + "|" + std::to_string(u.home.favouritesOnly) + "|" +
                     std::to_string(u.home.unplayedOnly) + "|" + std::to_string(u.home.sort) + "|" + std::to_string(u.home.direction) + "|" +
-                    std::to_string(u.home.panelFocus) + "|" + std::to_string(favs) + "|" + std::to_string(unplayed);
+                    std::to_string(u.home.panelFocus) + "|" + std::to_string(favs) + "|" + std::to_string(unplayed) + "|" + languageCode(language());
   int ph = hintsY - panelY;
   if (beginLayer(panelLayer, key, panelW, ph)) {
     rect(0, 0, panelW, ph, {14, 14, 16}, 248, 0);
     int x = 18, y = 12, inner = panelW - 36;
-    label(x, y, "Filter", 26, white, 255, true);
-    label(x, y + 30, "Showing " + std::to_string(list.size()) + " of " + std::to_string(u.model.list.size()) + " games", 13, muted);
+    label(x, y, tr("Filter"), 26, white, 255, true);
+    label(x, y + 30, trf("Showing {} of {} games", {std::to_string(list.size()), std::to_string(u.model.list.size())}), 13, muted);
     const int reset = u.filterRows() - 1;
     auto focusRing = [&](int row, int rx, int ry, int rw, int rh) {
       u.filterHit[row][0] = panelX + rx;
@@ -974,9 +979,10 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
     };
     bool any = u.home.hiddenEngines || u.home.favouritesOnly || u.home.unplayedOnly || u.home.sort != Home::Recent || u.home.direction != 1;
     rect(x + inner - 84, y + 2, 84, 42, white, 26, 8);
-    label(x + inner - 42, y + 13, "Reset", 15, any ? white : faint, 255, false, 0);
+    label(x + inner - 42, y + 13, tr("Reset"), 15, any ? white : faint, 255, false, 0, 80);
     focusRing(reset, x + inner - 84, y + 2, 84, 42);
-    auto section = [&](int sy, const char *name) {
+    auto section = [&](int sy, const char *english) {
+      const char *name = tr(english);
       label(x, sy, name, 12, faint);
       rect(x + measure(name, 12) + 8, sy + 8, inner - measure(name, 12) - 8, 1, white, 20);
     };
@@ -987,11 +993,12 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
         blit(icon(iconName), tx + 10, ty + 11, on ? 255 : 150);
         lx = tx + 42;
       }
-      label(lx, ty + (!sub.empty() && iconName ? 6 : 12), title, 18, on ? white : off ? faint : Color{207, 207, 211}, 255, true);
+      label(lx, ty + (!sub.empty() && iconName ? 6 : 12), title, 18, on ? white : off ? faint : Color{207, 207, 211}, 255, true, -1,
+            tx + tw - lx - (!sub.empty() && !iconName ? measure(sub, 11) + 16 : 6));
       if (!sub.empty() && !iconName)
         label(tx + tw - 10, ty + 17, sub, 11, faint, 255, false, 1);
       if (!sub.empty() && iconName)
-        label(lx, ty + 27, sub, 11, {208, 208, 212});
+        label(lx, ty + 27, sub, 11, {208, 208, 212}, 255, false, -1, tx + tw - lx - 4);
       if (on && !iconName)
         rect(tx + 12, ty + 40, 22, 3, ruby, 255, 1);
       if (on && iconName)
@@ -1006,8 +1013,8 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
     int tw3 = (inner - 12) / 3;
     for (int i = 0; i < Home::SortCount; ++i) {
       bool on = u.home.sort == i;
-      tile(6 + i, x + i * (tw3 + 6), sy + 20, tw3, on, false, sortNames[i],
-           on ? std::string(u.home.direction > 0 ? "\xe2\x86\x93 " : "\xe2\x86\x91 ") + (u.home.direction > 0 ? down[i] : up[i]) : "", sortIcons[i]);
+      tile(6 + i, x + i * (tw3 + 6), sy + 20, tw3, on, false, tr(sortNames[i]),
+           on ? std::string(u.home.direction > 0 ? "\xe2\x86\x93 " : "\xe2\x86\x91 ") + tr(u.home.direction > 0 ? down[i] : up[i]) : "", sortIcons[i]);
     }
     sy += 82;
     section(sy, "Engines");
@@ -1016,13 +1023,15 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
       int f = i + 1, n = perEngine[f];
       bool hidden = u.home.hiddenEngines & (1u << f);
       tile(i, x + (i % 2) * (tw2 + 6), sy + 20 + (i / 2) * 52, tw2, !hidden, hidden, engineName(f),
-           std::to_string(n) + (n == 1 ? " game" : " games"), nullptr);
+           n == 1 ? std::string(tr("1 game")) : trf("{} games", {std::to_string(n)}), nullptr);
     }
     sy += 134;
     section(sy, "Only show");
-    tile(4, x, sy + 20, tw2, u.home.favouritesOnly, false, "     Favourites", std::to_string(favs) + " games", nullptr);
+    tile(4, x, sy + 20, tw2, u.home.favouritesOnly, false, std::string("     ") + tr("Favourites"),
+         favs == 1 ? std::string(tr("1 game")) : trf("{} games", {std::to_string(favs)}), nullptr);
     blitScaled(icon("star-24:ruby"), x + 12, sy + 35, 16, 16);
-    tile(5, x + tw2 + 6, sy + 20, tw2, u.home.unplayedOnly, false, "Not played", std::to_string(unplayed) + " games", nullptr);
+    tile(5, x + tw2 + 6, sy + 20, tw2, u.home.unplayedOnly, false, tr("Not played"),
+         unplayed == 1 ? std::string(tr("1 game")) : trf("{} games", {std::to_string(unplayed)}), nullptr);
     endLayer();
   }
   Quad shade;
@@ -1035,18 +1044,18 @@ void View::homeHints(const UI &u, const std::vector<size_t> &list) {
   std::vector<Hint> left, right;
   bool add = u.home.target >= int(list.size());
   if (u.home.panel == Home::Artwork) {
-    left = {{"btn-cross-26", "Save", Button::Cross}, {"btn-circle-26", "Keep current", Button::Circle}};
-    right = {{nullptr, "Pick with the D-pad or a tap", Button::None}};
+    left = {{"btn-cross-26", tr("Save"), Button::Cross}, {"btn-circle-26", tr("Keep current"), Button::Circle}};
+    right = {{nullptr, tr("Pick with the D-pad or a tap"), Button::None}};
   } else if (u.home.panel != Home::NoPanel) {
-    left = {{"btn-cross-26", "Select", Button::Cross}, {"btn-circle-26", "Close", Button::Circle}};
+    left = {{"btn-cross-26", tr("Select"), Button::Cross}, {"btn-circle-26", tr("Close"), Button::Circle}};
   } else if (u.home.details) {
-    left = {{"btn-cross-26", "Play", Button::Cross}, {"btn-circle-26", "Back", Button::Circle}, {"btn-triangle-26", "Options", Button::Triangle}};
-    right = {{nullptr, "Other games", Button::None}};
+    left = {{"btn-cross-26", tr("Play"), Button::Cross}, {"btn-circle-26", tr("Back"), Button::Circle}, {"btn-triangle-26", tr("Options"), Button::Triangle}};
+    right = {{nullptr, tr("Other games"), Button::None}};
   } else {
-    left = {{"btn-cross-26", add ? "Add games" : u.home.grid ? "Play" : "Details", Button::Cross}};
+    left = {{"btn-cross-26", tr(add ? "Add games" : u.home.grid ? "Play" : "Details"), Button::Cross}};
     if (!add)
-      left.push_back({"btn-triangle-26", "Options", Button::Triangle});
-    right = {{"L R", "Engine", Button::R}, {"SELECT", "Search", Button::Select}};
+      left.push_back({"btn-triangle-26", tr("Options"), Button::Triangle});
+    right = {{"L R", tr("Engine"), Button::R}, {"SELECT", tr("Search"), Button::Select}};
   }
   std::string counter = u.home.panel == Home::NoPanel ? (add ? "+" : std::to_string(u.home.target + 1)) + "|" + std::to_string(list.size()) : "";
   hintBar(u, left, right, counter);

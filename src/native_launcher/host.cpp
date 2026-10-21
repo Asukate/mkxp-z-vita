@@ -7,7 +7,10 @@
 #include <sstream>
 #include <chrono>
 #include <ctime>
+#include <set>
 #include <thread>
+#include <ft2build.h>
+#include FT_FREETYPE_H
 
 namespace {
 using namespace hardrpg;
@@ -124,6 +127,29 @@ Json commands(Model &m, const Json &script) {
         }
         m.setDisplayName(e, field(cmd, "name"));
         result = listing(m.list, m.paths);
+      } else if (op == "tr") {
+        // A text as the launcher shows it in a language, "{}" filled with "args".
+        int lang = languageFromCode(field(cmd, "language"));
+        if (lang < 0)
+          throw std::runtime_error("Unknown language");
+        setLanguage(lang);
+        auto text = field(cmd, "text");
+        auto found = cmd.as_object().find("args");
+        if (found == cmd.as_object().end())
+          result = tr(text);
+        else {
+          std::vector<std::string> args;
+          for (auto &a : found->second.as_array())
+            args.push_back(a.as_string());
+          std::string out = tr(text);
+          for (auto &a : args) {
+            auto at = out.find("{}");
+            if (at != std::string::npos)
+              out.replace(at, 2, a);
+          }
+          result = out;
+        }
+        setLanguage(English);
       } else
         throw std::runtime_error("Unknown native model command");
     } catch (const MissingRtp &e) {
@@ -135,6 +161,53 @@ Json commands(Model &m, const Json &script) {
     }
     out.as_array().push_back(result);
   }
+  return out;
+}
+// Every translation, and the characters in them that a launcher font lacks.
+Json strings(const std::vector<std::string> &fonts) {
+  auto out = object();
+  auto &o = out.as_object();
+  FT_Library library;
+  if (FT_Init_FreeType(&library))
+    throw std::runtime_error("Cannot start FreeType");
+  std::vector<FT_Face> faces;
+  for (auto &path : fonts) {
+    FT_Face face;
+    if (FT_New_Face(library, path.c_str(), 0, &face))
+      throw std::runtime_error("Cannot open font " + path);
+    faces.push_back(face);
+  }
+  auto missing = array();
+  std::set<uint32_t> reported;
+  for (int lang = 0; lang < languageCount; ++lang) {
+    auto table = object();
+    for (auto &t : translations(lang)) {
+      table.as_object()[t.first] = t.second;
+      const auto &s = t.second;
+      for (size_t i = 0; i < s.size();) {
+        unsigned char b = s[i];
+        int n = b < 0x80 ? 0 : b >= 0xf0 ? 3 : b >= 0xe0 ? 2 : 1;
+        uint32_t c = n ? b & (0x3f >> n) : b;
+        ++i;
+        for (int k = 0; k < n && i < s.size(); ++k, ++i)
+          c = (c << 6) | (static_cast<unsigned char>(s[i]) & 63);
+        for (size_t f = 0; f < faces.size(); ++f)
+          if (!FT_Get_Char_Index(faces[f], c) && reported.insert(c * 8 + f).second) {
+            auto m = object();
+            m.as_object()["font"] = fonts[f];
+            m.as_object()["character"] = Json::integer_type(c);
+            m.as_object()["text"] = s;
+            missing.as_array().push_back(m);
+          }
+      }
+    }
+    o[languageCode(lang)] = table;
+  }
+  o["missingGlyphs"] = missing;
+  o["rows"] = Json::integer_type(translations(English).size());
+  for (auto face : faces)
+    FT_Done_Face(face);
+  FT_Done_FreeType(library);
   return out;
 }
 void preview(UI &ui, View &view) {
@@ -288,6 +361,10 @@ int main(int argc, char **argv) {
     std::string font = "assets/liberation.ttf", snapshot, script, actions, releaseFixture,
                 rename, search, text;
     bool edit = false, settle = false, returning = false;
+    // The welcome guide shows only with "--welcome auto" (as on a first
+    // start); other runs go straight to home without marking it seen.
+    std::string welcome = "skip", languageArg;
+    std::vector<std::string> stringFonts;
     bool interactive = false, storageSet = false;
     int battery = 78;
     for (int i = 1; i < argc; ++i) {
@@ -325,12 +402,22 @@ int main(int argc, char **argv) {
         edit = true;
       } else if (arg == "--text")
         text = value;
+      else if (arg == "--welcome")
+        welcome = value;
+      else if (arg == "--language")
+        languageArg = value;
+      else if (arg == "--strings")
+        stringFonts.push_back(value);
       else if (arg == "--returning") {
         settle = true;
         returning = value == "yes";
       }
       else
         throw std::runtime_error("Unknown preview option");
+    }
+    if (!stringFonts.empty()) {
+      std::cout << strings(stringFonts).stringify() << "\n";
+      return 0;
     }
     if (!script.empty()) {
       hardrpg::Model model(paths);
@@ -348,6 +435,15 @@ int main(int argc, char **argv) {
       ui.loadHome();
     }
     ui.batteryPercent = battery;
+    if (welcome != "auto")
+      ui.welcome.active = false;
+    if (!languageArg.empty()) {
+      // For this run only; the preferences keep their language.
+      int lang = languageFromCode(languageArg);
+      if (lang < 0)
+        throw std::runtime_error("Unknown language");
+      setLanguage(lang);
+    }
     if (!text.empty())
       ui.enterText = [&](const std::string &, const std::string &, std::string &out) {
         out = text;
@@ -494,6 +590,10 @@ int main(int argc, char **argv) {
     state.as_object()["exitRequested"] = ui.exitRequested;
     state.as_object()["browserOpen"] = bool(ui.browser);
     state.as_object()["browserPath"] = ui.browser ? ui.browser->path : "";
+    state.as_object()["language"] = std::string(languageCode(language()));
+    state.as_object()["welcomeActive"] = ui.welcome.active;
+    state.as_object()["welcomeSlide"] = ui.welcome.slide;
+    state.as_object()["welcomeSeen"] = ui.welcomeSeen;
     std::cout << state.stringify() << "\n";
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

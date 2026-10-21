@@ -1,4 +1,5 @@
 #include "model.h"
+#include "i18n.h"
 #include "release.h"
 #include <algorithm>
 #include <cctype>
@@ -52,7 +53,7 @@ bool exists(const std::string &p) {
 }
 void mkdirOne(const std::string &p) {
   if (!directory(p) && mkdir(p.c_str(), 0777))
-    throw std::runtime_error("Cannot create folder: " + p);
+    throw std::runtime_error(trf("Cannot create folder: {}", {p}));
 }
 std::vector<std::string> split(const std::string &s, char delimiter) {
   std::vector<std::string> out;
@@ -116,7 +117,7 @@ std::string jsonString(const Json &v, const std::string &k,
 std::vector<File> directoryFiles(const std::string &p) {
   DIR *d = opendir(p.c_str());
   if (!d)
-    throw std::runtime_error("Cannot read folder: " + p);
+    throw std::runtime_error(trf("Cannot read folder: {}", {p}));
   std::vector<File> out;
   while (auto *e = readdir(d)) {
     std::string name = e->d_name;
@@ -142,7 +143,7 @@ struct ArchiveMount {
     if (!PHYSFS_isInit() && !PHYSFS_init("hardrpg"))
       throw std::runtime_error("Cannot initialize archive reader");
     if (!PHYSFS_mount(p.c_str(), point.c_str(), 0))
-      throw std::runtime_error("Cannot open ZIP archive");
+      throw std::runtime_error(tr("Cannot open ZIP archive"));
   }
   ~ArchiveMount() { PHYSFS_unmount(source.c_str()); }
 };
@@ -223,7 +224,7 @@ public:
     auto count = size ? PHYSFS_readBytes(f, &result[0], size) : 0;
     PHYSFS_close(f);
     if (count != size)
-      throw std::runtime_error("Truncated ZIP file");
+      throw std::runtime_error(tr("Truncated ZIP file"));
     return result;
   }
   void extract(const std::string &inner, const std::string &dest,
@@ -248,8 +249,7 @@ public:
         if (!n)
           break;
         if (fwrite(buffer, 1, n, out) != size_t(n))
-          throw std::runtime_error(
-              "Cannot write ZIP cache (storage may be full)");
+          throw std::runtime_error(tr("Cannot write ZIP cache (storage may be full)"));
         written += n;
         copied += n;
         if (progress)
@@ -485,8 +485,7 @@ std::string packLabel(const std::string &n) {
                            : n;
 }
 MissingRtp::MissingRtp(const std::string &p)
-    : std::runtime_error("Missing " + packLabel(p) +
-                         " RTP. Choose its folder or ZIP in Settings."),
+    : std::runtime_error(trf("Missing {} RTP. Choose its folder or ZIP in Settings.", {packLabel(p)})),
       pack(p) {}
 Node Node::fromPath(const Paths &p, const std::string &path, bool zip,
                     const std::string &inner) {
@@ -903,29 +902,28 @@ void Model::applyNames() {
         }
       }
     } catch (const std::exception &) {
-      error = "Saved game names could not be read; original names are shown.";
+      error = tr("Saved game names could not be read; original names are shown.");
     }
   }
   sortEntries(list);
 }
 void Model::setDisplayName(const Entry &e, const std::string &displayName) {
   if (e.kind == Kind::Folder)
-    throw std::runtime_error("Select a game or ZIP to rename.");
+    throw std::runtime_error(tr("Select a game or ZIP to rename."));
   auto name = trim(displayName);
   if (scrubUtf8(name) != name || name.size() > 512 ||
       name.find_first_of("\r\n\t") != std::string::npos ||
       name.find('\0') != std::string::npos)
-    throw std::runtime_error(
-        "Use a single-line game name of at most 128 characters.");
+    throw std::runtime_error(tr("Use a single-line game name of at most 128 characters."));
   size_t characters = 0;
   for (auto c : name) {
     if (uint8_t(c) < 32 || uint8_t(c) == 127)
-      throw std::runtime_error("Game names cannot contain control characters.");
+      throw std::runtime_error(tr("Game names cannot contain control characters."));
     if ((uint8_t(c) & 0xc0) != 0x80)
       ++characters;
   }
   if (characters > 128)
-    throw std::runtime_error("Use at most 128 characters.");
+    throw std::runtime_error(tr("Use at most 128 characters."));
   auto file = paths.at("game-names.json");
   auto names =
       regular(file) ? json5pp::parse(readFile(file, 262144)) : object();
@@ -1012,11 +1010,9 @@ std::vector<Node> Model::discover(const std::string &p,
     auto item = pending.back();
     pending.pop_back();
     if (item.second > 16)
-      throw std::runtime_error(
-          "Folder scan exceeds 16 levels; choose a closer folder");
+      throw std::runtime_error(tr("Folder scan exceeds 16 levels; choose a closer folder"));
     if (++visited > 2048)
-      throw std::runtime_error(
-          "Folder scan exceeds 2048 folders; choose a closer folder");
+      throw std::runtime_error(tr("Folder scan exceeds 2048 folders; choose a closer folder"));
     if (progress)
       progress(visited, item.first.label(paths));
     try {
@@ -1150,9 +1146,9 @@ Model::Removal Model::removal(const Entry &e) const {
 void Model::deleteZip(const Entry &e) {
   auto r = removal(e);
   if (r.zip.empty() || r.unpacked.empty())
-    throw std::runtime_error("This game has no unpacked copy to play from");
+    throw std::runtime_error(tr("This game has no unpacked copy to play from"));
   if (unlink(r.zip.c_str()))
-    throw std::runtime_error("Cannot delete the ZIP");
+    throw std::runtime_error(tr("Cannot delete the ZIP"));
   forget(e);
   stack.resize(1);
   refresh();
@@ -1167,7 +1163,7 @@ void Model::remove(const Entry &e, bool files, bool unpacked) {
     if (!r.folder.empty())
       removeTree(r.folder);
     else if (unlink(r.zip.c_str()))
-      throw std::runtime_error("Cannot delete the ZIP");
+      throw std::runtime_error(tr("Cannot delete the ZIP"));
   }
   if (unpacked && !r.unpacked.empty())
     removeTree(r.unpacked);
@@ -1190,7 +1186,7 @@ void Model::remove(const Entry &e, bool files, bool unpacked) {
 size_t Model::addFolder(const std::string &p, ScanProgress progress) {
   auto found = discover(p, progress);
   if (found.empty())
-    throw std::runtime_error("No supported RPG Maker games found");
+    throw std::runtime_error(tr("No supported RPG Maker games found"));
   {
     // Adding games again shows any that were removed from the list.
     auto keys = hidden();
@@ -1213,7 +1209,7 @@ size_t Model::addFolder(const std::string &p, ScanProgress progress) {
       ++added;
     }
   if (old.size() > 2048)
-    throw std::runtime_error("Library has more than 2048 added games");
+    throw std::runtime_error(tr("Library has more than 2048 added games"));
   std::string text;
   for (auto &n : old)
     text +=
@@ -1233,7 +1229,7 @@ void Model::saveSearchFolders(const std::vector<std::string> &list) {
 }
 size_t Model::addSearchFolder(const std::string &p, ScanProgress progress) {
   if (!directory(p))
-    throw std::runtime_error("Choose an existing game folder");
+    throw std::runtime_error(tr("Choose an existing game folder"));
   auto found = discover(p, progress);
   {
     // Adding a folder again shows the games that were removed from the list.
@@ -1250,7 +1246,7 @@ size_t Model::addSearchFolder(const std::string &p, ScanProgress progress) {
   if (std::find(old.begin(), old.end(), p) == old.end())
     old.push_back(p);
   if (old.size() > 32)
-    throw std::runtime_error("Choose at most 32 extra game folders");
+    throw std::runtime_error(tr("Choose at most 32 extra game folders"));
   saveSearchFolders(old);
   return found.size();
 }
@@ -1265,7 +1261,7 @@ ControlProfile Model::controls(const Entry &entry) const {
   return ControlProfile::parse(json5pp::parse(readFile(path,8192)));
 }
 void Model::saveControls(const Entry &entry,const ControlProfile &profile) {
-  if(entry.kind!=Kind::Game)throw std::runtime_error("Select a game to configure controls.");
+  if(entry.kind!=Kind::Game)throw std::runtime_error(tr("Select a game to configure controls."));
   auto validated=ControlProfile::parse(profile.json());
   mkdirOne(paths.at("controls"));
   atomicWrite(paths.at("controls/"+key(entry.node.identity(paths))+".json"),validated.json().stringify());
@@ -1312,7 +1308,7 @@ Json Model::gameSettings(const Entry &entry) const {
 void Model::changeGameSetting(const Entry &entry, const std::string &name,
                               const Json &value, bool reset) {
   if (entry.kind != Kind::Game)
-    throw std::runtime_error("Select a game to change its settings.");
+    throw std::runtime_error(tr("Select a game to change its settings."));
   bool boolean = name == "fixedAspectRatio" || name == "integerScalingActive" ||
                  name == "enableAudio" || name == "midiChorus" ||
                  name == "midiReverb" || name == "fastForward";
@@ -1373,8 +1369,7 @@ void Model::setRtp(const std::string &name, const std::string &p) {
     throw std::runtime_error("Unknown RTP setting");
   Mount m;
   if (!p.empty() && (!paths.external(p) || !inspectRtp(p, pack, m)))
-    throw std::runtime_error(
-        "Choose a pack containing Graphics/Audio or System/Music folders.");
+    throw std::runtime_error(tr("Choose a pack containing Graphics/Audio or System/Music folders."));
   auto v = rtpPaths();
   if (p.empty())
     v.as_object().erase(pack);
@@ -1611,13 +1606,12 @@ std::string Model::prepareZip(const Node &node, Progress progress) {
   return cache;
 }
 Json Model::launch(const Entry &e, Progress progress, PreparationStatus status) {
-  if (status) status(e.node.archive ? "Preparing game ZIP" : "Starting game");
+  if (status) status(tr(e.node.archive ? "Preparing game ZIP" : "Starting game"));
   const auto *engine = engineFor(e.version);
   if (e.kind != Kind::Game || !engine)
     throw std::runtime_error("Choose a valid game");
   if (backendAvailable && !backendAvailable(*engine))
-    throw std::runtime_error("The " + std::string(engine->id) +
-                             " runtime is missing from this package.");
+    throw std::runtime_error(trf("The {} runtime is missing from this package.", {engine->id}));
   auto mounts = e.version == 4 ? std::vector<Mount>{} : resolveRtp(e.node);
   // A game unpacked from a ZIP that is gone runs from its unpacked copy.
   bool unpacked = !e.node.archive && e.node.root == paths.at("cache");
@@ -1673,7 +1667,7 @@ Json Model::launch(const Entry &e, Progress progress, PreparationStatus status) 
     }
     auto choices = rtpPaths();
     for (const auto &name : {"2000", "2003"}) {
-      if (status) status(std::string("Checking ") + name + " RTP");
+      if (status) status(trf("Checking {} RTP", {name}));
       auto chosen = choices.as_object().find(name);
       std::string candidate = chosen == choices.as_object().end()
                                   ? paths.at(std::string("rtp/") + name)
@@ -1683,7 +1677,7 @@ Json Model::launch(const Entry &e, Progress progress, PreparationStatus status) 
         // Reuse the safe extraction cache for ZIP RTPs.
         auto path = mount.path;
         if (regular(path)) {
-          if (status) status(std::string("Preparing ") + name + " RTP ZIP");
+          if (status) status(trf("Preparing {} RTP ZIP", {name}));
           auto node = Node::fromPath(paths, path, true, mount.root);
           path = paths.at("cache/" + prepareZip(node, progress));
         }
@@ -1702,8 +1696,7 @@ Json Model::launch(const Entry &e, Progress progress, PreparationStatus status) 
 
   auto encoded = selection.stringify();
   if (encoded.size() > 4096)
-    throw std::runtime_error(
-        "Launch paths are too long; choose a closer game or RTP folder.");
+    throw std::runtime_error(tr("Launch paths are too long; choose a closer game or RTP folder."));
   auto active = object();
   active.as_object()["name"] = e.name;
   active.as_object()["engine"] = Json::integer_type(e.version);
@@ -1860,7 +1853,7 @@ std::vector<std::string> Model::takeError(bool retained) {
       atomicWrite(markerPath, marker.stringify());
     }
   } catch (const std::exception &e) {
-    error = std::string("Error history could not be saved: ") + e.what();
+    error = trf("Error history could not be saved: {}", {e.what()});
   }
   if (!retained) {
     unlink((path + ".owner").c_str());
@@ -1924,7 +1917,7 @@ std::string Model::exportError() const {
   auto source = activeErrorPath.empty() ? paths.at("last-error.txt.prev")
                                         : activeErrorPath;
   if (!regular(source))
-    throw std::runtime_error("No retained game error to export.");
+    throw std::runtime_error(tr("No retained game error to export."));
   // Copy the complete retained trace, rather than the wrapped on-screen prefix.
   auto body = readFile(source, 1024 * 1024);
   std::string header =
@@ -1962,8 +1955,7 @@ std::string Model::exportError() const {
     if (fd < 0) {
       if (errno == EEXIST)
         continue;
-      throw std::runtime_error(
-          "Cannot create exported report. Check free space.");
+      throw std::runtime_error(tr("Cannot create exported report. Check free space."));
     }
     FILE *file = fdopen(fd, "wb");
     if (!file) {
@@ -1976,13 +1968,11 @@ std::string Model::exportError() const {
       ok = false;
     if (!ok) {
       unlink(destination.c_str());
-      throw std::runtime_error(
-          "Cannot write exported report. Check free space.");
+      throw std::runtime_error(tr("Cannot write exported report. Check free space."));
     }
     return destination;
   }
-  throw std::runtime_error(
-      "Report folder is full. Move older exported reports.");
+  throw std::runtime_error(tr("Report folder is full. Move older exported reports."));
 }
 Browser::Browser(const Paths &p, bool includeZips)
     : paths(p), zips(includeZips) {

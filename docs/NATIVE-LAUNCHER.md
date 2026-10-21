@@ -69,6 +69,22 @@ Hold L+R+Select in a game to return to the launcher. Unsaved
 progress is lost. Handled script failures also return to the menu. The splash
 appears only on a fresh app launch. About includes dated release notes.
 
+## Languages and the welcome guide
+
+The launcher is in English, Spanish and Brazilian Portuguese. Settings ->
+Language switches at once (Left/Right or Cross) and is kept in
+`launcher-preferences.json`; until one is chosen the launcher follows the
+Vita's system language. Texts are written in English in the code and looked
+up in the table in `src/native_launcher/i18n.cpp`; a text missing there shows
+in English. In-app release notes stay in English. Text is drawn with the full
+Liberation Sans (`font.ttf`, Latin, Greek and Cyrillic) and Rajdhani for
+titles; the launcher tests check that every translation has its glyphs in both.
+
+On the first start a short welcome guide shows: language, where games go, the
+RTP, a few defaults and game info. Cross moves on, Circle goes back, Start
+skips it. Finishing or skipping it records `welcomeSeen` in
+`launcher-preferences.json`; Settings -> Welcome guide shows it again.
+
 ## Rendering and keyboard integration
 
 The launcher is a GPU scene of image quads; text is drawn on the CPU into

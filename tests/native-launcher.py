@@ -57,7 +57,7 @@ class NativeLauncher(unittest.TestCase):
             ['pkg-config', '--cflags', '--libs', 'physfs'], text=True))
         subprocess.check_call([os.environ.get('CXX', 'g++'), '-std=c++14', '-O2',
             '-I'+str(ROOT/'src'), str(ROOT/'tests/native-rtp-cache.cpp'),
-            str(ROOT/'src/native_launcher/model.cpp'), '-Wl,--wrap=PHYSFS_mount',
+            str(ROOT/'src/native_launcher/model.cpp'), str(ROOT/'src/native_launcher/i18n.cpp'), '-Wl,--wrap=PHYSFS_mount',
             *flags, '-o', str(cls.rtp_probe)])
 
     def setUp(self):
@@ -326,6 +326,101 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(played(),10)
         self.assertNotIn('running',activity.read_text())
 
+    def test_language_setting_switches_at_once_and_is_kept(self):
+        self.game(self.games/'Ace', 3, 'Ace')
+        prefs = self.root/'launcher-preferences.json'
+        language = SETTINGS+',down'*7    # Settings: Language is row 7
+        self.assertEqual(self.ui(language)['language'], 'en')
+        # Right (or Cross) moves to the next language and saves it at once.
+        state = self.ui(language+',right')
+        self.assertEqual(state['language'], 'es')
+        self.assertEqual(json.loads(prefs.read_text())['language'], 'es')
+        # The next start is in Spanish, and messages are made in it.
+        self.assertEqual(self.ui()['language'], 'es')
+        state = self.ui(SETTINGS+',cross,cross')
+        self.assertEqual(state['message'], 'Ajustes de pantalla guardados para el próximo juego.')
+        self.assertEqual(self.ui(language+',cross')['language'], 'pt-BR')
+        state = self.ui(SETTINGS+',cross,cross')
+        self.assertEqual(state['message'], 'Ajustes de tela salvos para o próximo jogo.')
+        # Left goes back; Portuguese wraps round to English.
+        self.assertEqual(self.ui(language+',left')['language'], 'es')
+        self.assertEqual(self.ui(language+',right,right')['language'], 'en')
+        self.assertEqual(json.loads(prefs.read_text())['language'], 'en')
+        state = self.ui(SETTINGS+',cross,cross')
+        self.assertEqual(state['message'], 'Display settings saved for the next game launch.')
+        # A damaged or unknown language falls back to English.
+        prefs.write_text('{"language": "xx"}')
+        self.assertEqual(self.ui()['language'], 'en')
+
+    def test_english_fallback_and_complete_translations(self):
+        tr = lambda lang, text, **kw: self.cmd('tr', language=lang, text=text, **kw)
+        self.assertEqual(tr('es', 'Settings'), 'Ajustes')
+        self.assertEqual(tr('pt-BR', 'Settings'), 'Ajustes')
+        self.assertEqual(tr('pt-BR', 'Add games'), 'Adicionar jogos')
+        self.assertEqual(tr('es', 'Starting {}', args=['Ace']), 'Iniciando Ace')
+        # Text with no translation (game names, paths, anything new) stays English.
+        self.assertEqual(tr('es', 'A text nobody translated'), 'A text nobody translated')
+        self.assertEqual(tr('pt-BR', 'Fixture game'), 'Fixture game')
+        self.assertEqual(tr('en', 'Settings'), 'Settings')
+        # Every row has both translations, keeps its placeholders, and every
+        # character exists in the fonts the launcher ships.
+        fonts = [ROOT/'assets/liberation.ttf', ROOT/'launcher/font-display.ttf']
+        out = json.loads(subprocess.check_output([str(BINARY), *[a for f in fonts for a in ('--strings', str(f))]], text=True))
+        self.assertEqual(out['missingGlyphs'], [])
+        self.assertEqual(len(out['en']), out['rows'], 'an English text is in the table twice')
+        for code in ['es', 'pt-BR']:
+            for english, text in out[code].items():
+                with self.subTest(language=code, text=english):
+                    self.assertTrue(text)
+                    self.assertEqual(text.count('{}'), english.count('{}'))
+
+    def test_welcome_guide_shows_once_and_again_from_settings(self):
+        self.game(self.games/'Ace', 3, 'Ace')
+        prefs = self.root/'launcher-preferences.json'
+        guide = lambda actions='': self.run_binary('--welcome', 'auto', '--actions', actions)
+        # First start: the guide is up, on the language slide, in English.
+        state = guide()
+        self.assertTrue(state['welcomeActive'])
+        self.assertEqual(state['welcomeSlide'], 0)
+        self.assertFalse(state['homeActive'])
+        # Cross goes on, Circle back; it is not marked seen until it ends.
+        self.assertEqual(guide('cross,cross,cross')['welcomeSlide'], 3)
+        self.assertEqual(guide('cross,cross,circle')['welcomeSlide'], 1)
+        self.assertEqual(guide('circle')['welcomeSlide'], 0)
+        self.assertFalse(guide('cross,cross')['welcomeSeen'])
+        self.assertTrue(guide()['welcomeActive'])
+        # Down on the language slide switches the language at once.
+        state = guide('down')
+        self.assertEqual((state['language'], state['welcomeSlide']), ('es', 0))
+        self.assertEqual(json.loads(prefs.read_text())['language'], 'es')
+        # Cross on the last slide ends it: home, and it is remembered.
+        state = guide('cross,'*5)
+        self.assertFalse(state['welcomeActive'])
+        self.assertTrue(state['homeActive'])
+        self.assertTrue(state['welcomeSeen'])
+        saved = json.loads(prefs.read_text())
+        self.assertIs(saved['welcomeSeen'], True)
+        self.assertEqual(saved['language'], 'es')
+        self.assertFalse(guide()['welcomeActive'])
+        # Settings, Welcome guide (row 8) shows it again; Start skips it.
+        state = guide(SETTINGS+',down'*8+',cross')
+        self.assertTrue(state['welcomeActive'])
+        self.assertEqual(state['welcomeSlide'], 0)
+        state = guide(SETTINGS+',down'*8+',cross,start')
+        self.assertFalse(state['welcomeActive'])
+        self.assertEqual(state['focus'], 1)   # back on Settings
+        # Start on the first start skips it too, and that counts as seen.
+        prefs.unlink()
+        self.assertTrue(guide('start')['welcomeSeen'])
+        self.assertFalse(guide()['welcomeActive'])
+        # Its slides draw in every language.
+        prefs.unlink()
+        for lang in ['en', 'es', 'pt-BR']:
+            for slide in range(5):
+                shot = self.storage/f'welcome-{lang}-{slide}.png'
+                self.run_binary('--welcome', 'auto', '--language', lang, '--actions', ','.join(['cross']*slide), '--snapshot', shot)
+                self.assertGreater(shot.stat().st_size, 10000)
+
     def test_launcher_preferences_and_artwork_keys(self):
         prefs=self.root/'launcher-preferences.json'
         # Settings: Game info and artwork is row 6; Exit follows it. On that
@@ -333,7 +428,7 @@ class NativeLauncher(unittest.TestCase):
         # SteamGridDB, IGDB's client ID and secret, RAWG.
         info=SETTINGS+',down'*6+',cross'
         self.assertEqual(self.ui(info)['page'],12)
-        self.assertTrue(self.ui(SETTINGS+',down'*7+',cross')['exitRequested'])
+        self.assertTrue(self.ui(SETTINGS+',down'*9+',cross')['exitRequested'])
         state=self.ui(info+',cross')
         self.assertFalse(state['blurAdult'])
         self.assertIs(json.loads(prefs.read_text())['blurAdult'],False)

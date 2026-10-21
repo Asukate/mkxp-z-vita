@@ -758,7 +758,7 @@ int runNativeLauncher(bool returning) {
         };
         ui.editName = [&](const std::string &initial, std::string &name) {
           try {
-            bool accepted = keyboard(initial, name, "Rename game");
+            bool accepted = keyboard(initial, name, tr("Rename game"));
             // Closing the keyboard must not launch or leave a game.
             input.reset();
             return accepted;
@@ -769,7 +769,7 @@ int runNativeLauncher(bool returning) {
         };
         ui.searchText = [&](const std::string &initial, std::string &out) {
           try {
-            bool accepted = keyboard(initial, out, "Search games");
+            bool accepted = keyboard(initial, out, tr("Search games"));
             input.reset();
             return accepted;
           } catch (...) {
@@ -868,8 +868,8 @@ int runNativeLauncher(bool returning) {
           bool retrieved = false;
           if(update.poll(notice, &retrieved)) {
             ui.offerRelease(notice);
-            if(ui.page==Page::Updates)ui.message=!notice.tag.empty()?"New release: "+notice.tag:
-                retrieved?"No newer release found.":"Could not check releases. Offline or request failed.";
+            if(ui.page==Page::Updates)ui.message=!notice.tag.empty()?trf("New release: {}",{notice.tag}):
+                std::string(tr(retrieved?"No newer release found.":"Could not check releases. Offline or request failed."));
             serviced=true;
           }
 #ifdef __vita__

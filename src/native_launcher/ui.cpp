@@ -1,5 +1,6 @@
 #include "home_layout.h"
 #include "ui.h"
+#include "i18n.h"
 #include "release.h"
 #include <algorithm>
 #include <cctype>
@@ -58,8 +59,7 @@ void UI::launchFailed(int code, const std::string &executable) {
   preparationFraction = -1;
   char hexadecimal[16];
   std::snprintf(hexadecimal, sizeof(hexadecimal), "0x%08x", unsigned(code));
-  message = "Could not start game (LoadExec " + std::to_string(code) +
-            ", " + hexadecimal + "; " + executable + ").";
+  message = trf("Could not start game (LoadExec {}, {}; {}).", {std::to_string(code), hexadecimal, executable});
 }
 struct RtpCheck {
   unsigned generation;
@@ -81,7 +81,7 @@ struct RtpCheck {
   void check() {
     try { result = snapshot.rtpStatus(packs[pack]); }
     catch (const std::exception &e) { result = "Unavailable"; error = e.what(); }
-    catch (...) { result = "Unavailable"; error = "RTP check failed."; }
+    catch (...) { result = "Unavailable"; error = tr("RTP check failed."); }
     done.store(true, std::memory_order_release);
   }
   RtpCheck(Model copy, unsigned gen, int index)
@@ -93,7 +93,7 @@ struct RtpCheck {
     if (worker < 0 || sceKernelStartThread(worker, sizeof(self), &self) < 0) {
       if (worker >= 0) sceKernelDeleteThread(worker);
       worker = -1;
-      throw std::runtime_error("Cannot start RTP location check.");
+      throw std::runtime_error(tr("Cannot start RTP location check."));
     }
 #else
     worker = std::thread([this] { check(); });
@@ -119,13 +119,13 @@ void UI::refreshRtp() {
 void UI::offerRelease(const ReleaseNotice &notice) {
   if(notice.tag.empty())return;
   releaseNotice=notice;
-  if(errorReport.empty() && missingRtp.empty() && !browser && !gameOptions)showRelease();
+  if(errorReport.empty() && missingRtp.empty() && !browser && !gameOptions && !welcome.active)showRelease();
 }
 void UI::showRelease() {
   if(releaseNotice.tag.empty())return;
   releaseReport.clear();releaseScroll=0;
-  releaseReport.push_back("Installed: " HARDRPG_VERSION_TAG);
-  releaseReport.push_back("Available: "+releaseNotice.tag);
+  releaseReport.push_back(trf("Installed: {}", {HARDRPG_VERSION_TAG}));
+  releaseReport.push_back(trf("Available: {}", {releaseNotice.tag}));
   releaseReport.push_back(releaseNotice.name);
   releaseReport.push_back("");
   std::stringstream body(releaseNotice.body);std::string line;
@@ -137,7 +137,7 @@ void UI::showRelease() {
       releaseReport.push_back(line.substr(0,n));line.erase(0,n);
     }
   }
-  releaseReport.push_back("");releaseReport.push_back("Download on your PC:");
+  releaseReport.push_back("");releaseReport.push_back(tr("Download on your PC:"));
   releaseReport.push_back(releaseNotice.url);
 }
 bool UI::service() {
@@ -223,6 +223,10 @@ void UI::scroll(int rows) {
   }
 }
 void UI::touch(int x, int y) {
+  if (welcome.active) {
+    welcomeTap(x, y);
+    return;
+  }
   if (homeActive()) {
     try {
       homeTap(x, y);
@@ -384,8 +388,7 @@ void UI::openGameMenu(size_t index) {
   auto source = model.list[index];
   Entry entry;
   if (!configurableGame(source, entry))
-    throw std::runtime_error(
-        "Open this collection and highlight a game first.");
+    throw std::runtime_error(tr("Open this collection and highlight a game first."));
   auto values = model.gameSettings(entry);
   gameMenuSource = source;
   gameEntry = entry;
@@ -464,7 +467,7 @@ void UI::answerRemove(bool yes) {
     gameOptions = false;
     page = Page::Home;
     focus = Focus::Home;
-    message = "ZIP deleted. " + name + " plays from its unpacked copy.";
+    message = trf("ZIP deleted. {} plays from its unpacked copy.", {name});
     return;
   }
   bool source = !removeInfo.folder.empty() || !removeInfo.zip.empty();
@@ -487,12 +490,12 @@ void UI::finishRemove() {
   // The neighbour takes the removed game's place on home.
   home.target = std::max(0, std::min(home.target, int(homeList().size()) - 1));
   message = removeFiles || removeUnpacked
-                ? name + " removed and its files deleted."
-                : name + " removed from the list. Files kept; Start adds it again.";
+                ? trf("{} removed and its files deleted.", {name})
+                : trf("{} removed from the list. Files kept; Start adds it again.", {name});
 }
 void UI::renameGame(const Entry &entry) {
   if (!editName)
-    throw std::runtime_error("Game name keyboard is unavailable.");
+    throw std::runtime_error(tr("Game name keyboard is unavailable."));
   std::string name;
   if (!editName(entry.name, name))
     return;
@@ -517,12 +520,11 @@ void UI::renameGame(const Entry &entry) {
   for (size_t i = 0; i < list.size(); ++i)
     if (model.list[list[i]].node.identity(model.paths) == id)
       home.target = int(i);
-  message =
-      name.empty() ? "Original game name restored." : "Display name saved.";
+  message = tr(name.empty() ? "Original game name restored." : "Display name saved.");
 }
 void UI::gameAction(Button b) {
   if (page == Page::Rtp && b == Button::Triangle) {
-    model.clearRtpCache(); refreshRtp(); message = "Checking RTP locations..."; return;
+    model.clearRtpCache(); refreshRtp(); message = tr("Checking RTP locations..."); return;
   }
   if (controlsTesting) {
     if (b == Button::Circle) {
@@ -644,7 +646,7 @@ void UI::gameAction(Button b) {
       if (reset) {
         model.setRtp(packs[rtpSelected]);
         refreshRtp();
-        message = "Automatic RTP location restored.";
+        message = tr("Automatic RTP location restored.");
       } else if (b == Button::Cross)
         openBrowser(BrowseMode::Rtp);
     }
@@ -685,8 +687,7 @@ void UI::assignControl(int value) {
     // Choosing a mapping is asking for custom controls.
     controls.enabled = true;
     model.saveControls(controlsEntry, controls);
-    message = controlLabel(setting) + " now does " + controlName(value) +
-              ". Custom controls are on; applies on next launch.";
+    message = trf("{} now does {}. Custom controls are on; applies on next launch.", {controlLabel(setting), controlText(value)});
   }
   controlPicking = false;
 }
@@ -731,57 +732,59 @@ static const char *const frontModeNames[] = {
 static const char *const rearModeNames[] = {
     "Off", "Two upper zones", "Trackpad (hold L)", "Four corners",
     "Whole pad", "Left / right halves"};
+std::string UI::zoneName(int row) const {
+  unsigned mask = padMask();
+  int zone = padZone(row);
+  const char *names[] = {"Top left", "Top right", "Bottom left", "Bottom right"};
+  return tr(mask == 15 ? names[zone]
+            : mask == 3 ? (zone ? "Right" : "Left")
+            : controlsPad == 1 && controls.front == 3 ? "Button"
+            : controlsPad == 2 ? "Whole pad" : "Whole screen");
+}
 std::string UI::controlLabel(int row) const {
   if (controlsPad) {
     if (row == 0)
-      return controlsPad == 2 ? "Rear pad" : "Front screen";
-    unsigned mask = padMask();
-    int zone = padZone(row);
-    const char *names[] = {"top left", "top right", "bottom left", "bottom right"};
-    std::string where = mask == 15 ? names[zone]
-                        : mask == 3 ? (zone ? "right" : "left")
-                        : controlsPad == 1 && controls.front == 3 ? "button"
-                        : controlsPad == 2 ? "whole pad" : "whole screen";
-    return std::string(controlsPad == 2 ? "Rear " : "Front ") + where;
+      return tr(controlsPad == 2 ? "Rear pad" : "Front screen");
+    return trf(controlsPad == 2 ? "Rear pad: {}" : "Front screen: {}", {zoneName(row)});
   }
   if (!controlsAdvanced) {
     if (row >= 1 && row <= 12)
-      return std::string(controlSources[row - 1]) + " button";
-    return row == 0 ? "Custom controls" : row == 13 ? "Tap to walk"
-           : row == 14 ? "Front touch screen"
-           : row == 15 ? "Rear touch pad"
-           : row == 16 ? "Sticks and pointer"
-           : row == 17 ? "Test inputs" : "Reset everything";
+      return trf("{} button", {buttonText(row - 1)});
+    return tr(row == 0 ? "Custom controls" : row == 13 ? "Tap to walk"
+              : row == 14 ? "Front touch screen"
+              : row == 15 ? "Rear touch pad"
+              : row == 16 ? "Sticks and pointer"
+              : row == 17 ? "Test inputs" : "Reset everything");
   }
   const char *labels[] = {"Stick deadzone", "Right stick moves pointer",
                           "Pointer speed", "Square toggles its action"};
-  return row >= 0 && row < 4 ? labels[row] : "";
+  return row >= 0 && row < 4 ? tr(labels[row]) : "";
 }
 std::string UI::controlValue(int row) const {
   if (controlsPad) {
     if (row == 0)
-      return controlsPad == 2 ? rearModeNames[controls.rear] : frontModeNames[controls.front];
+      return tr(controlsPad == 2 ? rearModeNames[controls.rear] : frontModeNames[controls.front]);
     int zone = padZone(row);
-    return zone >= 0 ? controlName(controls.zone(controlsPad == 2, zone)) : "";
+    return zone >= 0 ? controlText(controls.zone(controlsPad == 2, zone)) : "";
   }
   if (!controlsAdvanced) {
     if (row >= 1 && row <= 12)
-      return controlName(controls.buttons[row - 1]);
-    return row == 0 ? (controls.enabled ? "On" : "Off (game's own controls)")
-           : row == 13 ? (controls.tapToWalk ? "On (tap the map to walk there)" : "Off")
-           : row == 14 ? frontModeNames[controls.front]
-           : row == 15 ? rearModeNames[controls.rear]
-           : row == 16 || row == 17 ? "Open" : "Back to defaults, off";
+      return controlText(controls.buttons[row - 1]);
+    return tr(row == 0 ? (controls.enabled ? "On" : "Off (game's own controls)")
+              : row == 13 ? (controls.tapToWalk ? "On (tap the map to walk there)" : "Off")
+              : row == 14 ? frontModeNames[controls.front]
+              : row == 15 ? rearModeNames[controls.rear]
+              : row == 16 || row == 17 ? "Open" : "Back to defaults, off");
   }
   switch (row) {
   case 0:
     return std::to_string(controls.deadzone);
   case 1:
-    return controls.rightPointer ? "On" : "Off";
+    return tr(controls.rightPointer ? "On" : "Off");
   case 2:
     return std::to_string(controls.speed);
   default:
-    return controls.toggleRun ? "On" : "Off";
+    return tr(controls.toggleRun ? "On" : "Off");
   }
 }
 void UI::changeControl(int step) {
@@ -798,7 +801,7 @@ void UI::changeControl(int step) {
     // zones take the screen instead.
     if (controlsPad == 1 && mode != 0 && mode != 2 && controls.tapToWalk) {
       controls.tapToWalk = false;
-      message = "Tap to walk turned off: the screen is touch zones now.";
+      message = tr("Tap to walk turned off: the screen is touch zones now.");
     }
   } else if (!controlsAdvanced) {
     if (setting >= 14 && setting <= 16) {
@@ -820,7 +823,7 @@ void UI::changeControl(int step) {
       controls.tapToWalk = !controls.tapToWalk;
       if (controls.tapToWalk && controls.front != 0 && controls.front != 2) {
         controls.front = 0;
-        message = "Tap to walk on; front touch zones turned off. Next launch.";
+        message = tr("Tap to walk on; front touch zones turned off. Next launch.");
       }
     } else
       controls = {};
@@ -843,8 +846,8 @@ void UI::changeControl(int step) {
   model.saveControls(controlsEntry,controls);
   if(message.empty())
     message=setting==13 && !controlsAdvanced && !controlsPad && controls.tapToWalk
-            ?"Tap to walk on: works in games with standard tile movement. Next launch."
-            :"Saved for "+controlsEntry.name+". Applies on next launch.";
+            ?tr("Tap to walk on: works in games with standard tile movement. Next launch.")
+            :trf("Saved for {}. Applies on next launch.",{controlsEntry.name});
 }
 void UI::refreshFolders() { gameFolders = model.searchFolders(); }
 // The key rows, in the order the Game info and artwork page lists them.
@@ -865,17 +868,17 @@ void UI::editKey(int index) {
   if (!enterText)
     return;
   std::string out;
-  if (!enterText(keyTitles[index], readKey(index), out))
+  if (!enterText(tr(keyTitles[index]), readKey(index), out))
     return;
   out.erase(std::remove_if(out.begin(), out.end(), [](char c) { return !std::isalnum(static_cast<unsigned char>(c)); }),
             out.end());
   if (out.empty()) {
     std::remove(keyFile(index).c_str());
-    message = "Key removed.";
+    message = tr("Key removed.");
     return;
   }
   std::ofstream(keyFile(index)) << out << "\n";
-  message = "Key saved. Artwork downloads use it from now on.";
+  message = tr("Key saved. Artwork downloads use it from now on.");
 }
 void UI::openPage(Page next) {
   if (next == Page::Display || next == Page::Metrics || next == Page::Audio || next == Page::GameInfo)
@@ -917,8 +920,8 @@ void UI::changeDisplay(int step, bool reset) {
   else model.changeDisplay(k, v);
   displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
   message = gameOptions
-                ? "Saved for " + gameEntry.name + ". Applies on next launch."
-                : "Display settings saved for the next game launch.";
+                ? trf("Saved for {}. Applies on next launch.", {gameEntry.name})
+                : tr("Display settings saved for the next game launch.");
 }
 void UI::changeMetrics(int step, bool reset) {
   if (setting == 1) {
@@ -932,8 +935,8 @@ void UI::changeMetrics(int step, bool reset) {
     else
       model.changeDisplay("fastForward", value);
     displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
-    message = gameOptions ? "Saved for " + gameEntry.name + ". Applies on next launch."
-                          : "Fast forward saved for the next game launch.";
+    message = gameOptions ? trf("Saved for {}. Applies on next launch.", {gameEntry.name})
+                          : tr("Fast forward saved for the next game launch.");
     return;
   }
   auto i = displayValues.as_object().find("performanceMetrics");
@@ -948,8 +951,8 @@ void UI::changeMetrics(int step, bool reset) {
     model.changeDisplay("performanceMetrics", value);
   displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
   message = gameOptions
-                ? "Saved for " + gameEntry.name + ". Applies on next launch."
-                : "Performance metrics saved for the next game launch.";
+                ? trf("Saved for {}. Applies on next launch.", {gameEntry.name})
+                : tr("Performance metrics saved for the next game launch.");
 }
 void UI::changeAudio(bool reset) {
   const char *keys[] = {"enableAudio", "midiReverb", "midiChorus"};
@@ -959,21 +962,21 @@ void UI::changeAudio(bool reset) {
     value = found->second.as_boolean();
   model.changeGameSetting(gameEntry, keys[setting], Json(!value), reset);
   displayValues = model.gameSettings(gameEntry);
-  message = "Saved for " + gameEntry.name + ". Applies on next launch.";
+  message = trf("Saved for {}. Applies on next launch.", {gameEntry.name});
 }
 void UI::preparation(const std::string &label) {
-  preparationLabel = label;
-  message = label + " - Circle: cancel";
+  preparationLabel = tr(label);
+  message = trf("{} - Circle: cancel", {preparationLabel});
   if (progressPump) progressPump();
 }
 void UI::progress(uint64_t done, uint64_t total) {
-  auto label = preparationLabel.empty() ? "Preparing ZIP" : preparationLabel;
-  message = label + (total ? ": " + std::to_string(done * 100 / total) + "%"
-                          : ": reading contents") + " - Circle: cancel";
+  auto label = preparationLabel.empty() ? std::string(tr("Preparing ZIP")) : preparationLabel;
+  message = total ? trf("{}: {}% - Circle: cancel", {label, std::to_string(done * 100 / total)})
+                  : trf("{}: reading contents - Circle: cancel", {label});
   if (progressPump) progressPump();
 }
 void UI::scanProgress(size_t count, const std::string &) {
-  message = "Scanning folder " + std::to_string(count) + " - Circle: cancel";
+  message = trf("Scanning folder {} - Circle: cancel", {std::to_string(count)});
   if (progressPump)
     progressPump();
 }
@@ -983,8 +986,7 @@ void UI::chooseRtp(const std::string &path) {
   focus = Focus::Settings;
   page = Page::Rtp;
   refreshRtp();
-  message = packLabel(packs[rtpSelected]) +
-            " RTP location saved. Files stay in place.";
+  message = trf("{} RTP location saved. Files stay in place.", {packLabel(packs[rtpSelected])});
 }
 void UI::browserAction(Button b) {
   if (b == Button::Up || b == Button::Down) {
@@ -1019,9 +1021,9 @@ void UI::browserAction(Button b) {
   if (b != Button::Square)
     return;
   if (browser->path.empty())
-    throw std::runtime_error(browseMode == BrowseMode::Rtp
-                                 ? "Choose an RTP folder or ZIP first"
-                                 : "Choose a game folder or collection first");
+    throw std::runtime_error(tr(browseMode == BrowseMode::Rtp
+                                    ? "Choose an RTP folder or ZIP first"
+                                    : "Choose a game folder or collection first"));
   if (browseMode == BrowseMode::Rtp) {
     chooseRtp(browser->path);
     return;
@@ -1044,11 +1046,9 @@ void UI::browserAction(Button b) {
   home.target = 0;
   home.position = 0;
   message = mode == BrowseMode::Folder
-                ? "Extra game folder saved. Found " + std::to_string(added) +
-                      " games; files stay in place."
-                : "Added " + std::to_string(added) + " game" +
-                      (added == 1 ? "" : "s") +
-                      ". Files stay in their original folders.";
+                ? trf("Extra game folder saved. Found {} games; files stay in place.", {std::to_string(added)})
+                : added == 1 ? std::string(tr("Added 1 game. Files stay in their original folders."))
+                             : trf("Added {} games. Files stay in their original folders.", {std::to_string(added)});
 }
 void UI::openSetting() {
   if(page==Page::Updates) {
@@ -1056,9 +1056,9 @@ void UI::openSetting() {
       automaticUpdates=!automaticUpdates;
       Json saved(std::initializer_list<Json::pair_type>{});saved.as_object()["automatic"]=automaticUpdates;
       atomicWrite(model.paths.at("update-settings.json"),saved.stringify());
-    } else if(setting==1) {checkReleaseRequested=true;message="Checking releases...";}
+    } else if(setting==1) {checkReleaseRequested=true;message=tr("Checking releases...");}
     else if(!releaseNotice.tag.empty())showRelease();
-    else message="No newer release has been found.";
+    else message=tr("No newer release has been found.");
     return;
   }
   if (page == Page::Home) {
@@ -1067,6 +1067,14 @@ void UI::openSetting() {
       return;
     }
     if (setting == 7) {
+      changeLanguage(1);
+      return;
+    }
+    if (setting == 8) {
+      openWelcome();
+      return;
+    }
+    if (setting == 9) {
       exitRequested = true;
       return;
     }
@@ -1085,7 +1093,7 @@ void UI::openSetting() {
     if (setting == 0) {
       blurAdult = !blurAdult;
       savePreferences();
-      message = blurAdult ? "Adult artwork is blurred." : "Adult artwork is shown as is.";
+      message = tr(blurAdult ? "Adult artwork is blurred." : "Adult artwork is shown as is.");
     } else
       editKey(setting - 1);
     return;
@@ -1096,7 +1104,7 @@ void UI::openSetting() {
       errorReport = model.readError(model.activeErrorPath);
       errorScroll = 0;
       if (errorReport.empty())
-        message = "This report could not be read.";
+        message = tr("This report could not be read.");
     }
     return;
   }
@@ -1121,7 +1129,7 @@ void UI::play(size_t index) {
   launchingName = e.name;
   if (beginLaunch && e.kind != Kind::Folder)
     beginLaunch();
-  if (e.kind != Kind::Folder) preparation(e.kind == Kind::Zip ? "Reading game archive" : "Reading game folder");
+  if (e.kind != Kind::Folder) preparation(tr(e.kind == Kind::Zip ? "Reading game archive" : "Reading game folder"));
   if (model.enter(e, chosen)) {
     model.launch(chosen, [this](uint64_t done, uint64_t total) {
       progress(done, total);
@@ -1140,6 +1148,10 @@ void UI::play(size_t index) {
 }
 void UI::action(Button b) {
   try {
+    if (welcome.active) {
+      welcomeAction(b);
+      return;
+    }
     if (homeActive()) {
       homeAction(b);
       return;
@@ -1165,7 +1177,7 @@ void UI::action(Button b) {
         return;
       }
       if (b == Button::Square) {
-        message = "Saved: " + model.exportError();
+        message = trf("Saved: {}", {model.exportError()});
         return;
       }
       if (b == Button::Up || b == Button::Down)
@@ -1223,16 +1235,15 @@ void UI::action(Button b) {
       if (page == Page::Errors) {
         if (!errors.empty()) {
           model.activeErrorPath = errors[setting].path;
-          message = "Saved: " + model.exportError();
+          message = trf("Saved: {}", {model.exportError()});
         }
       } else if (page == Page::Keys && setting > 0) {
         std::remove(keyFile(setting - 1).c_str());
-        message = "Key removed.";
+        message = tr("Key removed.");
       } else if (page == Page::Rtp) {
         model.setRtp(packs[rtpSelected]);
         refreshRtp();
-        message =
-            "Automatic RTP location restored. Pack files were not removed.";
+        message = tr("Automatic RTP location restored. Pack files were not removed.");
       } else if (page == Page::Display)
         changeDisplay(1, true);
       else if (page == Page::Metrics)
@@ -1243,9 +1254,12 @@ void UI::action(Button b) {
           model.removeSearchFolder(paths[setting - 1]);
         refreshFolders();
         setting = settingFirst = 0;
-        message =
-            "Game folder reference removed. Games and saves stay in place.";
+        message = tr("Game folder reference removed. Games and saves stay in place.");
       }
+      return;
+    }
+    if ((b == Button::Left || b == Button::Right) && page == Page::Home && setting == 7) {
+      changeLanguage(b == Button::Left ? -1 : 1);
       return;
     }
     if ((b == Button::Left || b == Button::Right) &&
@@ -1258,7 +1272,7 @@ void UI::action(Button b) {
       if (page == Page::Rtp) {
         model.clearRtpCache();
         refreshRtp();
-        message = "Checking RTP locations...";
+        message = tr("Checking RTP locations...");
       }
       return;
     }

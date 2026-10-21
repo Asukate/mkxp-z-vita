@@ -1,5 +1,6 @@
 // The home screen: state, input and animation. Drawing is in home_view.cpp.
 #include "home_layout.h"
+#include "i18n.h"
 #include "ui.h"
 #include "util/json5pp.hpp"
 #include <algorithm>
@@ -39,7 +40,7 @@ std::vector<std::string> UI::artFolders(const Entry &e) const {
 
 void UI::fetchArt(bool all) {
   if (artFetch && artFetch->running()) {
-    message = "Game info is already downloading.";
+    message = tr("Game info is already downloading.");
     return;
   }
   std::vector<ArtFetch::Job> jobs;
@@ -57,13 +58,13 @@ void UI::fetchArt(bool all) {
   } else if (auto *e = homeEntry())
     add(*e);
   if (jobs.empty()) {
-    message = "Collections get game info for each game inside them.";
+    message = tr("Collections get game info for each game inside them.");
     return;
   }
   if (!artFetch)
     artFetch.reset(new ArtFetch);
   artFetch->start(std::move(jobs), model.paths.at("art/"), model.paths.at(""), all);
-  message = all ? "Looking for game info..." : "Looking for game info for " + homeEntry()->name + "...";
+  message = all ? std::string(tr("Looking for game info...")) : trf("Looking for game info for {}...", {homeEntry()->name});
 }
 
 bool UI::pollArt() {
@@ -96,12 +97,12 @@ bool UI::pollArt() {
     return false;
   std::string text;
   if (!p.note.empty())
-    text = p.note;
+    text = tr(p.note);
   else if (p.finished)
-    text = p.total == 1 ? (p.found ? "Game info and artwork saved." : "No game info found for this game.")
-                        : "Game info found for " + std::to_string(p.found) + " of " + std::to_string(p.total) + " games.";
+    text = p.total == 1 ? std::string(tr(p.found ? "Game info and artwork saved." : "No game info found for this game."))
+                        : trf("Game info found for {} of {} games.", {std::to_string(p.found), std::to_string(p.total)});
   else if (p.total > 1)
-    text = "Downloading game info " + std::to_string(p.done + 1) + " of " + std::to_string(p.total) + ": " + p.current;
+    text = trf("Downloading game info {} of {}: {}", {std::to_string(p.done + 1), std::to_string(p.total), p.current});
   else
     text = message;
   bool changed = text != message || !p.updated.empty();
@@ -114,6 +115,8 @@ bool UI::pollArt() {
 void UI::loadHome() {
   activity = model.activity();
   favourites = model.favourites();
+  int lang = -1;
+  welcomeSeen = false;
   try {
     std::ifstream in(model.paths.at("launcher-preferences.json"));
     std::stringstream text;
@@ -123,14 +126,38 @@ void UI::loadHome() {
       auto &o = prefs.as_object();
       if (o.count("blurAdult") && o.at("blurAdult").is_boolean())
         blurAdult = o.at("blurAdult").as_boolean();
+      if (o.count("language") && o.at("language").is_string())
+        lang = languageFromCode(o.at("language").as_string());
+      if (o.count("welcomeSeen") && o.at("welcomeSeen").is_boolean())
+        welcomeSeen = o.at("welcomeSeen").as_boolean();
     }
   } catch (...) {
     // A damaged file only loses the preferences.
   }
+  setLanguage(lang >= 0 ? lang : systemLanguage());
+  if (!welcomeSeen && !welcome.active)
+    openWelcome();
 }
 void UI::savePreferences() {
-  std::ofstream out(model.paths.at("launcher-preferences.json"));
-  out << "{\n  \"blurAdult\": " << (blurAdult ? "true" : "false") << "\n}\n";
+  Json prefs(std::initializer_list<Json::pair_type>{});
+  auto &o = prefs.as_object();
+  o["blurAdult"] = blurAdult;
+  o["language"] = std::string(languageCode(language()));
+  o["welcomeSeen"] = welcomeSeen;
+  try {
+    atomicWrite(model.paths.at("launcher-preferences.json"), prefs.stringify());
+  } catch (const std::exception &e) {
+    message = e.what();
+  }
+}
+void UI::selectLanguage(int lang) {
+  setLanguage(lang);
+  savePreferences();
+  // Texts made before the change (RTP checks, messages) are made again.
+  message.clear();
+}
+void UI::changeLanguage(int step) {
+  selectLanguage((language() + step + languageCount) % languageCount);
 }
 
 void UI::finishChoosing(bool save) {
@@ -139,12 +166,12 @@ void UI::finishChoosing(bool save) {
     artFetch->choose(save ? artPick : keep);
   home.panel = Home::NoPanel;
   artChoices = ArtFetch::Choices{};
-  message = save ? "Saving..." : "Kept the current artwork and details.";
+  message = tr(save ? "Saving..." : "Kept the current artwork and details.");
 }
 std::string UI::entryKey(const Entry &e) const { return key(e.node.identity(model.paths)); }
 
 bool UI::homeActive() const {
-  return focus == Focus::Home && page == Page::Home && !gameOptions && !browser && errorReport.empty() &&
+  return !welcome.active && focus == Focus::Home && page == Page::Home && !gameOptions && !browser && errorReport.empty() &&
          releaseReport.empty() && missingRtp.empty() && !controlsTesting;
 }
 
@@ -338,7 +365,7 @@ void UI::homeAction(Button b) {
         bool on = !favourites.count(id);
         model.setFavourite(id, on);
         favourites = model.favourites();
-        message = on ? "Added to favourites." : "Removed from favourites.";
+        message = tr(on ? "Added to favourites." : "Removed from favourites.");
         // A favourites-only list can lose the game; keep the index in range.
         clampTarget(home, int(homeList().size()));
       } else if (home.panelFocus == 1 || home.panelFocus == 2) {
@@ -347,7 +374,7 @@ void UI::homeAction(Button b) {
         openGameMenu(list[home.target]);
       } else {
         if (e->kind == Kind::Folder)
-          throw std::runtime_error("Open this collection to rename its games.");
+          throw std::runtime_error(tr("Open this collection to rename its games."));
         renameGame(*e);
       }
     }
@@ -660,6 +687,8 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
 }
 
 bool UI::animating() const {
+  if (welcome.active)
+    return welcome.amount < 1;
   if (!homeActive())
     return false;
   return home.dragging || std::fabs(home.target - home.position) > 0.002 ||
@@ -668,6 +697,12 @@ bool UI::animating() const {
 }
 
 void UI::tick(double seconds) {
+  if (welcome.active && welcome.amount < 1) {
+    // A slide change takes about a quarter of a second.
+    welcome.amount = std::min(1.0, welcome.amount + seconds / 0.26);
+    if (welcome.amount >= 1)
+      welcome.from = -1;
+  }
   if (home.dragging)
     return;
   double k = 1 - std::exp(-seconds * 13.0);

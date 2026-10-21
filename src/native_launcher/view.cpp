@@ -70,7 +70,9 @@ void View::draw(const UI &u) {
   surfaceW = width;
   surfaceH = height;
   // Every screen but home is a sheet in the home screen's style.
-  if (u.homeActive())
+  if (u.welcome.active)
+    buildWelcome(u);
+  else if (u.homeActive())
     buildHome(u);
   else
     buildSheet(u);

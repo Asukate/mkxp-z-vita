@@ -71,7 +71,8 @@ LAUNCHER = shlex.split(subprocess.check_output(
 lifecycle = compile('zip-lifecycle', ['tests/native-zip-lifecycle.cpp',
     'src/native_launcher/model.cpp', 'src/native_launcher/ui.cpp',
     'src/native_launcher/home.cpp', 'src/native_launcher/art_fetch.cpp',
-    'src/native_launcher/image.cpp', 'src/native_launcher/text_input.cpp'],
+    'src/native_launcher/image.cpp', 'src/native_launcher/text_input.cpp',
+    'src/native_launcher/welcome.cpp', 'src/native_launcher/i18n.cpp'],
     ['-Wl,--wrap=PHYSFS_mount', *LAUNCHER])
 casefold = compile('rgss-casefold', ['tests/rgss-casefold.cpp', 'src/crypto/rgssad.cpp'])
 # The Vita build keeps RGSS1/2 entry tables in ux0:/data/hardrpg/cache;

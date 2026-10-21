@@ -1,5 +1,6 @@
 #pragma once
 #include "art_fetch.h"
+#include "i18n.h"
 #include "model.h"
 #include "update_check.h"
 #include <map>
@@ -66,6 +67,28 @@ struct Home {
   double dragFrom = 0, velocity = 0;
   uint32_t lastMove = 0;
 };
+// A control mapping's name in the launcher's language.
+inline std::string controlText(int code) {
+  if (controlIsKey(code)) {
+    int key = controlPickIndex(code);
+    return key >= 0 ? trf("Key {}", {controlPicks[key].name}) : tr("Off");
+  }
+  return tr(controlName(code));
+}
+// A Vita button's name (controlSources order); SELECT and START keep theirs.
+inline std::string buttonText(int index) {
+  return index == 4 || index == 5 ? controlSources[index] : tr(controlSources[index]);
+}
+// The welcome guide shown on the first start: language, where games go, the
+// RTP, a few defaults, game info. Cross moves on, Circle goes back.
+struct Welcome {
+  enum Slide { Language, Games, Rtp, Defaults, Artwork, SlideCount };
+  bool active = false;
+  int slide = 0, from = -1; // from: the slide sliding out, or -1
+  int direction = 1;        // 1 forward, -1 back
+  double amount = 1;        // 0 when a slide change starts, 1 once it is done
+  int languageFocus = 0;
+};
 // This state machine is shared by the Vita front end and the desktop preview.
 // It owns no Ruby values, RGSS objects, audio devices, or engine threads.
 struct RtpCheck;
@@ -106,9 +129,19 @@ public:
   ArtFetch::Choices artChoices;
   int artPick[3] = {-1, -1, -1}, artRow = 0;
   void finishChoosing(bool save);
-  // Launcher preferences, kept in launcher-preferences.json.
+  // Launcher preferences, kept in launcher-preferences.json: the adult
+  // artwork blur, the language and whether the welcome guide was seen.
   bool blurAdult = true;
+  bool welcomeSeen = false;
   void savePreferences();
+  void changeLanguage(int step);
+  void selectLanguage(int lang);
+  // The welcome guide (see Welcome).
+  Welcome welcome;
+  void openWelcome();
+  void welcomeAction(Button);
+  void welcomeTap(int x, int y);
+  void finishWelcome();
   // Filter rows: engines, favourites, unplayed, then sorts.
   int filterRows() const;
   void filterActivate(int row);
@@ -234,6 +267,8 @@ public:
   void offerRelease(const ReleaseNotice &);
   void showRelease();
   std::string controlLabel(int row) const;
+  // A touch zone's name on the pad page ("Top left").
+  std::string zoneName(int row) const;
   std::string controlValue(int row) const;
   void openControls();
   void changeControl(int step);
@@ -255,7 +290,7 @@ public:
   // Touch on the sheets (every screen but home).
   void sheetTouch(int x, int y);
   // Rows on the settings page; the last is Exit.
-  int settingsRows() const { return 8; }
+  int settingsRows() const { return 10; }
   // The game info page (Page::Keys): the adult artwork blur, then the source
   // keys, typed on the Vita keyboard.
   static constexpr int keyCount = 4;

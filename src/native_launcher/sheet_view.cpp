@@ -6,6 +6,7 @@
 // through a list redraws no text. Row positions come from home_layout.h,
 // which touch (UI::sheetTouch) uses too.
 #include "home_layout.h"
+#include "i18n.h"
 #include "release.h"
 #include "util/json5pp.hpp"
 #include "view.h"
@@ -24,11 +25,20 @@ std::string tail(const std::string &s, size_t limit) {
 }
 const char *engineLong(int version) {
   static const char *names[] = {"Unknown engine", "RPG Maker XP", "RPG Maker VX", "RPG Maker VX Ace", "RPG Maker 2000 / 2003"};
-  return version >= 0 && version <= 4 ? names[version] : names[0];
+  return tr(version >= 0 && version <= 4 ? names[version] : names[0]);
 }
+// Upper case, including the accented letters of Latin-1 (á -> Á, ç -> Ç).
 std::string upper(std::string s) {
-  for (auto &c : s)
-    c = char(std::toupper(static_cast<unsigned char>(c)));
+  for (size_t i = 0; i < s.size(); ++i) {
+    auto c = static_cast<unsigned char>(s[i]);
+    if (c == 0xc3 && i + 1 < s.size()) {
+      auto next = static_cast<unsigned char>(s[i + 1]);
+      if (next >= 0xa0 && next <= 0xbe && next != 0xb7)
+        s[i + 1] = char(next - 0x20);
+      ++i;
+    } else if (c < 0x80)
+      s[i] = char(std::toupper(c));
+  }
   return s;
 }
 } // namespace
@@ -87,16 +97,17 @@ void View::buildSheet(const UI &u) {
   std::vector<Hint> left, right;
   int topFocus = -1;
   enum Special { NoSpecial, About, ControlsTest, ControlsPick, ControlsPad } special = NoSpecial;
+  // Labels and values are given in English and shown translated.
   auto row = [&](Row::Kind kind, const std::string &label, const std::string &value = "", bool on = false) {
     Row r;
     r.kind = kind;
-    r.label = label;
-    r.value = value;
+    r.label = tr(label);
+    r.value = tr(value);
     r.on = on;
     rows.push_back(r);
   };
-  const Hint cross{"btn-cross-26", "Select", Button::Cross}, back{"btn-circle-26", "Back", Button::Circle};
-  auto hint = [](const char *glyph, const std::string &text, Button b) { return Hint{glyph, text, b}; };
+  const Hint cross{"btn-cross-26", tr("Select"), Button::Cross}, back{"btn-circle-26", tr("Back"), Button::Circle};
+  auto hint = [](const char *glyph, const std::string &text, Button b) { return Hint{glyph, tr(text), b}; };
   auto values = [&]() -> const Json::object_type & { return u.displayValues.as_object(); };
   auto boolean = [&](const char *name, bool fallback) {
     auto it = values().find(name);
@@ -105,8 +116,8 @@ void View::buildSheet(const UI &u) {
 
   // Display, metrics and RTP pages are shared by settings and game settings.
   auto displayPage = [&] {
-    title = "Display";
-    subtitle = u.gameOptions ? u.gameEntry.name : "Default for every game";
+    title = tr("Display");
+    subtitle = u.gameOptions ? u.gameEntry.name : tr("Default for every game");
     const char *keys[] = {"fixedAspectRatio", "integerScalingActive", "smoothScaling"};
     const char *labels[] = {"Aspect ratio", "Scaling", "Filtering"};
     const char *names[][2] = {{"Fill screen", "Original"}, {"Fit screen", "Whole pixels"}};
@@ -128,13 +139,13 @@ void View::buildSheet(const UI &u) {
       row(Row::Choice, labels[i], custom ? "Custom" : i == 2 ? filterNames[value] : names[i][value]);
     }
     focusRow = u.setting;
-    notes = {u.gameOptions ? "Saved for this game. Square goes back to the default for every game."
-                           : "Used by games without settings of their own."};
+    notes = {tr(u.gameOptions ? "Saved for this game. Square goes back to the default for every game."
+                              : "Used by games without settings of their own.")};
     left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", u.gameOptions ? "Use default" : "Reset", Button::Square), back};
   };
   auto metricsPage = [&] {
-    title = "Performance and speed";
-    subtitle = u.gameOptions ? u.gameEntry.name : "Default for every game";
+    title = tr("Performance and speed");
+    subtitle = u.gameOptions ? u.gameEntry.name : tr("Default for every game");
     int mode = 0;
     auto i = values().find("performanceMetrics");
     if (i != values().end() && i->second.is_integer() && i->second.as_integer() >= 0 && i->second.as_integer() <= 2)
@@ -144,18 +155,18 @@ void View::buildSheet(const UI &u) {
     row(Row::Toggle, "Fast forward with L+R", "", boolean("fastForward", true));
     focusRow = u.setting;
     if (u.setting == 1)
-      notes = {"L+R switches up to twice the speed; \xc2\xbb\xc2\xbb shows in the corner while it is on. Busy maps run as fast "
-               "as they can.",
-               "Any button can also be mapped to Fast forward in Controls. Applies the next time a game starts."};
+      notes = {tr("L+R switches up to twice the speed; »» shows in the corner while it is on. Busy maps run as fast "
+                  "as they can."),
+               tr("Any button can also be mapped to Fast forward in Controls. Applies the next time a game starts.")};
     else
-      notes = {"FPS: frames shown each second. MS: average time between frames, waits included. Peak: the longest frame "
-               "in about the last five seconds.",
-               "Drawn in an empty border when there is one, otherwise in a corner. Applies the next time a game starts."};
+      notes = {tr("FPS: frames shown each second. MS: average time between frames, waits included. Peak: the longest frame "
+                  "in about the last five seconds."),
+               tr("Drawn in an empty border when there is one, otherwise in a corner. Applies the next time a game starts.")};
     left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", u.gameOptions ? "Use default" : "Off", Button::Square), back};
   };
   auto rtpPage = [&] {
-    title = "RTP locations";
-    subtitle = "Shared by every game";
+    title = tr("RTP locations");
+    subtitle = tr("Shared by every game");
     rowH = rtpRowH;
     shown = rtpPackCount;
     for (int i = 0; i < rtpPackCount; ++i) {
@@ -163,106 +174,108 @@ void View::buildSheet(const UI &u) {
       Row r;
       r.kind = Row::Nav;
       r.label = packLabel(packs[i]) + " RTP";
-      r.value = i < int(u.rtpStatuses.size()) ? u.rtpStatuses[i] : "";
-      r.detail = entry == u.rtpChoices.as_object().end() ? u.model.paths.at(std::string("rtp/") + packs[i]) + " (automatic)"
+      r.value = i < int(u.rtpStatuses.size()) ? tr(u.rtpStatuses[i]) : "";
+      r.detail = entry == u.rtpChoices.as_object().end() ? u.model.paths.at(std::string("rtp/") + packs[i]) + " " + tr("(automatic)")
                                                          : entry->second.as_string();
       r.detail = tail(r.detail, 84);
       rows.push_back(r);
     }
     focusRow = u.rtpSelected;
-    notes = {"An RTP in a ZIP is unpacked once; the original pack is kept."};
+    notes = {tr("An RTP in a ZIP is unpacked once; the original pack is kept.")};
     left = {hint("btn-cross-26", "Choose", Button::Cross), hint("btn-square-26", "Automatic", Button::Square),
             hint("btn-triangle-26", "Check again", Button::Triangle), back};
   };
 
   if (!u.releaseReport.empty()) {
-    section = "Update";
+    section = tr("Update");
     title = "HardRPG " + u.releaseNotice.tag;
-    subtitle = "A newer release is out";
+    subtitle = tr("A newer release is out");
     body = u.releaseReport;
     bodyFirst = u.releaseScroll;
     bodyLines = 11;
     left = {hint("btn-cross-26", "Continue", Button::Cross)};
-    right = {{"UP DOWN", "Scroll", Button::None}};
+    right = {{"UP DOWN", tr("Scroll"), Button::None}};
   } else if (u.page == Page::Controls) {
-    section = "Game settings";
+    section = tr("Game settings");
     subtitle = u.controlsEntry.name;
     if (u.controlsTesting) {
       special = ControlsTest;
-      title = "Test controls";
-      subtitle = "Press buttons, move the sticks, touch the screen or the back";
+      title = tr("Test controls");
+      subtitle = tr("Press buttons, move the sticks, touch the screen or the back");
       left = {hint("btn-circle-26", "Stop testing", Button::Circle)};
     } else if (u.controlPicking) {
       special = ControlsPick;
       title = u.controlLabel(u.setting);
-      subtitle = "now does: " + u.controlValue(u.setting);
-      notes = {"Top row: RPG Maker actions (X=A: RPG Maker's X, key A on PC). Below: keys. Dimmed: in use."};
+      subtitle = trf("now does: {}", {u.controlValue(u.setting)});
+      notes = {tr("Top row: RPG Maker actions (X=A: RPG Maker's X, key A on PC). Below: keys. Dimmed: in use.")};
       left = {hint("btn-cross-26", "Assign", Button::Cross), hint("btn-circle-26", "Cancel", Button::Circle)};
-      right = {{nullptr, "Tap twice to assign", Button::None}};
+      right = {{nullptr, tr("Tap twice to assign"), Button::None}};
     } else if (u.controlsPad) {
       special = ControlsPad;
       bool rear = u.controlsPad == 2;
-      title = rear ? "Rear touch pad" : "Front touch screen";
+      title = tr(rear ? "Rear touch pad" : "Front touch screen");
       int mode = rear ? u.controls.rear : u.controls.front;
       notes = {!u.message.empty() ? u.message
-               : rear ? (mode == 1 ? "Two zones along the top edge, clear of your grip."
-                                   : "Fingers already on the pad when the game starts are ignored.")
-               : mode == 1 || mode == 3 ? "These buttons are drawn on screen. Whole screen, halves and corners are invisible."
-               : mode >= 4 ? "Invisible zones: nothing is drawn. Several fingers press several zones."
-                           : "Whole screen, halves and corners are invisible touch zones."};
+               : tr(rear ? (mode == 1 ? "Two zones along the top edge, clear of your grip."
+                                      : "Fingers already on the pad when the game starts are ignored.")
+                    : mode == 1 || mode == 3 ? "These buttons are drawn on screen. Whole screen, halves and corners are invisible."
+                    : mode >= 4 ? "Invisible zones: nothing is drawn. Several fingers press several zones."
+                                : "Whole screen, halves and corners are invisible touch zones.")};
       left = {hint("btn-cross-26", "Map zone", Button::Cross), back};
-      right = {{nullptr, "Left and right: mode or zone", Button::None}};
+      right = {{nullptr, tr("Left and right: mode or zone"), Button::None}};
     } else {
-      title = u.controlsAdvanced ? "Sticks and pointer" : "Controls";
+      title = tr(u.controlsAdvanced ? "Sticks and pointer" : "Controls");
       for (int i = 0; i < u.controlsCount(); ++i)
         row(i >= 1 && i <= 12 && !u.controlsAdvanced ? Row::Nav : Row::Choice, u.controlLabel(i), u.controlValue(i));
       focusRow = u.setting;
       first = u.settingFirst;
       notes = {!u.message.empty() ? u.message
-               : u.controlsAdvanced ? "Pointer options need a game that reads the mouse."
-               : u.setting >= 1 && u.setting <= 12 ? "Cross gives this button a keyboard key or an RPG Maker action."
-               : u.controls.enabled ? "Each button does what is shown. Saved for this game."
-                                    : "Pick a button and press Cross to map it to any keyboard key."};
+               : tr(u.controlsAdvanced ? "Pointer options need a game that reads the mouse."
+                    : u.setting >= 1 && u.setting <= 12 ? "Cross gives this button a keyboard key or an RPG Maker action."
+                    : u.controls.enabled ? "Each button does what is shown. Saved for this game."
+                                         : "Pick a button and press Cross to map it to any keyboard key.")};
       left = {cross, back};
     }
   } else if (!u.errorReport.empty()) {
-    section = "Error report";
-    title = "The game ended with an error";
+    section = tr("Error report");
+    title = tr("The game ended with an error");
     body = u.errorReport;
     bodyFirst = u.errorScroll;
     left = {hint("btn-cross-26", "Back", Button::Cross), hint("btn-square-26", "Save report", Button::Square)};
-    right = {{"UP DOWN", "Scroll", Button::None}};
+    right = {{"UP DOWN", tr("Scroll"), Button::None}};
   } else if (!u.missingRtp.empty()) {
-    section = "Can't start the game";
-    title = "Missing " + packLabel(u.missingRtp) + " RTP";
-    subtitle = "This game needs the RTP's shared graphics and sounds.";
+    section = tr("Can't start the game");
+    title = trf("Missing {} RTP", {packLabel(u.missingRtp)});
+    subtitle = tr("This game needs the RTP's shared graphics and sounds.");
     row(Row::Primary, "Choose an RTP folder or ZIP");
     row(Row::Plain, "Back to games");
     focusRow = 0;
-    notes = {"Looked in: " + u.model.paths.at("rtp/" + u.missingRtp)};
+    notes = {trf("Looked in: {}", {u.model.paths.at("rtp/" + u.missingRtp)})};
     left = {hint("btn-cross-26", "Choose RTP", Button::Cross), back};
   } else if (u.browser) {
     bool rtp = u.browseMode == BrowseMode::Rtp, folder = u.browseMode == BrowseMode::Folder;
-    section = rtp ? "RTP locations" : folder ? "Game folders" : "Library";
-    title = rtp ? "Choose an RTP" : folder ? "Choose a game folder" : "Add games";
-    subtitle = tail(u.browser->path.empty() ? "Choose a storage device" : u.browser->path, 70);
+    section = tr(rtp ? "RTP locations" : folder ? "Game folders" : "Library");
+    title = tr(rtp ? "Choose an RTP" : folder ? "Choose a game folder" : "Add games");
+    subtitle = tail(u.browser->path.empty() ? tr("Choose a storage device") : u.browser->path, 70);
     rowH = browserRowH;
     shown = browserRows;
-    for (auto &f : u.browser->list)
-      row(f.directory ? Row::Folder : Row::Zip, f.name);
+    for (auto &f : u.browser->list) {
+      row(f.directory ? Row::Folder : Row::Zip, "");
+      rows.back().label = f.name; // file names stay as they are
+    }
     focusRow = u.browserSelected;
     first = u.browserFirst;
     if (u.browser->list.empty())
-      notes = {u.browser->path.empty() ? "No storage found."
-               : rtp || folder        ? "No folders here. Square uses this folder."
-                                      : "No folders here. Square looks for games in this folder."};
+      notes = {tr(u.browser->path.empty() ? "No storage found."
+                  : rtp || folder        ? "No folders here. Square uses this folder."
+                                         : "No folders here. Square looks for games in this folder.")};
     else if (!rtp && !folder)
-      notes = {"Square looks for games in the folder shown above, including the folders inside it. Games stay where they are."};
+      notes = {tr("Square looks for games in the folder shown above, including the folders inside it. Games stay where they are.")};
     left = {hint("btn-cross-26", "Open", Button::Cross),
             hint("btn-square-26", rtp || folder ? "Use this folder" : "Add games here", Button::Square), back};
-    right = {{"START", "Close", Button::Start}};
+    right = {{"START", tr("Close"), Button::Start}};
   } else if (u.gameOptions) {
-    section = "Game settings";
+    section = tr("Game settings");
     topFocus = -1;
     if (u.page == Page::Game) {
       title = u.gameEntry.name;
@@ -276,36 +289,36 @@ void View::buildSheet(const UI &u) {
       first = u.settingFirst;
       left = {hint("btn-cross-26", "Open", Button::Cross), back};
     } else if (u.page == Page::Audio) {
-      title = "Audio and MIDI";
+      title = tr("Audio and MIDI");
       subtitle = u.gameEntry.name;
       const char *keys[] = {"enableAudio", "midiReverb", "midiChorus"};
       const char *names[] = {"Sound", "MIDI reverb", "MIDI chorus"};
       for (int i = 0; i < 3; ++i)
         row(Row::Toggle, names[i], "", boolean(keys[i], i == 0));
       focusRow = u.setting;
-      notes = {"Saved for this game; applies the next time it starts.", "MIDI effects cost CPU time and are off by default."};
+      notes = {tr("Saved for this game; applies the next time it starts."), tr("MIDI effects cost CPU time and are off by default.")};
       left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", "Use default", Button::Square), back};
     } else if (u.page == Page::Remove) {
       auto q = u.removeQuestions[u.removeStep];
       bool source = !u.removeInfo.folder.empty() || !u.removeInfo.zip.empty();
       bool copy = q == UI::DeleteUnpacked || (!source && u.gameEntry.node.archive);
       bool zipOnly = q == UI::DeleteZipOnly;
-      section = "Remove " + u.gameEntry.name;
-      title = zipOnly ? "Delete the ZIP to free its space?" : copy ? "Delete its unpacked copy too?" : "Delete its game files too?";
-      subtitle = zipOnly ? "The game stays listed and plays from its unpacked copy."
-                 : u.removeStep == 0 ? "It will be removed from the library."
-                                     : std::string("Game files: ") + (u.removeFiles ? "will be deleted." : "kept.");
+      section = trf("Remove {}", {u.gameEntry.name});
+      title = tr(zipOnly ? "Delete the ZIP to free its space?" : copy ? "Delete its unpacked copy too?" : "Delete its game files too?");
+      subtitle = tr(zipOnly ? "The game stays listed and plays from its unpacked copy."
+                    : u.removeStep == 0 ? "It will be removed from the library."
+                    : u.removeFiles ? "Game files: will be deleted." : "Game files: kept.");
       bool one = copy || zipOnly;
       row(Row::Plain, one ? "No, keep it" : "No, keep them");
       row(Row::Danger, one ? "Yes, delete it" : "Yes, delete them");
       focusRow = u.setting;
       notes = {tail(u.removePath(q), 90),
-               zipOnly ? "Saves and settings stay: they are in the unpacked copy."
-               : copy  ? "The unpacked copy holds the game's saves. This cannot be undone."
-                       : "Saves kept inside the game files go with them. This cannot be undone."};
+               tr(zipOnly ? "Saves and settings stay: they are in the unpacked copy."
+                  : copy  ? "The unpacked copy holds the game's saves. This cannot be undone."
+                          : "Saves kept inside the game files go with them. This cannot be undone.")};
       left = {hint("btn-cross-26", "Answer", Button::Cross), hint("btn-circle-26", "Cancel", Button::Circle)};
     } else if (u.page == Page::GameInfo) {
-      title = "Game information";
+      title = tr("Game information");
       subtitle = u.gameEntry.name;
       row(Row::Info, "Engine", engineLong(u.gameEntry.version));
       row(Row::Info, "Source", u.gameEntry.node.archive ? "ZIP archive" : "Game folder");
@@ -339,7 +352,7 @@ void View::buildSheet(const UI &u) {
           if (!text("description").empty())
             notes.push_back(text("description"));
           if (!text("sources").empty())
-            notes.push_back("Details from " + text("sources") + ".");
+            notes.push_back(trf("Details from {}.", {text("sources")}));
         } catch (...) {
         }
       }
@@ -358,18 +371,18 @@ void View::buildSheet(const UI &u) {
     bodyFirst = u.aboutScroll;
     bodyLines = 9;
     left = {back};
-    right = {{"UP DOWN", "Release notes", Button::None}};
+    right = {{"UP DOWN", tr("Release notes"), Button::None}};
   } else {
-    section = "Settings";
+    section = tr("Settings");
     topFocus = 1;
     if (u.page == Page::Updates) {
-      title = "Release checks";
+      title = tr("Release checks");
       row(Row::Toggle, "Check for new releases at startup", "", u.automaticUpdates);
       row(Row::Action, "Check now");
       row(Row::Nav, "Newer release notes", u.releaseNotice.tag.empty() ? "None found" : u.releaseNotice.tag);
       focusRow = u.setting;
-      notes = {"Checks published Alpha releases. Nothing is shown when you are up to date or offline.",
-               "Updates are downloaded and installed by hand."};
+      notes = {tr("Checks published Alpha releases. Nothing is shown when you are up to date or offline."),
+               tr("Updates are downloaded and installed by hand.")};
       left = {cross, back};
     } else if (u.page == Page::Display)
       displayPage();
@@ -378,18 +391,20 @@ void View::buildSheet(const UI &u) {
     else if (u.page == Page::Rtp)
       rtpPage();
     else if (u.page == Page::Folders) {
-      title = "Game folders";
-      subtitle = "Default: " + tail(u.model.paths.at("games"), 48);
+      title = tr("Game folders");
+      subtitle = trf("Default: {}", {tail(u.model.paths.at("games"), 48)});
       row(Row::Action, "Add another folder");
-      for (auto &f : u.gameFolders)
-        row(Row::Folder, tail(f, 70));
+      for (auto &f : u.gameFolders) {
+        row(Row::Folder, "");
+        rows.back().label = tail(f, 70);
+      }
       focusRow = u.setting;
       first = u.settingFirst;
-      notes = {"Folders are searched for games each time HardRPG starts. Removing a folder here keeps its games and saves."};
+      notes = {tr("Folders are searched for games each time HardRPG starts. Removing a folder here keeps its games and saves.")};
       left = {hint("btn-cross-26", "Browse", Button::Cross), hint("btn-square-26", "Remove", Button::Square), back};
     } else if (u.page == Page::Keys) {
-      title = "Game info and artwork";
-      subtitle = "Covers, backgrounds, logos and details such as the year, developer and description";
+      title = tr("Game info and artwork");
+      subtitle = tr("Covers, backgrounds, logos and details such as the year, developer and description");
       // A key shows only its ends, so it is recognisable but not readable over a shoulder.
       auto masked = [](const std::string &key) {
         return key.empty() ? std::string("Add a key") : key.size() <= 8 ? std::string("Saved") : key.substr(0, 4) + "\xe2\x80\xa6" + key.substr(key.size() - 4);
@@ -402,42 +417,45 @@ void View::buildSheet(const UI &u) {
       row(Row::Info, "Steam, DLsite, VNDB, itch.io", "No key needed");
       focusRow = u.setting;
       if (u.setting == 0)
-        notes = {"Covers and backgrounds a source marks as adult are shown blurred in the library and the artwork chooser."};
+        notes = {tr("Covers and backgrounds a source marks as adult are shown blurred in the library and the artwork chooser.")};
       else if (u.setting == 2 || u.setting == 3)
-        notes = {"IGDB: release details, covers and screenshots. Free: sign in at dev.twitch.tv/console, register an "
-                 "application (any name, redirect http://localhost, category Application Integration), then copy "
-                 "its Client ID and make a New Secret.",
-                 "Both are needed. A wrong pair is skipped, and the other sources still work."};
+        notes = {tr("IGDB: release details, covers and screenshots. Free: sign in at dev.twitch.tv/console, register an "
+                    "application (any name, redirect http://localhost, category Application Integration), then copy "
+                    "its Client ID and make a New Secret."),
+                 tr("Both are needed. A wrong pair is skipped, and the other sources still work.")};
       else
-        notes = {"SteamGridDB: covers, backgrounds and logos for almost any game. Free key: steamgriddb.com, "
-                 "Preferences, API.",
-                 "RAWG: release dates, developers and genres. Free key: rawg.io/apidocs.",
-                 "With no source knowing a game, its own title screen is used."};
+        notes = {tr("SteamGridDB: covers, backgrounds and logos for almost any game. Free key: steamgriddb.com, "
+                    "Preferences, API."),
+                 tr("RAWG: release dates, developers and genres. Free key: rawg.io/apidocs."),
+                 tr("With no source knowing a game, its own title screen is used.")};
       left = {u.setting == 0 ? hint("btn-cross-26", "Change", Button::Cross) : hint("btn-cross-26", "Type key", Button::Cross)};
       if (u.setting > 0)
         left.push_back(hint("btn-square-26", "Remove key", Button::Square));
       left.push_back(back);
     } else if (u.page == Page::Errors) {
-      title = "Game error history";
-      for (auto &record : u.errors)
-        row(Row::Nav, record.game, record.timestamp);
+      title = tr("Game error history");
+      for (auto &record : u.errors) {
+        row(Row::Nav, "", "");
+        rows.back().label = tr(record.game);
+        rows.back().value = record.timestamp;
+      }
       focusRow = u.setting;
       first = u.settingFirst;
       if (u.errors.empty())
-        notes = {"No game has ended with an error."};
+        notes = {tr("No game has ended with an error.")};
       left = {hint("btn-cross-26", "View", Button::Cross), hint("btn-square-26", "Save report", Button::Square), back};
     } else {
-      title = "Settings";
-      const char *metrics[] = {"Off", "FPS", "FPS and timing"};
-      (void)metrics;
+      title = tr("Settings");
       row(Row::Nav, "Game display");
       row(Row::Nav, "RTP locations");
-      row(Row::Nav, "Game folders", u.gameFolders.empty() ? "" : std::to_string(u.gameFolders.size()) + " added");
+      row(Row::Nav, "Game folders", u.gameFolders.empty() ? "" : trf("{} added", {std::to_string(u.gameFolders.size())}));
       row(Row::Nav, "Game error history", u.errors.empty() ? "" : std::to_string(u.errors.size()));
       row(Row::Nav, "Performance and speed");
       row(Row::Nav, "Release checks", u.automaticUpdates ? "At startup" : "Off");
       int keys = !u.readKey(0).empty() + (!u.readKey(1).empty() && !u.readKey(2).empty()) + !u.readKey(3).empty();
-      row(Row::Nav, "Game info and artwork", std::to_string(4 + keys) + " sources");
+      row(Row::Nav, "Game info and artwork", trf("{} sources", {std::to_string(4 + keys)}));
+      row(Row::Choice, "Language", languageName(language()));
+      row(Row::Nav, "Welcome guide");
       row(Row::Action, "Exit HardRPG");
       focusRow = u.setting;
       first = u.settingFirst;
@@ -523,7 +541,7 @@ void View::buildSheet(const UI &u) {
     if (layer.key.empty()) {
       beginLayer(layer, key, sheetW, box);
       int textX = 18;
-      const char *glyphName = r.kind == Row::Folder ? "folder-26" : r.kind == Row::Zip ? "memcard-26" : r.kind == Row::Action && r.label.find("Add") == 0 ? "plus-31" : nullptr;
+      const char *glyphName = r.kind == Row::Folder ? "folder-26" : r.kind == Row::Zip ? "memcard-26" : r.kind == Row::Action && r.label == tr("Add another folder") ? "plus-31" : nullptr;
       if (glyphName) {
         const Image &g = icon(glyphName);
         blitScaled(g, 14, (box - 24) / 2, 24, 24);
@@ -577,15 +595,24 @@ void View::buildSheet(const UI &u) {
   if (special == About) {
     place(icon("emblem-72"), sheetX, 84);
     place(icon("wordmark-46"), sheetX + 90, 92);
-    std::string key = "about";
-    if (beginLayer(headerLayer, key, sheetW, 70)) {
-      label(0, 0, "Version " HARDRPG_VERSION, 16, white);
-      label(0, 24, "Classic RPG games on the PS Vita. Made by Asukate.", 15, muted);
-      label(0, 46, "github.com/Asukate/mkxp-z-vita  \xc2\xb7  powered by mkxp-z and EasyRPG Player  \xc2\xb7  Vita drawing by Tokyoship, CC BY 3.0", 13, faint, 255, false, -1, sheetW - 92);
+    std::string key = std::string("about|") + languageCode(language());
+    // The credits on one line, or two when the language makes them longer.
+    std::string site = std::string("github.com/Asukate/mkxp-z-vita  \xc2\xb7  ") + tr("powered by mkxp-z and EasyRPG Player"),
+                drawing = tr("Vita drawing by Tokyoship, CC BY 3.0"), dot = "  \xc2\xb7  ";
+    bool oneLine = measure(site + dot + drawing, 13) <= sheetW - 92;
+    if (beginLayer(headerLayer, key, sheetW, 80)) {
+      label(0, 0, trf("Version {}", {HARDRPG_VERSION}), 16, white);
+      label(0, 24, tr("Classic RPG games on the PS Vita. Made by Asukate."), 15, muted);
+      if (oneLine)
+        label(0, 46, site + dot + drawing, 13, faint);
+      else {
+        label(0, 46, site, 13, faint, 255, false, -1, sheetW - 92);
+        label(0, 63, drawing, 13, faint, 255, false, -1, sheetW - 92);
+      }
       endLayer();
     }
     place(headerLayer.image, sheetX + 92, 144);
-    y = 230;
+    y = oneLine ? 230 : 240;
     solidQuad(white, sheetX, y - 8, sheetW, 1, 0.12);
   }
   if (!body.empty()) {
@@ -626,7 +653,8 @@ void View::buildSheet(const UI &u) {
         solidQuad(ruby, x, ky, w, h, 1, 6);
       else
         solidQuad(white, x, ky, w, h, used ? 0.05 : keyRow ? 0.1 : 0.16, 6);
-      std::string name = controlPicks[i].name, key = "key|" + name + "|" + std::to_string(w) + "|" + std::to_string(used && !here);
+      // RPG Maker actions are translated; keyboard keys keep their names.
+      std::string name = controlPicks[i].row ? controlPicks[i].name : trc("picker", controlPicks[i].name), key = "key|" + name + "|" + std::to_string(w) + "|" + std::to_string(used && !here);
       auto &layer = rowCache[key];
       if (layer.key.empty()) {
         beginLayer(layer, key, w, h);
@@ -649,25 +677,25 @@ void View::buildSheet(const UI &u) {
     auto &mode = rowCache[key];
     if (mode.key.empty()) {
       beginLayer(mode, key, w, h);
-      label(18, (h - 22) / 2, "Mode", 18, white);
+      label(18, (h - 22) / 2, tr("Mode"), 18, white);
       label(w - 16, (h - 22) / 2, "\xe2\x80\xb9  " + u.controlValue(0) + "  \xe2\x80\xba", 17, white, 255, false, 1);
       endLayer();
     }
     place(mode.image, x, py);
     // The surface as the player holds it.
     solidQuad(white, 214, 200, 668, 240, 0.04, 14);
-    std::string surfaceKey = std::string("padsurface|") + (rear ? "rear" : "front");
+    std::string surfaceKey = std::string("padsurface|") + (rear ? "rear|" : "front|") + languageCode(language());
     auto &caption = rowCache[surfaceKey];
     if (caption.key.empty()) {
       beginLayer(caption, surfaceKey, 640, 18);
-      label(0, 0, rear ? "The back of the console, left and right as you hold it" : "The screen", 12, faint);
+      label(0, 0, tr(rear ? "The back of the console, left and right as you hold it" : "The screen"), 12, faint);
       endLayer();
     }
     place(caption.image, 228, 204);
     if (u.controlsCount() == 1) {
       int m = rear ? u.controls.rear : u.controls.front;
-      std::string text = m == 2 ? (rear ? "Trackpad: hold L and slide to move the pointer." : "Mouse pointer: touches move and click the pointer.")
-                                : "Off. Choose a mode with Left and Right to map zones.";
+      std::string text = tr(m == 2 ? (rear ? "Trackpad: hold L and slide to move the pointer." : "Mouse pointer: touches move and click the pointer.")
+                                   : "Off. Choose a mode with Left and Right to map zones.");
       auto &l = rowCache["padoff|" + text];
       if (l.key.empty()) {
         beginLayer(l, "padoff|" + text, 616, 24);
@@ -683,10 +711,7 @@ void View::buildSheet(const UI &u) {
         solidQuad(ruby, x, py, w, h, 0.9, 10);
       else
         solidQuad(white, x, py, w, h, 0.1, 10);
-      std::string name = u.controlLabel(r);
-      name = name.substr(name.find(' ') + 1);
-      if (!name.empty())
-        name[0] = char(std::toupper(static_cast<unsigned char>(name[0])));
+      std::string name = u.zoneName(r);
       std::string zkey = "zone|" + name + "|" + u.controlValue(r) + "|" + std::to_string(w) + "x" + std::to_string(h);
       auto &zone = rowCache[zkey];
       if (zone.key.empty()) {
@@ -761,21 +786,21 @@ void View::buildSheet(const UI &u) {
     std::string pressed;
     for (int i = 0; i < 12; ++i)
       if (held(i))
-        pressed += std::string(controlSources[i]) + "  \xe2\x86\x92  " + controlName(u.controls.buttons[i]) + "\n";
+        pressed += buttonText(i) + "  \xe2\x86\x92  " + controlText(u.controls.buttons[i]) + "\n";
     std::string actions;
     for (auto &a : controlActions)
       if (a.code && u.controlsResult.actions[a.code])
-        actions += std::string(a.name) + "  ";
+        actions += std::string(tr(a.name)) + "  ";
     for (auto &k : controlPicks)
       if (controlIsKey(k.value) && u.controlsResult.keys[k.value - controlKeyBase])
-        actions += std::string("Key ") + k.name + "  ";
-    std::string key = "vita|" + pressed + "|" + actions + "|" + std::to_string(u.controls.enabled);
+        actions += trf("Key {}", {k.name}) + "  ";
+    std::string key = "vita|" + pressed + "|" + actions + "|" + std::to_string(u.controls.enabled) + "|" + languageCode(language());
     if (beginLayer(bodyLayer, key, 220, 270)) {
-      label(0, 0, "Back touch pad", 13, faint);
-      label(0, 140, "Held", 13, faint);
+      label(0, 0, tr("Back touch pad"), 13, faint);
+      label(0, 140, tr("Held"), 13, faint);
       int ly = 160;
       if (pressed.empty())
-        label(0, ly, "Press any button", 15, muted);
+        label(0, ly, tr("Press any button"), 15, muted);
       for (size_t at = 0, next; at < pressed.size() && ly < 230; at = next + 1, ly += 20) {
         next = pressed.find('\n', at);
         label(0, ly, pressed.substr(at, next - at), 14, white, 255, false, -1, 210);
@@ -783,17 +808,17 @@ void View::buildSheet(const UI &u) {
       endLayer();
     }
     place(bodyLayer.image, px, py - 20);
-    std::string screenKey = "vitascreen|" + std::to_string(smp.front.empty());
+    std::string screenKey = "vitascreen|" + std::to_string(smp.front.empty()) + "|" + languageCode(language());
     auto &screenText = rowCache[screenKey];
     if (screenText.key.empty()) {
       beginLayer(screenText, screenKey, int(sw), 20);
       if (smp.front.empty())
-        label(int(sw) / 2, 0, "Touch the screen", 14, faint, 255, false, 0);
+        label(int(sw) / 2, 0, tr("Touch the screen"), 14, faint, 255, false, 0);
       endLayer();
     }
     place(screenText.image, sx, sy + sh / 2 - 10);
-    notes = {actions.empty() ? (u.controls.enabled ? "Nothing this game's profile does is held." : "Custom controls are off: this shows the raw buttons.")
-                             : "In game this does: " + actions};
+    notes = {actions.empty() ? tr(u.controls.enabled ? "Nothing this game's profile does is held." : "Custom controls are off: this shows the raw buttons.")
+                             : trf("In game this does: {}", {actions})};
     y = by + bh + 14;
   }
 
@@ -846,8 +871,8 @@ void View::buildSheet(const UI &u) {
   if (!u.launchingName.empty()) {
     solidQuad({0, 0, 0}, 0, 0, width, height, 0.85);
     if (beginLayer(messageLayer, "launch|" + u.launchingName + "|" + u.preparationLabel, width, 90)) {
-      label(480, 0, "Starting " + u.launchingName, 28, white, 255, true, 0, 900);
-      label(480, 44, u.preparationLabel.empty() ? "Loading" : u.preparationLabel, 16, muted, 255, false, 0, 900);
+      label(480, 0, trf("Starting {}", {u.launchingName}), 28, white, 255, true, 0, 900);
+      label(480, 44, u.preparationLabel.empty() ? tr("Loading") : u.preparationLabel, 16, muted, 255, false, 0, 900);
       endLayer();
     }
     place(messageLayer.image, 0, 232);
