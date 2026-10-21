@@ -571,7 +571,7 @@ void View::buildSheet(const UI &u) {
         }
       } else if (r.kind == Row::Info) {
         label(right, (box - 20) / 2, r.value, 16, white, 255, false, 1, sheetW - 200);
-        right = 180;
+        right = std::max(180, right - std::min(sheetW - 200, measure(r.value, 16)) - 20);
       }
       label(textX, labelY, r.label, labelSize, labelColor, 255, r.kind == Row::Primary, -1, std::max(60, right - textX - 8));
       if (!r.detail.empty())
@@ -824,22 +824,38 @@ void View::buildSheet(const UI &u) {
 
   // Notes under everything else, wrapped to the column.
   if (!notes.empty()) {
-    std::string key;
+    // The room left under the rows; long notes (or a long language) get a
+    // smaller size before they would cover a row.
+    int room = hintsY - 6 - (y + 2);
+    std::string key = std::to_string(room) + "\n";
     for (auto &n : notes)
       key += n + "\n";
     if (notesLayer.key != key) {
-      std::vector<std::string> lines;
-      for (auto &n : notes) {
-        auto wrapped = wrap(n, 15, sheetW);
-        lines.insert(lines.end(), wrapped.begin(), wrapped.end());
-        lines.push_back("");
+      int size = 15, lineH = 21, gap = 8;
+      std::vector<std::vector<std::string>> paragraphs;
+      auto layout = [&] {
+        paragraphs.clear();
+        int h = -gap;
+        for (auto &n : notes) {
+          paragraphs.push_back(wrap(n, size, sheetW));
+          h += int(paragraphs.back().size()) * lineH + gap;
+        }
+        return std::max(1, h);
+      };
+      int h = layout();
+      if (h > room) {
+        size = 13, lineH = 17, gap = 6;
+        h = layout();
       }
-      if (!lines.empty())
-        lines.pop_back();
-      int h = std::max(1, int(lines.size()) * 21);
       beginLayer(notesLayer, key, sheetW, h);
-      for (size_t i = 0; i < lines.size(); ++i)
-        label(0, int(i) * 21, lines[i], 15, muted);
+      int ly = 0;
+      for (auto &p : paragraphs) {
+        for (auto &line : p) {
+          label(0, ly, line, size, muted);
+          ly += lineH;
+        }
+        ly += gap;
+      }
       endLayer();
     }
     // Notes never run into the hint bar: they move up if they must.
