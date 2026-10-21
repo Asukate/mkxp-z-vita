@@ -118,6 +118,16 @@ static inline const char *glGetStringInt(GLenum name) {
 static void printGLInfo() {
     const std::string renderer(glGetStringInt(GL_RENDERER));
     const std::string version(glGetStringInt(GL_VERSION));
+#ifdef __vita__
+    /* No ANGLE on the Vita. Building the two std::regex objects below and
+     * five flushed log lines took 0.2 s of every game start. */
+    Debug() << "OpenGL:" << glGetStringInt(GL_VENDOR) << "|" << renderer << "|" << version
+            << "| GLSL" << glGetStringInt(GL_SHADING_LANGUAGE_VERSION);
+    vitaDiagLog("GL", "backend=OpenGL vendor=%s renderer=%s version=%s glsl=%s",
+                glGetStringInt(GL_VENDOR), renderer.c_str(), version.c_str(),
+                glGetStringInt(GL_SHADING_LANGUAGE_VERSION));
+    return;
+#endif
     std::regex rgx("ANGLE \\((.+), ANGLE Metal Renderer: (.+), Version (.+)\\)");
         
     std::smatch matches;

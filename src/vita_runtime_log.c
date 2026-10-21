@@ -14,8 +14,13 @@ void vitaRuntimeLogInit(void)
         sceIoRemove("ux0:/data/hardrpg/runtime.log.prev");
         sceIoRename(logPath, "ux0:/data/hardrpg/runtime.log.prev");
     }
-    setvbuf(stdout, NULL, _IONBF, 0);
-    setvbuf(stderr, NULL, _IONBF, 0);
+    /* Line-buffered: every write below opens, appends to and closes the
+     * log on the card, and an unbuffered stream issued several per line
+     * (std::cerr << text << std::endl is two). A line is still written
+     * as soon as it ends. */
+    static char outBuffer[1024], errBuffer[1024];
+    setvbuf(stdout, outBuffer, _IOLBF, sizeof(outBuffer));
+    setvbuf(stderr, errBuffer, _IOLBF, sizeof(errBuffer));
 }
 
 extern _ssize_t __real__write_r(struct _reent *, int, const void *, size_t);
