@@ -68,6 +68,10 @@ public:
 	void openRead(OpenHandler &handler,
 	              const char *filename);
 
+	/* Lists a directory ahead of its first openRead (any thread). */
+	void warmListing(const char *dir);
+	void forgetListings();
+
 	/* Circumvents extension supplementing */
 	void openReadRaw(SDL_RWops &ops,
 	                 const char *filename,

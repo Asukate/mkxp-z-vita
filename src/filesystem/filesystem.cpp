@@ -80,7 +80,10 @@ int truncate(const char *path, off_t length) { (void)path; (void)length; errno =
 #include <physfs.h>
 
 #include <algorithm>
+#include <memory>
+#include <mutex>
 #include <stack>
+#include <unordered_map>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -482,7 +485,36 @@ struct FileSystemPrivate {
   /* This is for compatibility with games that take Windows'
    * case insensitivity for granted */
   bool havePathCache;
+
+  /* Without the full path cache, each directory is listed the first time a
+   * file in it is opened and the listing is kept: listing a directory on the
+   * Vita's card costs tens of milliseconds, and openRead needs the listing
+   * to find a file's extension and case. A file missing from a kept
+   * listing, or one that no longer opens, makes openRead list again, so
+   * files a game writes or deletes while running are still found. */
+  typedef std::shared_ptr<const std::vector<std::string>> Listing;
+  std::mutex listingLock;
+  std::unordered_map<std::string, Listing> listings;
 };
+
+static PHYSFS_EnumerateCallbackResult collectNameCB(void *d, const char *, const char *filename) {
+  static_cast<std::vector<std::string> *>(d)->push_back(filename);
+  return PHYSFS_ENUM_OK;
+}
+
+static FileSystemPrivate::Listing directoryListing(FileSystemPrivate &p, const std::string &dir, bool fresh) {
+  if (!fresh) {
+    std::lock_guard<std::mutex> hold(p.listingLock);
+    auto found = p.listings.find(dir);
+    if (found != p.listings.end())
+      return found->second;
+  }
+  auto names = std::make_shared<std::vector<std::string>>();
+  PHYSFS_enumerate(dir.c_str(), collectNameCB, names.get());
+  std::lock_guard<std::mutex> hold(p.listingLock);
+  p.listings[dir] = names;
+  return names;
+}
 
 static void throwPhysfsError(const char *desc) {
   PHYSFS_ErrorCode ec = PHYSFS_getLastErrorCode();
@@ -548,6 +580,7 @@ void FileSystem::addPath(const char *path, const char *mountpoint, bool reload, 
                         archiveRoot, path, PHYSFS_getErrorByCode(err));
     }
     
+    forgetListings();
     if (reload) reloadPathCache();
 }
 
@@ -558,7 +591,18 @@ void FileSystem::removePath(const char *path, bool reload) {
         throw Exception(Exception::PHYSFSError, "Failed to unmount %s (%s)", path, PHYSFS_getErrorByCode(err));
     }
     
+    forgetListings();
     if (reload) reloadPathCache();
+}
+
+void FileSystem::forgetListings() {
+    std::lock_guard<std::mutex> hold(p->listingLock);
+    p->listings.clear();
+}
+
+void FileSystem::warmListing(const char *dir) {
+    if (!p->havePathCache && PHYSFS_isDirectory(dir))
+        directoryListing(*p, dir, false);
 }
 
 struct CacheEnumData {
@@ -873,7 +917,19 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
     for (size_t i = 0; i < fileList.size(); ++i)
       openReadEnumCB(&data, dir, fileList[i].c_str());
   } else {
-    PHYSFS_enumerate(dir, openReadEnumCB, &data);
+    auto listing = directoryListing(*p, dir, false);
+    for (size_t i = 0; i < listing->size() && !data.stopSearching; ++i)
+      openReadEnumCB(&data, dir, (*listing)[i].c_str());
+    /* Not found, or a listed file failed to open: the directory changed
+     * since it was listed. List it again and look once more. */
+    if (data.matchCount == 0 || data.physfsError) {
+      data.matchCount = 0;
+      data.stopSearching = false;
+      data.physfsError = 0;
+      listing = directoryListing(*p, dir, true);
+      for (size_t i = 0; i < listing->size() && !data.stopSearching; ++i)
+        openReadEnumCB(&data, dir, (*listing)[i].c_str());
+    }
   }
 
   if (data.physfsError)
