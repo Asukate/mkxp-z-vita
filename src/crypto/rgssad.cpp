@@ -26,6 +26,12 @@
 #include <string.h>
 
 #include <string>
+#include <vector>
+#ifdef __vita__
+#include <stdio.h>
+#include <sys/stat.h>
+#include <zlib.h>
+#endif
 
 /* Equivalent Linear Congruential Generator (LCG) constants for iteration 2^n
  * all the way up to 2^32/4 (the largest dword offset possible in
@@ -359,6 +365,63 @@ static const PHYSFS_Io RGSS_IoTemplate =
     RGSS_ioDestroy
 };
 
+/* Reads the entry table while an archive is opened. On the Vita every
+ * read of the archive is a system call to the memory card; RGSS1/2 entry
+ * headers are three small reads apiece (a thousand-file archive took 0.6 s
+ * to open). This reader fetches one block per refill and serves the header
+ * reads and seeks from it. */
+struct ScanReader
+{
+	PHYSFS_Io *io;
+	const uint32_t refill;
+	PHYSFS_uint64 bufStart = 0, pos = 0;
+	uint32_t bufLen = 0;
+	char buf[16 * 1024];
+
+	ScanReader(PHYSFS_Io *io, uint32_t refill)
+	    : io(io), refill(refill < sizeof(buf) ? refill : sizeof(buf)), pos(io->tell(io)) {}
+
+	bool read(void *dest, uint32_t len)
+	{
+		char *out = static_cast<char *>(dest);
+		while (len > 0)
+		{
+			if (pos < bufStart || pos >= bufStart + bufLen)
+			{
+				if (!io->seek(io, pos))
+					return false;
+				PHYSFS_sint64 got = io->read(io, buf, refill);
+				if (got <= 0)
+					return false;
+				bufStart = pos;
+				bufLen = static_cast<uint32_t>(got);
+			}
+			uint32_t offset = static_cast<uint32_t>(pos - bufStart);
+			uint32_t chunk = bufLen - offset < len ? bufLen - offset : len;
+			memcpy(out, buf + offset, chunk);
+			out += chunk;
+			pos += chunk;
+			len -= chunk;
+		}
+		return true;
+	}
+
+	bool readUint32(uint32_t &result)
+	{
+		char buff[4];
+		if (!read(buff, 4))
+			return false;
+		result = ((buff[0] << 0x00) & 0x000000FF) |
+		         ((buff[1] << 0x08) & 0x0000FF00) |
+		         ((buff[2] << 0x10) & 0x00FF0000) |
+		         ((buff[3] << 0x18) & 0xFF000000) ;
+		return true;
+	}
+
+	PHYSFS_uint64 tell() const { return pos; }
+	void seek(PHYSFS_uint64 offset) { pos = offset; }
+};
+
 static void
 processDirectories(RGSS_archiveData *data, BoostSet<std::string> &topLevel,
                    char *nameBuf, uint32_t nameLen)
@@ -412,8 +475,165 @@ verifyHeader(PHYSFS_Io *io, char version)
 	return true;
 }
 
+#ifdef __vita__
+/* RGSS1/2 archives have no index: opening one reads a header in front of
+ * every file, one card seek each (0.6 s for Ao Oni's thousand files). The
+ * entry table is kept in ux0:/data/hardrpg/cache/rgssad-v1/ and used again
+ * while the archive keeps its path, size and modification time, its first
+ * header still decrypts to the first cached name and its last entry ends at
+ * the end of the file. Anything else scans the archive as before. */
+struct RGSS1_IndexEntry
+{
+	std::string name;
+	RGSS_entryData data;
+};
+
+static const char RGSS1_INDEX_MAGIC[8] = {'H','R','G','S','I','D','X','1'};
+
+static std::string rgss1IndexPath(const char *archive)
+{
+	char name[96];
+	snprintf(name, sizeof(name), "ux0:/data/hardrpg/cache/rgssad-v1/%08lx.idx",
+	         (unsigned long)crc32(0, (const Bytef *)archive, strlen(archive)));
+	return name;
+}
+
+static bool rgss1IndexIdentity(const char *archive, std::string &identity)
+{
+	struct stat info;
+	if (!archive || stat(archive, &info) != 0 || !S_ISREG(info.st_mode))
+		return false;
+	char numbers[64];
+	snprintf(numbers, sizeof(numbers), "%lld:%lld:", (long long)info.st_size, (long long)info.st_mtime);
+	identity = std::string(numbers) + archive;
+	return true;
+}
+
+static bool rgss1LoadIndex(PHYSFS_Io *io, const char *archive, std::vector<RGSS1_IndexEntry> &entries)
+{
+	std::string identity;
+	if (!rgss1IndexIdentity(archive, identity))
+		return false;
+	FILE *f = fopen(rgss1IndexPath(archive).c_str(), "rb");
+	if (!f)
+		return false;
+	std::vector<char> bytes;
+	fseek(f, 0, SEEK_END);
+	long size = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	if (size > 16 && size < 64 * 1024 * 1024)
+	{
+		bytes.resize(size);
+		if (fread(bytes.data(), 1, size, f) != (size_t)size)
+			bytes.clear();
+	}
+	fclose(f);
+	if (bytes.size() < 16 || memcmp(bytes.data(), RGSS1_INDEX_MAGIC, 8))
+		return false;
+	uint32_t stored;
+	memcpy(&stored, bytes.data() + bytes.size() - 4, 4);
+	if (stored != crc32(0, (const Bytef *)bytes.data(), bytes.size() - 4))
+		return false;
+
+	size_t at = 8, end = bytes.size() - 4;
+	auto take = [&](void *dest, size_t n) {
+		if (end - at < n)
+			return false;
+		memcpy(dest, bytes.data() + at, n);
+		at += n;
+		return true;
+	};
+	uint32_t length, count;
+	if (!take(&length, 4) || end - at < length || std::string(bytes.data() + at, length) != identity)
+		return false;
+	at += length;
+	if (!take(&count, 4))
+		return false;
+	entries.clear();
+	for (uint32_t i = 0; i < count; ++i)
+	{
+		RGSS1_IndexEntry e;
+		if (!take(&length, 4) || length >= 512 || end - at < length)
+			return false;
+		e.name.assign(bytes.data() + at, length);
+		at += length;
+		if (!take(&e.data.offset, 8) || !take(&e.data.size, 8) || !take(&e.data.startMagic, 4))
+			return false;
+		entries.push_back(e);
+	}
+	if (at != end || entries.empty())
+		return false;
+
+	/* The archive must still end with the last entry and start with the
+	 * first: its header decrypts to the cached name. */
+	const RGSS_entryData &last = entries.back().data;
+	if ((PHYSFS_sint64)(last.offset + last.size) != io->length(io))
+		return false;
+	const std::string &first = entries.front().name;
+	char header[4 + 511 + 4];
+	const uint32_t headerSize = 4 + first.size() + 4;
+	if (!io->seek(io, 8) || io->read(io, header, headerSize) != headerSize)
+		return false;
+	uint32_t magic = RGSS_MAGIC, nameLen;
+	memcpy(&nameLen, header, 4);
+	if ((nameLen ^ advanceMagic(magic)) != first.size())
+		return false;
+	for (uint32_t i = 0; i < first.size(); ++i)
+	{
+		char c = header[4 + i] ^ (advanceMagic(magic) & 0xFF);
+		if ((c == '\\' ? '/' : c) != first[i])
+			return false;
+	}
+	return entries.front().data.offset == 8 + (PHYSFS_sint64)headerSize;
+}
+
+static void rgss1SaveIndex(const char *archive, const std::vector<RGSS1_IndexEntry> &entries)
+{
+	std::string identity;
+	if (entries.empty() || !rgss1IndexIdentity(archive, identity))
+		return;
+	std::vector<char> bytes(RGSS1_INDEX_MAGIC, RGSS1_INDEX_MAGIC + 8);
+	auto put = [&](const void *src, size_t n) {
+		bytes.insert(bytes.end(), (const char *)src, (const char *)src + n);
+	};
+	uint32_t length = identity.size(), count = entries.size();
+	put(&length, 4);
+	put(identity.data(), length);
+	put(&count, 4);
+	for (const RGSS1_IndexEntry &e : entries)
+	{
+		length = e.name.size();
+		put(&length, 4);
+		put(e.name.data(), length);
+		put(&e.data.offset, 8);
+		put(&e.data.size, 8);
+		put(&e.data.startMagic, 4);
+	}
+	uint32_t check = crc32(0, (const Bytef *)bytes.data(), bytes.size());
+	put(&check, 4);
+
+	mkdir("ux0:/data", 0777);
+	mkdir("ux0:/data/hardrpg", 0777);
+	mkdir("ux0:/data/hardrpg/cache", 0777);
+	mkdir("ux0:/data/hardrpg/cache/rgssad-v1", 0777);
+	const std::string path = rgss1IndexPath(archive), temp = path + ".tmp";
+	FILE *f = fopen(temp.c_str(), "wb");
+	if (!f)
+		return;
+	bool ok = fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+	ok = fclose(f) == 0 && ok;
+	if (ok)
+	{
+		remove(path.c_str());
+		ok = rename(temp.c_str(), path.c_str()) == 0;
+	}
+	if (!ok)
+		remove(temp.c_str());
+}
+#endif
+
 static void*
-RGSS_openArchive(PHYSFS_Io *io, const char *, int forWrite, int *claimed)
+RGSS_openArchive(PHYSFS_Io *io, const char *archiveName, int forWrite, int *claimed)
 {
 	if (forWrite)
 		return NULL;
@@ -432,19 +652,43 @@ RGSS_openArchive(PHYSFS_Io *io, const char *, int forWrite, int *claimed)
 	/* Top level entry list */
 	BoostSet<std::string> &topLevel = data->dirHash[""];
 
+#ifdef __vita__
+	std::vector<RGSS1_IndexEntry> cached;
+	if (rgss1LoadIndex(io, archiveName, cached))
+	{
+		static char nameBuf[512];
+		for (const RGSS1_IndexEntry &e : cached)
+		{
+			memcpy(nameBuf, e.name.c_str(), e.name.size() + 1);
+			data->entryHash.insert(nameBuf, e.data);
+			processDirectories(data, topLevel, nameBuf, e.name.size());
+		}
+		return data;
+	}
+	/* A rejected table may have read the first header: scan from the start. */
+	if (!io->seek(io, 8))
+	{
+		delete data;
+		return NULL;
+	}
+	std::vector<RGSS1_IndexEntry> scanned;
+#endif
+	/* An entry header is at most 4 + 511 + 4 bytes; small files share it. */
+	ScanReader scan(io, 1024);
+
 	while (true)
 	{
 		/* Read filename length,
          * if nothing was read, no files remain */
 		uint32_t nameLen;
 
-		if (!readUint32(io, nameLen))
+		if (!scan.readUint32(nameLen))
 			break;
 
 		nameLen ^= advanceMagic(magic);
 
 		static char nameBuf[512];
-		if (nameLen >= sizeof(nameBuf) || !IO_READ(io, nameBuf, nameLen))
+		if (nameLen >= sizeof(nameBuf) || !scan.read(nameBuf, nameLen))
 		{
 			delete data;
 			return NULL;
@@ -459,19 +703,29 @@ RGSS_openArchive(PHYSFS_Io *io, const char *, int forWrite, int *claimed)
 		nameBuf[nameLen] = '\0';
 
 		uint32_t entrySize;
-		readUint32(io, entrySize);
+		if (!scan.readUint32(entrySize))
+			break;
 		entrySize ^= advanceMagic(magic);
 
 		RGSS_entryData entry;
-		entry.offset = io->tell(io);
+		entry.offset = scan.tell();
 		entry.size = entrySize;
 		entry.startMagic = magic;
 
 		data->entryHash.insert(nameBuf, entry);
+#ifdef __vita__
+		scanned.push_back({nameBuf, entry});
+#endif
 		processDirectories(data, topLevel, nameBuf, nameLen);
 
-		io->seek(io, entry.offset + entry.size);
+		scan.seek(entry.offset + entry.size);
 	}
+#ifdef __vita__
+	/* Only a table that reaches the end of the file is complete. */
+	if (!scanned.empty() &&
+	    (PHYSFS_sint64)(scanned.back().data.offset + scanned.back().data.size) == io->length(io))
+		rgss1SaveIndex(archiveName, scanned);
+#endif
 
 	return data;
 }
@@ -640,9 +894,9 @@ const PHYSFS_Archiver RGSS2_Archiver =
 };
 
 static bool
-readUint32AndXor(PHYSFS_Io *io, uint32_t &result, uint32_t key)
+readUint32AndXor(ScanReader &io, uint32_t &result, uint32_t key)
 {
-	if (!readUint32(io, result))
+	if (!io.readUint32(result))
 		return false;
 
 	result ^= key;
@@ -674,30 +928,32 @@ RGSS3_openArchive(PHYSFS_Io *io, const char *, int forWrite, int *claimed)
 
 	/* Top level entry list */
 	BoostSet<std::string> &topLevel = data->dirHash[""];
+	/* The entry table is one contiguous block at the start. */
+	ScanReader scan(io, 16 * 1024);
 
 	while (true)
 	{
 		uint32_t offset, size, magic, nameLen;
 
-		if (!readUint32AndXor(io, offset, baseMagic))
+		if (!readUint32AndXor(scan, offset, baseMagic))
 			goto error;
 
 		/* Zero offset means entry list has ended */
 		if (offset == 0)
 			break;
 
-		if (!readUint32AndXor(io, size, baseMagic))
+		if (!readUint32AndXor(scan, size, baseMagic))
 			goto error;
 
-		if (!readUint32AndXor(io, magic, baseMagic))
+		if (!readUint32AndXor(scan, magic, baseMagic))
 			goto error;
 
-		if (!readUint32AndXor(io, nameLen, baseMagic))
+		if (!readUint32AndXor(scan, nameLen, baseMagic))
 			goto error;
 
 		char nameBuf[512];
 
-		if (!IO_READ(io, nameBuf, nameLen))
+		if (nameLen >= sizeof(nameBuf) || !scan.read(nameBuf, nameLen))
 			goto error;
 
 		for (uint32_t i = 0; i < nameLen; ++i)
