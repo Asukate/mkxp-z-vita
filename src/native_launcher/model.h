@@ -81,7 +81,8 @@ struct Mount {
 };
 class Model {
 public:
-  explicit Model(Paths paths = {});
+  // scan = false leaves the game list empty until refresh().
+  explicit Model(Paths paths = {}, bool scan = true);
   Paths paths;
   std::vector<Node> stack;
   std::vector<Entry> list;

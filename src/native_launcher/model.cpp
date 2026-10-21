@@ -833,11 +833,12 @@ bool configurableGame(const Entry &entry, Entry &result) {
   }
   return false;
 }
-Model::Model(Paths p) : paths(std::move(p)) {
+Model::Model(Paths p, bool scan) : paths(std::move(p)) {
   paths.setup();
   zipScanFile = paths.at("zip-scan-cache.txt");
   stack.push_back({"", "", paths.at("games"), false});
-  refresh();
+  if (scan)
+    refresh();
 }
 void Model::refresh() {
   zipGames.clear();

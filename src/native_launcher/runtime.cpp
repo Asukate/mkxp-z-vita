@@ -647,26 +647,82 @@ int runNativeLauncher(bool returning) {
         sceKernelDeleteThread(thread);
     }
 #endif
-    UI ui;
-    try {
-      ui.model.settleActivity(returning);
-      ui.loadHome();
-    } catch (const std::exception &e) {
-      ui.message = e.what();
-    }
 #ifdef __vita__
-    vitaStartupTimerMark("launcher_library_ready");
+    // A cold start reads the library (about 0.75 s with twenty games) on a
+    // worker thread while the screen starts and the splash is up. Until
+    // loadHome() joins it, this thread touches no library state.
+    UI ui({}, returning);
+    struct LibraryScan {
+      UI *ui;
+      std::string error;
+      void work() {
+        try {
+          ui->scanLibrary();
+        } catch (const std::exception &e) {
+          error = e.what();
+        }
+      }
+      static int run(SceSize, void *argument) {
+        (*static_cast<LibraryScan **>(argument))->work();
+        return sceKernelExitThread(0);
+      }
+    } scan{&ui, {}};
+    SceUID scanThread = -1;
+    if (!returning) {
+      LibraryScan *argument = &scan;
+      scanThread = sceKernelCreateThread("hardrpg_library_scan", LibraryScan::run, 0x10000100,
+                                         256 * 1024, 0, 0, nullptr);
+      if (scanThread >= 0 && sceKernelStartThread(scanThread, sizeof argument, &argument) < 0) {
+        sceKernelDeleteThread(scanThread);
+        scanThread = -1;
+      }
+      if (scanThread < 0)
+        scan.work();
+    }
+#else
+    UI ui;
 #endif
     UpdateCheck update;
-    if(!returning && ui.automaticUpdates)update.start();
+    // The library is read while the splash is up (a cold start) instead of
+    // before the screen shows anything; the splash lasts only that long.
+    // Returning from a game has no splash.
+    bool homeLoaded = false;
+    const bool startRelease = !returning;
+    auto loadHome = [&] {
 #ifdef __vita__
-    ui.model.backendAvailable = [](const Engine &engine) {
-      FILE *f = std::fopen(engine.executable, "rb");
-      if (!f)
-        return false;
-      std::fclose(f);
-      return true;
+      if (scanThread >= 0) {
+        sceKernelWaitThreadEnd(scanThread, nullptr, nullptr);
+        sceKernelDeleteThread(scanThread);
+        scanThread = -1;
+      }
+      if (!scan.error.empty())
+        ui.message = scan.error;
+#endif
+      try {
+        ui.model.settleActivity(returning);
+        ui.loadHome();
+      } catch (const std::exception &e) {
+        ui.message = e.what();
+      }
+#ifdef __vita__
+      vitaStartupTimerMark("launcher_library_ready");
+#endif
+      if (startRelease && ui.automaticUpdates)
+        update.start();
+#ifdef __vita__
+      ui.model.backendAvailable = [](const Engine &engine) {
+        FILE *f = std::fopen(engine.executable, "rb");
+        if (!f)
+          return false;
+        std::fclose(f);
+        return true;
+      };
+#endif
+      homeLoaded = true;
     };
+    if (returning)
+      loadHome();
+#ifdef __vita__
     sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT,
                              SCE_TOUCH_SAMPLING_STATE_START);
 #endif
@@ -733,18 +789,29 @@ int runNativeLauncher(bool returning) {
         };
         if (!returning) {
           try {
+            // The splash stays up while the library is read and the home
+            // screen's first pictures are decoded, and no longer: the list
+            // then appears complete. Pictures still loading after 1.5 s
+            // appear as they finish. Nothing is presented meanwhile, so the
+            // splash stays on screen.
             view.splash("app0:/stub/Graphics/Pictures/hardrpg-splash.png");
             presenter.show(view, true);
             auto start = SDL_GetTicks();
-            while (SDL_GetTicks() - start < 1000 && !quit) {
+            if (!homeLoaded)
+              loadHome();
+            for (;;) {
+              view.draw(ui);
+              if (!view.pendingLoads || quit || SDL_GetTicks() - start > 1500)
+                break;
               input.poll(quit);
-              presenter.show(view, false);
-              SDL_Delay(16);
+              SDL_Delay(8);
             }
           } catch (const std::exception &e) {
             ui.message = e.what();
           }
         }
+        if (!homeLoaded)
+          loadHome();
         returning = true;
         view.draw(ui);
         present(true);

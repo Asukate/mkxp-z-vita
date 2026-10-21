@@ -71,7 +71,10 @@ struct Home {
 struct RtpCheck;
 class UI {
 public:
-  explicit UI(Paths paths = {});
+  // scan = false defers reading the library to scanLibrary(), which the
+  // launcher runs on a worker thread while the screen starts up.
+  explicit UI(Paths paths = {}, bool scan = true);
+  void scanLibrary();
   Model model;
   // Home screen state (see home.cpp).
   Home home;

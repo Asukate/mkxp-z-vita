@@ -29,13 +29,22 @@ void move(int &selection, int &first, int count, int rows, int step) {
 const char *const displayKeys[] = {"fixedAspectRatio", "integerScalingActive",
                                    "smoothScaling"};
 } // namespace
-UI::UI(Paths paths)
-    : model(std::move(paths)),
+UI::UI(Paths paths, bool scan)
+    : model(std::move(paths), scan),
       displayValues(std::initializer_list<Json::pair_type>{}),
       rtpChoices(std::initializer_list<Json::pair_type>{}) {
   try {auto text=readFile(model.paths.at("update-settings.json"),4096);
     if(!text.empty())automaticUpdates=json5pp::parse(text).as_object().at("automatic").as_boolean();
   }catch(...) {}
+  if (scan) {
+    errorReport = model.takeError();
+    if (errorReport.empty())
+      model.takeError(true);
+    loadHome();
+  }
+}
+void UI::scanLibrary() {
+  model.refresh();
   errorReport = model.takeError();
   if (errorReport.empty())
     model.takeError(true);
