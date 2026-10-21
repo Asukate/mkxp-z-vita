@@ -2,6 +2,7 @@
 #include "art_fetch.h"
 #include "i18n.h"
 #include "model.h"
+#include "sounds.h"
 #include "update_check.h"
 #include <map>
 #include <memory>
@@ -39,7 +40,8 @@ enum class Page {
   Audio,
   GameInfo,
   Remove,
-  Keys // artwork source keys
+  Keys, // artwork source keys
+  Sound
 };
 enum class BrowseMode { Games, Rtp, Folder };
 // The home screen: a centred cover carousel over the library, with an
@@ -141,7 +143,18 @@ public:
   // artwork blur, the language and whether the welcome guide was seen.
   bool blurAdult = true;
   bool welcomeSeen = false;
+  // Sound: interface sounds and each game's title music while it is
+  // highlighted, with their levels (0-100).
+  bool menuSounds = true, themeMusic = true;
+  int effectsVolume = 70, musicVolume = 80;
   void savePreferences();
+  // Plays interface sounds; the front end sets it. Unset plays nothing.
+  std::function<void(Sound)> sound;
+  void emit(Sound) const;
+  // The folder of the game whose title music should play now, or "".
+  std::string themeFolder() const;
+  // Nesting of input handlers, so one input makes one sound.
+  int feedbackDepth = 0;
   void changeLanguage(int step);
   void selectLanguage(int lang);
   // The welcome guide (see Welcome).
@@ -298,7 +311,10 @@ public:
   // Touch on the sheets (every screen but home).
   void sheetTouch(int x, int y);
   // Rows on the settings page; the last is Exit.
-  int settingsRows() const { return 10; }
+  int settingsRows() const { return 11; }
+  // Rows on the Sound page.
+  static constexpr int soundRows = 4;
+  void changeSound(int step, bool reset = false);
   // The game info page (Page::Keys): the adult artwork blur, then the source
   // keys, typed on the Vita keyboard.
   static constexpr int keyCount = 4;

@@ -132,6 +132,16 @@ void UI::loadHome() {
         welcomeSeen = o.at("welcomeSeen").as_boolean();
       if (o.count("homeGrid") && o.at("homeGrid").is_boolean())
         home.grid = o.at("homeGrid").as_boolean();
+      if (o.count("menuSounds") && o.at("menuSounds").is_boolean())
+        menuSounds = o.at("menuSounds").as_boolean();
+      if (o.count("themeMusic") && o.at("themeMusic").is_boolean())
+        themeMusic = o.at("themeMusic").as_boolean();
+      auto level = [&](const char *name, int &v) {
+        if (o.count(name) && o.at(name).is_integer())
+          v = std::max(10, std::min(100, int(o.at(name).as_integer())));
+      };
+      level("menuSoundVolume", effectsVolume);
+      level("musicVolume", musicVolume);
     }
   } catch (...) {
     // A damaged file only loses the preferences.
@@ -147,6 +157,10 @@ void UI::savePreferences() {
   o["language"] = std::string(languageCode(language()));
   o["welcomeSeen"] = welcomeSeen;
   o["homeGrid"] = home.grid;
+  o["menuSounds"] = menuSounds;
+  o["menuSoundVolume"] = Json::integer_type(effectsVolume);
+  o["themeMusic"] = themeMusic;
+  o["musicVolume"] = Json::integer_type(musicVolume);
   try {
     atomicWrite(model.paths.at("launcher-preferences.json"), prefs.stringify());
   } catch (const std::exception &e) {
@@ -670,6 +684,9 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
       p = count + (p - count) * 0.35;
     double v = -double(x - home.lastX) / cardGap / dt;
     home.velocity = home.velocity * 0.4 + v * 0.6;
+    // A tick each time a card passes the middle.
+    if (std::lround(p) != std::lround(home.position) && p >= -0.5 && p <= count + 0.5)
+      emit(Sound::Move);
     home.position = p;
     home.lastX = x;
     home.lastMove = ms;
@@ -680,13 +697,17 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
   if (home.dragging) {
     home.dragging = false;
     if (!home.grid) {
+      int before = home.target;
       home.target = int(std::lround(home.position + home.velocity * 0.18));
       clampTarget(home, count);
+      if (home.target != int(std::lround(home.position)) && home.target != before)
+        emit(Sound::Move);
       home.details = home.details && home.target < count;
     }
     return true;
   }
-  homeTap(home.pressX, home.pressY);
+  // A tap: through touch(), so it sounds like the button it stands for.
+  touch(home.pressX, home.pressY);
   return true;
 }
 

@@ -7,5 +7,6 @@ mkdir -p "$(dirname "$OUT")"
     "$ROOT/src/native_launcher/model.cpp" "$ROOT/src/native_launcher/ui.cpp" \
     "$ROOT/src/native_launcher/view.cpp" "$ROOT/src/native_launcher/home.cpp" "$ROOT/src/native_launcher/home_view.cpp" "$ROOT/src/native_launcher/image.cpp" "$ROOT/src/native_launcher/art_loader.cpp" "$ROOT/src/native_launcher/art_fetch.cpp" "$ROOT/src/native_launcher/sheet_view.cpp" "$ROOT/src/native_launcher/welcome.cpp" "$ROOT/src/native_launcher/welcome_view.cpp" "$ROOT/src/native_launcher/i18n.cpp" "$ROOT/src/native_launcher/host.cpp" \
     "$ROOT/src/native_launcher/text_input.cpp" "$ROOT/src/native_launcher/update_check.cpp" \
+    "$ROOT/src/native_launcher/theme.cpp" "$ROOT/src/native_launcher/launcher_audio.cpp" \
     "$ROOT/src/native_launcher/runtime.cpp" "$ROOT/src/vita_proto_launcher.cpp" \
-    $(pkg-config --cflags --libs physfs freetype2 libpng libturbojpeg libwebp sdl2 glesv2 libcurl) -pthread -o "$OUT"
+    $(pkg-config --cflags --libs physfs freetype2 libpng libturbojpeg libwebp sdl2 glesv2 libcurl vorbisfile) -pthread -o "$OUT"

@@ -432,6 +432,21 @@ void View::buildSheet(const UI &u) {
       if (u.setting > 0)
         left.push_back(hint("btn-square-26", "Remove key", Button::Square));
       left.push_back(back);
+    } else if (u.page == Page::Sound) {
+      title = tr("Sound");
+      subtitle = tr("The launcher's own sounds. Games keep their audio settings.");
+      row(Row::Toggle, "Menu sounds", "", u.menuSounds);
+      row(Row::Choice, "Menu sound volume", std::to_string(u.effectsVolume) + "%");
+      row(Row::Toggle, "Title music", "", u.themeMusic);
+      row(Row::Choice, "Title music volume", std::to_string(u.musicVolume) + "%");
+      focusRow = u.setting;
+      if (u.setting >= 2)
+        notes = {tr("Plays the highlighted game's own title music, read from its files. Nothing is downloaded."),
+                 tr("A ZIP game plays it once it has been unpacked. Put a hardrpg-theme.ogg (or .mp3 or .wav) in a "
+                    "game's folder to choose its music. MIDI titles stay silent.")};
+      else
+        notes = {tr("Sounds for moving, opening, going back and starting a game.")};
+      left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", "Default", Button::Square), back};
     } else if (u.page == Page::Errors) {
       title = tr("Game error history");
       for (auto &record : u.errors) {
@@ -456,6 +471,10 @@ void View::buildSheet(const UI &u) {
       row(Row::Nav, "Game info and artwork", trf("{} sources", {std::to_string(4 + keys)}));
       row(Row::Choice, "Language", languageName(language()));
       row(Row::Nav, "Welcome guide");
+      row(Row::Nav, "Sound", u.menuSounds && u.themeMusic ? "On"
+                             : u.menuSounds              ? "Menu sounds only"
+                             : u.themeMusic              ? "Title music only"
+                                                         : "Off");
       row(Row::Action, "Exit HardRPG");
       focusRow = u.setting;
       first = u.settingFirst;

@@ -1,4 +1,5 @@
 #include "runtime.h"
+#include "launcher_audio.h"
 #include "text_input.h"
 #include "view.h"
 #include "vita_proto_launcher.h"
@@ -734,6 +735,14 @@ int runNativeLauncher(bool returning) {
     vitaStartupTimerMark("launcher_view_ready");
 #endif
     std::fprintf(stderr, "HardRPG native launcher backend\n");
+    // Interface sounds and the highlighted game's title music.
+    LauncherAudio audio;
+    uint32_t launchSoundAt = 0;
+    ui.sound = [&](Sound s) {
+      audio.play(s);
+      if (s == Sound::Launch)
+        launchSoundAt = SDL_GetTicks() | 1;
+    };
     for (;;) {
       bool quit = false;
       Input input;
@@ -814,6 +823,16 @@ int runNativeLauncher(bool returning) {
         if (!homeLoaded)
           loadHome();
         returning = true;
+#ifdef __vita__
+        if (!audio.start("app0:/sfx"))
+          std::fprintf(stderr, "Launcher audio unavailable\n");
+#endif
+        audio.setLevels(ui.effectsVolume, ui.musicVolume);
+        // The title music follows the highlighted game once it has stayed
+        // there a moment, so scrolling past games does not start each one.
+        std::string themeWanted, themeAsked;
+        uint32_t themeSince = 0, themeCheckedAt = 0;
+        launchSoundAt = 0;
         view.draw(ui);
         present(true);
 #ifdef __vita__
@@ -897,6 +916,22 @@ int runNativeLauncher(bool returning) {
           }
           if (moving)
             ui.tick(dt);
+          if (now - themeCheckedAt >= 100 || button != Button::None || touched) {
+            themeCheckedAt = now;
+            audio.setLevels(ui.effectsVolume, ui.musicVolume);
+            auto folder = ui.themeFolder();
+            if (folder != themeWanted) {
+              themeWanted = folder;
+              themeSince = now;
+            }
+            if (themeWanted.empty() && !themeAsked.empty()) {
+              audio.theme("");
+              themeAsked.clear();
+            } else if (themeWanted != themeAsked && now - themeSince >= 700 && !moving) {
+              audio.theme(themeWanted);
+              themeAsked = themeWanted;
+            }
+          }
           // Refresh the top bar clock once a minute.
           if (ui.homeActive() && now / 15000 != (now - uint32_t(dt * 1000)) / 15000) {
             auto before = ui.clockText;
@@ -966,8 +1001,16 @@ int runNativeLauncher(bool returning) {
         }
 #endif
       }
-      if (quit || ui.exitRequested)
+      if (quit || ui.exitRequested) {
+        audio.stop();
         return 0;
+      }
+      // Let the start of the launch sound play while the music fades.
+      audio.fadeMusic(300);
+      if (launchSoundAt)
+        while (int32_t(SDL_GetTicks() - launchSoundAt) < 700)
+          SDL_Delay(10);
+      audio.stop();
       // All menu GL resources and mounts are closed before LoadExec.
       // Neither Ruby nor OpenAL has been initialized in this process.
 #ifdef __vita__

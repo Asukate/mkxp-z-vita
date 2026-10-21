@@ -70,6 +70,10 @@ LAUNCHER_ARGS+=(-a "$ROOT/launcher/font-display.ttf=font-display.ttf" -a "$ROOT/
 for ui in "$ROOT"/launcher/ui/*.png; do
     LAUNCHER_ARGS+=(-a "$ui=ui/$(basename "$ui")")
 done
+# Interface sounds (made by launcher/art/tools/make_sfx.py).
+for sfx in "$ROOT"/launcher/sfx/*.ogg; do
+    LAUNCHER_ARGS+=(-a "$sfx=sfx/$(basename "$sfx")")
+done
 
 EASY_ARGS=()
 if [[ -n "$EASY_WS" ]]; then

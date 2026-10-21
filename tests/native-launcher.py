@@ -446,14 +446,72 @@ class NativeLauncher(unittest.TestCase):
         self.assertFalse(self.ui(view)['homeGrid'])
         self.assertFalse(self.ui()['homeGrid'])
 
+    def test_interface_sounds_follow_what_an_input_did(self):
+        self.game(self.games/'One',3,'One')
+        self.game(self.games/'Two',3,'Two')
+        self.assertEqual(self.ui()['sounds'],[])
+        self.assertEqual(self.ui('right')['sounds'],['move'])
+        # Nothing moves past the first game, so nothing sounds.
+        self.assertEqual(self.ui('left')['sounds'],[])
+        self.assertEqual(self.ui('square,circle')['sounds'],['open','back'])
+        self.assertEqual(self.ui(SETTINGS)['sounds'],['move','move','move','open'])
+        self.assertEqual(self.ui(SETTINGS+',down,circle')['sounds'][-2:],['move','back'])
+        state=self.ui(PLAY)
+        self.assertTrue(state['launchRequested'])
+        self.assertEqual(state['sounds'],['open','launch'])
+        # A swipe ticks as cards pass, and a tap sounds like its button.
+        self.assertIn('move',self.ui('drag:700:300:300')['sounds'])
+        self.assertEqual(self.ui('loadexec-fail')['sounds'],['error'])
+
+    def test_sound_settings(self):
+        self.game(self.games/'One',3,'One')
+        prefs=self.root/'launcher-preferences.json'
+        sound=SETTINGS+',down'*9+',cross'    # Settings: Sound is row 9
+        state=self.ui(sound)
+        self.assertEqual(state['page'],13)
+        self.assertEqual((state['menuSounds'],state['menuSoundVolume'],state['themeMusic'],state['musicVolume']),
+                         (True,70,True,80))
+        # Volumes step by ten; Cross wraps from 100 to 10, Square restores.
+        self.assertEqual(self.ui(sound+',down,right')['menuSoundVolume'],80)
+        self.assertEqual(self.ui(sound+',down,left,left')['menuSoundVolume'],60)
+        self.assertEqual(self.ui(sound+',down,down,down'+',cross'*3)['musicVolume'],10)
+        self.assertEqual(self.ui(sound+',down,down,down,square')['musicVolume'],80)
+        self.assertEqual(json.loads(prefs.read_text())['musicVolume'],80)
+        # Title music off: no game asks for it.
+        self.assertTrue(self.ui()['themeFolder'].endswith('/One'))
+        self.assertFalse(self.ui(sound+',down,down,cross')['themeMusic'])
+        self.assertEqual(self.ui()['themeFolder'],'')
+        self.assertIs(json.loads(prefs.read_text())['themeMusic'],False)
+        # Menu sounds off: silent, except the launch.
+        state=self.ui(sound+',cross')
+        self.assertFalse(state['menuSounds'])
+        self.assertEqual(self.ui('right,square,circle')['sounds'],[])
+        self.assertEqual(self.ui(PLAY)['sounds'],['launch'])
+        self.assertTrue(self.ui(sound+',square')['menuSounds'])
+
+    def test_title_music_plays_for_the_highlighted_game_only(self):
+        one=self.game(self.games/'One',3,'One')
+        self.game(self.games/'Two',3,'Two')
+        first=self.ui()['themeFolder']
+        self.assertIn(first,(str(one),str(self.games/'Two')))
+        self.assertNotEqual(self.ui('right')['themeFolder'],first)
+        # Game settings keep the game's music; Settings, About and the
+        # storage browser do not.
+        self.assertEqual(self.ui(GAME)['themeFolder'],first)
+        self.assertEqual(self.ui(SETTINGS)['themeFolder'],'')
+        self.assertEqual(self.ui(ABOUT)['themeFolder'],'')
+        self.assertEqual(self.ui('start')['themeFolder'],'')
+        # The Add card at the end has none.
+        self.assertEqual(self.ui('right,right')['themeFolder'],'')
+
     def test_launcher_preferences_and_artwork_keys(self):
         prefs=self.root/'launcher-preferences.json'
-        # Settings: Game info and artwork is row 6; Exit follows it. On that
-        # page the adult artwork blur is first, then the source keys:
+        # Settings: Game info and artwork is row 6, then Sound; Exit is last.
+        # On that page the adult artwork blur is first, then the source keys:
         # SteamGridDB, IGDB's client ID and secret, RAWG.
         info=SETTINGS+',down'*6+',cross'
         self.assertEqual(self.ui(info)['page'],12)
-        self.assertTrue(self.ui(SETTINGS+',down'*9+',cross')['exitRequested'])
+        self.assertTrue(self.ui(SETTINGS+',down'*10+',cross')['exitRequested'])
         state=self.ui(info+',cross')
         self.assertFalse(state['blurAdult'])
         self.assertIs(json.loads(prefs.read_text())['blurAdult'],False)

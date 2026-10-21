@@ -30,6 +30,82 @@ void move(int &selection, int &first, int count, int rows, int step) {
 const char *const displayKeys[] = {"fixedAspectRatio", "integerScalingActive",
                                    "smoothScaling"};
 } // namespace
+
+// One input, one sound: the state before and after an input decides what
+// it did. Going deeper opens, coming back closes, a focus change moves,
+// a changed value toggles.
+struct InputFeedback {
+  struct State {
+    int depth = 0;
+    std::vector<long> place, values;
+    std::string message, missingRtp, display;
+    bool launch = false;
+  };
+  UI &ui;
+  Button button;
+  State before;
+  static State read(const UI &u) {
+    State s;
+    int browserDepth = 0;
+    if (u.browser)
+      browserDepth = int(std::count(u.browser->path.begin(), u.browser->path.end(), '/'));
+    s.depth = (u.focus != Focus::Home) + (u.page != Page::Home) + u.home.details +
+              (u.home.panel != Home::NoPanel) + u.gameOptions + bool(u.browser) + browserDepth +
+              !u.errorReport.empty() + !u.releaseReport.empty() + u.controlsAdvanced + (u.controlsPad > 0) +
+              u.controlPicking + u.controlsTesting + int(u.model.stack.size()) + u.welcome.active;
+    s.place = {u.home.target, long(u.home.zone), u.home.toolbarFocus, u.home.topFocus, u.home.panelFocus,
+               u.setting, u.gameSetting, u.rtpSelected, u.browserSelected, u.engineFilter, u.aboutScroll,
+               u.errorScroll, u.releaseScroll, u.artRow, u.controlPickKey, u.removeStep ? long(u.removeStep) : 0,
+               u.welcome.slide, u.welcome.languageFocus};
+    s.values = {u.home.grid, u.home.sort, u.home.direction, u.home.favouritesOnly, u.home.unplayedOnly,
+                long(u.home.hiddenEngines), u.blurAdult, u.automaticUpdates, long(u.favourites.size()),
+                u.artPick[0], u.artPick[1], u.artPick[2], u.menuSounds, u.themeMusic, u.effectsVolume,
+                u.musicVolume, long(u.query.size()), language()};
+    s.message = u.message;
+    s.missingRtp = u.missingRtp;
+    s.launch = u.launchRequested;
+    if (u.displayValues.is_object())
+      s.display = u.displayValues.stringify();
+    return s;
+  }
+  InputFeedback(UI &u, Button b) : ui(u), button(b) {
+    if (ui.feedbackDepth++ == 0)
+      before = read(ui);
+  }
+  ~InputFeedback() {
+    if (--ui.feedbackDepth != 0)
+      return;
+    auto after = read(ui);
+    if (after.launch && !before.launch)
+      ui.emit(Sound::Launch);
+    else if (!after.missingRtp.empty() && before.missingRtp.empty())
+      ui.emit(Sound::Error);
+    else if (after.depth > before.depth)
+      ui.emit(Sound::Open);
+    else if (after.depth < before.depth)
+      ui.emit(button == Button::Circle ? Sound::Back : Sound::Close);
+    else if (after.place != before.place)
+      ui.emit(Sound::Move);
+    else if (after.values != before.values || after.display != before.display)
+      ui.emit(Sound::Toggle);
+    else if (after.message != before.message && !after.message.empty() &&
+             (button == Button::Cross || button == Button::Square || button == Button::Triangle))
+      ui.emit(Sound::Select);
+  }
+};
+void UI::emit(Sound s) const {
+  if (sound && (menuSounds || s == Sound::Launch))
+    sound(s);
+}
+std::string UI::themeFolder() const {
+  if (!themeMusic || browser || !(focus == Focus::Home || gameOptions))
+    return "";
+  auto *e = homeEntry();
+  if (!e || e->kind == Kind::Folder)
+    return "";
+  // A ZIP game plays from its unpacked copy, once there is one.
+  return e->node.archive ? model.paths.at("cache/zip-" + key(e->node.identity(model.paths))) : e->node.path();
+}
 UI::UI(Paths paths, bool scan)
     : model(std::move(paths), scan),
       displayValues(std::initializer_list<Json::pair_type>{}),
@@ -60,6 +136,7 @@ void UI::launchFailed(int code, const std::string &executable) {
   char hexadecimal[16];
   std::snprintf(hexadecimal, sizeof(hexadecimal), "0x%08x", unsigned(code));
   message = trf("Could not start game (LoadExec {}, {}; {}).", {std::to_string(code), hexadecimal, executable});
+  emit(Sound::Error);
 }
 struct RtpCheck {
   unsigned generation;
@@ -214,6 +291,7 @@ void UI::scroll(int rows) {
                 : page == Page::Folders ? 1 + gameFolders.size()
                 : page == Page::Home    ? settingsRows()
                : page == Page::Keys    ? keysRows
+                : page == Page::Sound   ? soundRows
                 : page == Page::Metrics ? 2
                                         : 3;
     setting = std::max(0, std::min(setting + rows, std::max(0, count - 1)));
@@ -223,6 +301,7 @@ void UI::scroll(int rows) {
   }
 }
 void UI::touch(int x, int y) {
+  InputFeedback feedback(*this, Button::Cross);
   if (welcome.active) {
     welcomeTap(x, y);
     return;
@@ -357,6 +436,7 @@ void UI::sheetTouch(int x, int y) {
   if (focus == Focus::Settings) {
     int count = page == Page::Home      ? settingsRows()
                 : page == Page::Keys    ? keysRows
+                : page == Page::Sound   ? soundRows
                 : page == Page::Updates ? 3
                 : page == Page::Display ? 3
                 : page == Page::Metrics ? 2
@@ -1050,6 +1130,27 @@ void UI::browserAction(Button b) {
                 : added == 1 ? std::string(tr("Added 1 game. Files stay in their original folders."))
                              : trf("Added {} games. Files stay in their original folders.", {std::to_string(added)});
 }
+// Sound rows: menu sounds, their volume, title music, its volume. Volumes
+// move in steps of 10 (Cross wraps around); Square restores the default.
+void UI::changeSound(int step, bool reset) {
+  auto level = [&](int &v, int fallback) {
+    if (reset)
+      v = fallback;
+    else if (step > 0)
+      v = v >= 100 ? 10 : std::min(100, v + 10);
+    else
+      v = std::max(10, v - 10);
+  };
+  if (setting == 0)
+    menuSounds = reset ? true : !menuSounds;
+  else if (setting == 1)
+    level(effectsVolume, 70);
+  else if (setting == 2)
+    themeMusic = reset ? true : !themeMusic;
+  else
+    level(musicVolume, 80);
+  savePreferences();
+}
 void UI::openSetting() {
   if(page==Page::Updates) {
     if(setting==0) {
@@ -1075,6 +1176,10 @@ void UI::openSetting() {
       return;
     }
     if (setting == 9) {
+      openPage(Page::Sound);
+      return;
+    }
+    if (setting == 10) {
       exitRequested = true;
       return;
     }
@@ -1087,6 +1192,10 @@ void UI::openSetting() {
     openPage(setting == 0   ? Page::Display
              : setting == 1 ? Page::Rtp
                             : Page::Folders);
+    return;
+  }
+  if (page == Page::Sound) {
+    changeSound(1);
     return;
   }
   if (page == Page::Keys) {
@@ -1147,6 +1256,7 @@ void UI::play(size_t index) {
   }
 }
 void UI::action(Button b) {
+  InputFeedback feedback(*this, b);
   try {
     if (welcome.active) {
       welcomeAction(b);
@@ -1221,6 +1331,7 @@ void UI::action(Button b) {
              : page == Page::Folders ? 1 + gameFolders.size()
              : page == Page::Home    ? settingsRows()
                : page == Page::Keys    ? keysRows
+             : page == Page::Sound   ? soundRows
              : page == Page::Metrics ? 2
                                      : 3,
              7, step);
@@ -1244,7 +1355,9 @@ void UI::action(Button b) {
         model.setRtp(packs[rtpSelected]);
         refreshRtp();
         message = tr("Automatic RTP location restored. Pack files were not removed.");
-      } else if (page == Page::Display)
+      } else if (page == Page::Sound)
+        changeSound(1, true);
+      else if (page == Page::Display)
         changeDisplay(1, true);
       else if (page == Page::Metrics)
         changeMetrics(1, true);
@@ -1260,6 +1373,10 @@ void UI::action(Button b) {
     }
     if ((b == Button::Left || b == Button::Right) && page == Page::Home && setting == 7) {
       changeLanguage(b == Button::Left ? -1 : 1);
+      return;
+    }
+    if ((b == Button::Left || b == Button::Right) && page == Page::Sound) {
+      changeSound(b == Button::Left ? -1 : 1);
       return;
     }
     if ((b == Button::Left || b == Button::Right) &&

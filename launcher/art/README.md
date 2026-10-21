@@ -15,3 +15,11 @@ identical images.
 
 `launcher/ui/vita-640.png` is not made here: it is Tokyoship's illustration
 from Wikimedia Commons (CC BY 3.0), see `LICENSES/Vita-illustration.txt`.
+
+## Sounds
+
+`launcher/sfx/*.ogg` are the launcher's UI sounds (move, select, back, open,
+close, toggle, error, launch). They are project-authored: `tools/make_sfx.py`
+synthesizes them from scratch (FM bells, filtered noise and a small room
+reverb) and encodes them with ffmpeg's libvorbis. It needs numpy, scipy and
+ffmpeg. A rerun gives byte-identical files.

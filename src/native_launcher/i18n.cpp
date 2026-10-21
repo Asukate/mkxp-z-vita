@@ -669,6 +669,29 @@ const Text table[] = {
     {"You can always keep the pictures you have: the artwork chooser shows what each source found first.",
      "Siempre puedes quedarte con las imágenes que tienes: primero verás lo que encontró cada fuente.",
      "Você sempre pode manter as imagens que já tem: primeiro você vê o que cada fonte encontrou."},
+    // Launcher sound (Settings, Sound).
+    {"Default", "Predeterminado", "Padrão"},
+    {"Menu sounds only", "Solo sonidos del menú", "Só sons do menu"},
+    {"Title music only", "Solo música de título", "Só música de título"},
+    {"The launcher's own sounds. Games keep their audio settings.",
+     "Los sonidos del lanzador. Los juegos conservan sus ajustes de audio.",
+     "Os sons do launcher. Os jogos mantêm seus ajustes de áudio."},
+    {"Menu sounds", "Sonidos del menú", "Sons do menu"},
+    {"Menu sound volume", "Volumen de los sonidos", "Volume dos sons"},
+    {"Title music", "Música de título", "Música de título"},
+    {"Title music volume", "Volumen de la música", "Volume da música"},
+    {"Sounds for moving, opening, going back and starting a game.",
+     "Sonidos al moverte, abrir, volver e iniciar un juego.",
+     "Sons ao mover, abrir, voltar e iniciar um jogo."},
+    {"Plays the highlighted game's own title music, read from its files. Nothing is downloaded.",
+     "Reproduce la música de título del juego seleccionado, leída de sus archivos. No se descarga nada.",
+     "Toca a música de título do jogo selecionado, lida dos arquivos dele. Nada é baixado."},
+    {"A ZIP game plays it once it has been unpacked. Put a hardrpg-theme.ogg (or .mp3 or .wav) in a game's folder to choose "
+     "its music. MIDI titles stay silent.",
+     "Un juego en ZIP la reproduce cuando ya se ha descomprimido. Pon un hardrpg-theme.ogg (o .mp3 o .wav) en la carpeta de un "
+     "juego para elegir su música. Los títulos MIDI no suenan.",
+     "Um jogo em ZIP toca depois de descompactado. Coloque um hardrpg-theme.ogg (ou .mp3 ou .wav) na pasta de um jogo para "
+     "escolher a música. Títulos em MIDI ficam em silêncio."},
 };
 
 const std::map<std::string, const Text *> &index() {

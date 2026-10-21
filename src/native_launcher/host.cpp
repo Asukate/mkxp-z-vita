@@ -1,5 +1,6 @@
 // Desktop preview and fixture driver for the production native model/view.
 #include "runtime.h"
+#include "launcher_audio.h"
 #include "view.h"
 #include "release.h"
 #include <SDL.h>
@@ -210,9 +211,38 @@ Json strings(const std::vector<std::string> &fonts) {
   FT_Done_FreeType(library);
   return out;
 }
-void preview(UI &ui, View &view) {
+void preview(UI &ui, View &view, const std::string &sfx) {
   if (SDL_Init(SDL_INIT_VIDEO))
     throw std::runtime_error(SDL_GetError());
+  // Sounds play only here, in the interactive preview; scripted runs stay
+  // silent and only record what would have played.
+  LauncherAudio audio;
+  if (audio.start(sfx)) {
+    auto record = ui.sound;
+    ui.sound = [&audio, record](Sound s) {
+      audio.play(s);
+      if (record)
+        record(s);
+    };
+  }
+  std::string themeWanted, themeAsked;
+  uint32_t themeSince = 0;
+  auto followTheme = [&] {
+    audio.setLevels(ui.effectsVolume, ui.musicVolume);
+    auto folder = ui.themeFolder();
+    uint32_t now = SDL_GetTicks();
+    if (folder != themeWanted) {
+      themeWanted = folder;
+      themeSince = now;
+    }
+    if (themeWanted.empty() && !themeAsked.empty()) {
+      audio.theme("");
+      themeAsked.clear();
+    } else if (themeWanted != themeAsked && now - themeSince >= 700 && !ui.animating()) {
+      audio.theme(themeWanted);
+      themeAsked = themeWanted;
+    }
+  };
   SDL_Window *window = SDL_CreateWindow("HardRPG native launcher preview",
                                         SDL_WINDOWPOS_CENTERED,
                                         SDL_WINDOWPOS_CENTERED, 960, 544, 0);
@@ -253,6 +283,7 @@ void preview(UI &ui, View &view) {
   while (!quit && !ui.exitRequested && !ui.launchRequested) {
     SDL_Event e;
     bool moving = ui.animating() || view.animating();
+    followTheme();
     if (!SDL_WaitEventTimeout(&e, moving ? 16 : 50)) {
       uint32_t now = SDL_GetTicks();
       if (moving) {
@@ -358,7 +389,7 @@ int main(int argc, char **argv) {
       return rc;
     }
     hardrpg::Paths paths;
-    std::string font = "assets/liberation.ttf", snapshot, script, actions, releaseFixture,
+    std::string font = "assets/liberation.ttf", sfx = "launcher/sfx", snapshot, script, actions, releaseFixture,
                 rename, search, text;
     bool edit = false, settle = false, returning = false;
     // The welcome guide shows only with "--welcome auto" (as on a first
@@ -387,6 +418,8 @@ int main(int argc, char **argv) {
         paths.storage.push_back(value);
       } else if (arg == "--font")
         font = value;
+      else if (arg == "--sfx")
+        sfx = value;
       else if (arg == "--release-fixture")
         releaseFixture = value;
       else if (arg == "--snapshot")
@@ -428,6 +461,8 @@ int main(int argc, char **argv) {
       return 0;
     }
     hardrpg::UI ui(paths);
+    std::vector<std::string> sounds;
+    ui.sound = [&](Sound s) { sounds.push_back(soundName(s)); };
     if (settle) {
       // As the Vita does at boot: "yes" after a game handed back, "no" after
       // a fresh start.
@@ -523,7 +558,7 @@ int main(int argc, char **argv) {
       view.save(snapshot);
     }
     if (interactive)
-      preview(ui, view);
+      preview(ui, view, sfx);
     auto state = object();
     state.as_object()["entries"] = listing(ui.model.list, paths);
     std::vector<Entry> visible;
@@ -546,6 +581,15 @@ int main(int argc, char **argv) {
       o["homeSort"] = ui.home.sort;
       o["homeDirection"] = ui.home.direction;
       o["blurAdult"] = ui.blurAdult;
+      o["menuSounds"] = ui.menuSounds;
+      o["themeMusic"] = ui.themeMusic;
+      o["menuSoundVolume"] = ui.effectsVolume;
+      o["musicVolume"] = ui.musicVolume;
+      o["themeFolder"] = ui.themeFolder();
+      auto played = array();
+      for (auto &name : sounds)
+        played.as_array().push_back(name);
+      o["sounds"] = played;
     }
     state.as_object()["query"] = ui.query;
     state.as_object()["engineFilter"] = ui.engineFilter;
