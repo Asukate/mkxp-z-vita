@@ -81,6 +81,7 @@ cmake -S "$SOURCE" -B "$WS/build/player-$INPUTS" "${COMMON[@]}" \
 cmake --build "$WS/build/player-$INPUTS" --target easyrpg-player -j "$JOBS"
 arm-vita-eabi-strip --strip-debug "$WS/build/player-$INPUTS/easyrpg-player.elf" -o "$WS/runtime/easyrpg-stripped.elf"
 vita-elf-create "$WS/runtime/easyrpg-stripped.elf" "$WS/runtime/easyrpg.velf"
-vita-make-fself -s "$WS/runtime/easyrpg.velf" "$WS/runtime/easyrpg.bin"
+# Compressed (-c): 6.6 MB instead of 19 MB to read on every launch.
+vita-make-fself -s -c "$WS/runtime/easyrpg.velf" "$WS/runtime/easyrpg.bin"
 python3 "$ROOT/scripts/easyrpg-state.py" record "$WS" "$PREFIX" --source "$SOURCE"
 sha256sum "$WS/runtime/easyrpg.bin"

@@ -30,6 +30,22 @@ def verify_livearea_image(data: bytes, name: str) -> None:
         raise ValueError(f"unsupported LiveArea PNG encoding or size: {name}")
 
 
+def self_payload(data: bytes) -> bytes:
+    """The ELF segments of a SELF; vita-make-fself -c stores them zlib-compressed."""
+    if data[:4] != b'SCE\0':
+        return data
+    import struct, zlib
+    elf_offset, = struct.unpack_from('<Q', data, 64)
+    section_info, = struct.unpack_from('<Q', data, 88)
+    phnum, = struct.unpack_from('<H', data, elf_offset + 0x2C)
+    parts = [data[:section_info]]
+    for i in range(phnum):
+        offset, length, compression, _ = struct.unpack_from('<QQQQ', data, section_info + 32 * i)
+        segment = data[offset:offset + length]
+        parts.append(zlib.decompress(segment) if compression == 2 else segment)
+    return b''.join(parts)
+
+
 def developer_home_paths(binary):
     # These exact assertion filenames are embedded in VitaSDK's upstream libc.
     sdk_paths = {
@@ -84,7 +100,7 @@ def main() -> int:
             raise ValueError('VPK app version must match release metadata')
         if args.title_id and metadata.get('TITLE_ID') != args.title_id:
             raise ValueError('VPK Title ID does not match requested package')
-        executable = vpk.read('eboot.bin')
+        executable = self_payload(vpk.read('eboot.bin'))
         if not executable:
             raise ValueError('empty eboot.bin')
         # Source/assertion strings survive debug stripping in static libraries.
@@ -107,11 +123,12 @@ def main() -> int:
             if backend.get('inputs') != state.inputs():
                 raise ValueError('EasyRPG runtime inputs differ')
             binary = vpk.read('easyrpg.self')
-            if not binary or b'HardRPG EasyRPG backend' not in binary:
+            image = self_payload(binary) if binary else b''
+            if not image or b'HardRPG EasyRPG backend' not in image:
                 raise ValueError('EasyRPG runtime needs the HardRPG entry point')
             if hashlib.sha256(binary).hexdigest() != backend['runtime_sha256']:
                 raise ValueError('EasyRPG runtime hash differs')
-            if developer_home_paths(binary):
+            if developer_home_paths(image):
                 raise ValueError('EasyRPG runtime contains a developer home path')
             picker_names |= {'easyrpg.self','runtime/easyrpg-manifest.json'}
             for name, digest in backend['licenses'].items():
