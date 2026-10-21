@@ -1438,6 +1438,16 @@ struct GraphicsPrivate {
     double last_update;
     PerformanceOverlay performanceOverlay;
     hardrpg::FastForward fastForward;
+    /* Fast forward measures each frame's work: when the last frame ended. */
+    double ffFrameEnd = 0;
+    static double nowUs() {
+        return double(SDL_GetPerformanceCounter()) * 1000000.0 / SDL_GetPerformanceFrequency();
+    }
+    /* Called right after a frame's wait: work is everything but the wait. */
+    void measureFastForward(bool drawn, double workUs) {
+        if (fastForward.active && ffFrameEnd > 0)
+            fastForward.measured(drawn, workUs, 1000000.0 / std::max(1, fastForward.rate(frameRate)));
+    }
     FastForwardBadge fastForwardBadge;
     
     
@@ -1653,7 +1663,9 @@ struct GraphicsPrivate {
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("FPS_DELAY_BEGIN");
 #endif
+        double ffWork = nowUs() - ffFrameEnd;
         { FrameProfile::Scope pacing(FrameProfile::Pacing); fpsLimiter.delay(); }
+        const double ffWaitEnd = nowUs();
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("FPS_DELAY_DONE");
 #endif
@@ -1692,6 +1704,10 @@ struct GraphicsPrivate {
         s42iMark("SDL_SWAP_BEGIN");
 #endif
         { FrameProfile::Scope present(FrameProfile::Present); SDL_GL_SwapWindow(threadData->window); }
+        /* The present after the wait is part of a drawn frame's work. */
+        ffWork += nowUs() - ffWaitEnd;
+        measureFastForward(true, ffWork);
+        ffFrameEnd = nowUs();
         if (threadData->config.performanceMetrics)
             performanceOverlay.present(uint64_t(double(SDL_GetPerformanceCounter()) *
                                       1000000 / SDL_GetPerformanceFrequency()), vitaStandbyEpoch());
@@ -1773,7 +1789,10 @@ struct GraphicsPrivate {
     bool skipFastForwardFrame() {
         if (!fastForward.skip())
             return false;
+        const double work = nowUs() - ffFrameEnd;
         { FrameProfile::Scope pacing(FrameProfile::Pacing); fpsLimiter.delay(); }
+        measureFastForward(false, work);
+        ffFrameEnd = nowUs();
         ++frameCount;
         Bitmap::frameTick();
         threadData->ethread->notifyFrame();

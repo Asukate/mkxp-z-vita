@@ -38,6 +38,46 @@ int main() {
   f.update(true, true, false, true);
   f.update(false, false, false, false);
   assert(f.active);
+  // Skipping is kept only while it makes the game faster. 60 fps game, so
+  // 2x is a frame every 8333 us.
+  {
+    const double period = 1000000.0 / 120;
+    auto run = [&](FastForward &g, double drawn, double skipped, int frames) {
+      int undrawn = 0;
+      for (int i = 0; i < frames; ++i) {
+        bool s = g.skip();
+        undrawn += s;
+        g.measured(!s, s ? skipped : drawn, period);
+      }
+      return undrawn;
+    };
+    FastForward g;
+    g.allowed = true;
+    g.update(true, true, false, false);
+    g.update(false, false, false, false);
+    assert(g.active && g.skippingFrames());
+    // Held back by its scripts (25 ms of logic, 2 ms of drawing): skipping
+    // gains ~4%, so every frame is drawn again.
+    run(g, 27000, 25000, 40);
+    assert(!g.skippingFrames());
+    int undrawn = run(g, 27000, 25000, FastForward::probeEvery);
+    assert(undrawn <= FastForward::probeFrames);
+    // Drawing is the heavy part (8 ms logic, 10 ms drawing): skipping roughly
+    // doubles the speed, so it starts at the next measurement run.
+    run(g, 18000, 8000, FastForward::probeEvery + 2 * FastForward::probeFrames);
+    assert(g.skippingFrames());
+    undrawn = run(g, 18000, 8000, 100);
+    assert(undrawn == 50);
+    // Light scene: drawing every frame already reaches 2x.
+    run(g, 6000, 3000, 60);
+    assert(!g.skippingFrames());
+    // Switching off and on measures afresh.
+    g.update(true, true, false, false);
+    g.update(false, false, false, false);
+    g.update(true, true, false, false);
+    g.update(false, false, false, false);
+    assert(g.active && g.skippingFrames());
+  }
   // Turning the setting off mid-game stops it.
   f.allowed = false;
   assert(f.update(false, false, false, false) && !f.active);
