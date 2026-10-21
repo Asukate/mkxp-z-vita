@@ -12,8 +12,9 @@ Integration checks cover game detection, nested folders, external libraries,
 ZIP preparation and cache reuse, save preservation, cancellation, path
 validation, display settings and RTP folder/ZIP selection. Native-launcher
 checks cover focus, display names, search, engine filters, touch scrolling,
-error history and report exports. They also compare game identities, handoffs
-and bidirectional cache reuse between the native and RGSS launchers.
+error history and report exports. They also check game identities and
+handoffs, and that libraries, caches and saves set up by the retired 0.2 RGSS
+launcher are read unchanged.
 
 Rendering checks cover font coverage/layout, bitmap copies, window texture
 allocation and GPU scene ownership. Recovery checks cover Ruby waits,
