@@ -36,8 +36,24 @@ index a12ca82..588c370 100644
  			-Wl,--whole-archive pthread -Wl,--no-whole-archive
  			SceLibKernel_stub
  			SceDisplay_stub
+diff --git a/src/filefinder_rtp.cpp b/src/filefinder_rtp.cpp
+index 016127a..4bf34ac 100644
+--- a/src/filefinder_rtp.cpp
++++ b/src/filefinder_rtp.cpp
+@@ -62,6 +62,11 @@ FileFinder_RTP::FileFinder_RTP(bool no_rtp, bool no_rtp_warnings, std::string rt
+ 	AddPath("romfs:/data/rtp/" + version_str);
+ 	AddPath("sdmc:/data/rtp/" + version_str);
+ #elif defined(__vita__)
++	// The handoff keeps custom RTP roots separate until engine detection.
++	const char* custom = std::getenv(Player::IsRPG2k() ? "HARDRPG_RTP_2000" : "HARDRPG_RTP_2003");
++	if (custom && *custom) AddPath(custom);
++	if (!rtp_path.empty()) AddPath(rtp_path);
++	AddPath("ux0:/data/hardrpg/rtp/" + version_str);
+ 	AddPath("ux0:/data/easyrpg-player/rtp/" + version_str);
+ #elif defined(__MORPHOS__)
+ 	AddPath("PROGDIR:rtp/" + version_str);
 diff --git a/src/platform/psvita/ui.cpp b/src/platform/psvita/ui.cpp
-index 91afcc4..8160041 100644
+index 91afcc4..a506071 100644
 --- a/src/platform/psvita/ui.cpp
 +++ b/src/platform/psvita/ui.cpp
 @@ -159,7 +159,7 @@ Psp2Ui::Psp2Ui(int width, int height, const Game_Config& cfg) : BaseUi(cfg)
@@ -49,7 +65,24 @@ index 91afcc4..8160041 100644
  	Bitmap::SetFormat(Bitmap::ChooseFormat(format));
  	main_surface = Bitmap::Create(vita2d_texture_get_datap(main_texture),
  		width, height, vita2d_texture_get_stride(main_texture), format);
-@@ -244,7 +244,7 @@ bool Psp2Ui::ProcessEvents() {
+@@ -220,6 +220,16 @@ bool Psp2Ui::ProcessEvents() {
+ 	}
+ 
+ 	sceCtrlPeekBufferPositiveExt2(is_pstv ? 1 : 0, &input, 1);
++	// HardRPG: L+R+Select goes back to the library, as in the RGSS games. The
++	// held buttons are hidden from the game so they do nothing else (L shows
++	// the FPS, R fast-forwards, Select resets to the title screen).
++	{
++		const unsigned int chord = SCE_CTRL_L1 | SCE_CTRL_R1 | SCE_CTRL_SELECT;
++		if ((input.buttons & chord) == chord) {
++			Player::exit_flag = true;
++			input.buttons &= ~chord;
++		}
++	}
+ 	keys[Input::Keys::JOY_A] = (input.buttons & SCE_CTRL_CIRCLE);
+ 	keys[Input::Keys::JOY_B] = (input.buttons & SCE_CTRL_CROSS);
+ 	keys[Input::Keys::JOY_X] = (input.buttons & SCE_CTRL_TRIANGLE);
+@@ -244,7 +254,7 @@ bool Psp2Ui::ProcessEvents() {
  	analog_input.secondary.y = normalize(input.ry);
  
  	// Touchpad support
@@ -58,6 +91,31 @@ index 91afcc4..8160041 100644
  		sceTouchPeek(SCE_TOUCH_PORT_FRONT, &touch, 1);
  		for (int i = 0; i < touch.reportNum; ++i) {
  			int xpos = touch.report[i].x / 2;
+diff --git a/src/player.cpp b/src/player.cpp
+index 8a209c6..2bef7d1 100644
+--- a/src/player.cpp
++++ b/src/player.cpp
+@@ -406,10 +406,20 @@ int Player::GetFrames() {
+ 	return frames;
+ }
+ 
++#ifdef __vita__
++// HardRPG: defined by its Vita entry point; restarts the launcher.
++void HardRpgReturnToLauncher();
++#endif
++
+ void Player::Exit() {
+ 	if (player_config.settings_autosave.Get()) {
+ 		Scene_Settings::SaveConfig(true);
+ 	}
++#ifdef __vita__
++	// HardRPG: go back to the launcher before the display and audio threads
++	// are torn down. Saves and the config are already written.
++	HardRpgReturnToLauncher();
++#endif
+ 
+ 	Graphics::UpdateSceneCallback();
+ #ifdef EMSCRIPTEN
 diff --git a/src/scene_logo.cpp b/src/scene_logo.cpp
 index 11f0ef5..689125c 100644
 --- a/src/scene_logo.cpp
@@ -95,42 +153,3 @@ index 11f0ef5..689125c 100644
  	} else {
  		// Load external logos
  		const auto& logo_bytes = logos[current_logo_index - 1];
-diff --git a/src/filefinder_rtp.cpp b/src/filefinder_rtp.cpp
---- a/src/filefinder_rtp.cpp
-+++ b/src/filefinder_rtp.cpp
-@@ -62,6 +62,11 @@
- 	AddPath("romfs:/data/rtp/" + version_str);
- 	AddPath("sdmc:/data/rtp/" + version_str);
- #elif defined(__vita__)
-+	// The handoff keeps custom RTP roots separate until engine detection.
-+	const char* custom = std::getenv(Player::IsRPG2k() ? "HARDRPG_RTP_2000" : "HARDRPG_RTP_2003");
-+	if (custom && *custom) AddPath(custom);
-+	if (!rtp_path.empty()) AddPath(rtp_path);
-+	AddPath("ux0:/data/hardrpg/rtp/" + version_str);
- 	AddPath("ux0:/data/easyrpg-player/rtp/" + version_str);
- #elif defined(__MORPHOS__)
- 	AddPath("PROGDIR:rtp/" + version_str);
-diff --git a/src/player.cpp b/src/player.cpp
---- a/src/player.cpp
-+++ b/src/player.cpp
-@@ -406,10 +406,20 @@
- 	return frames;
- }
- 
-+#ifdef __vita__
-+// HardRPG: defined by its Vita entry point; restarts the launcher.
-+void HardRpgReturnToLauncher();
-+#endif
-+
- void Player::Exit() {
- 	if (player_config.settings_autosave.Get()) {
- 		Scene_Settings::SaveConfig(true);
- 	}
-+#ifdef __vita__
-+	// HardRPG: go back to the launcher before the display and audio threads
-+	// are torn down. Saves and the config are already written.
-+	HardRpgReturnToLauncher();
-+#endif
- 
- 	Graphics::UpdateSceneCallback();
- #ifdef EMSCRIPTEN
