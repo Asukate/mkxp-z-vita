@@ -947,16 +947,15 @@ int runNativeLauncher(bool returning) {
           const int steps = ShaderWarmup::count();
           int failed = 0;
           for (int i = 0; i < steps; ++i) {
-            ui.preparationLabel = "Preparing graphics for this HardRPG version (only once): " +
-                                  std::to_string(i + 1) + " of " + std::to_string(steps) + ", " +
-                                  ShaderWarmup::label(i);
+            ui.preparationLabel = trf("Preparing graphics for this HardRPG version (only once): {} of {}, {}",
+                                      {std::to_string(i + 1), std::to_string(steps), tr(ShaderWarmup::label(i))});
             ui.preparationFraction = double(i) / steps;
             view.draw(ui);
             present(true);
             if (!ShaderWarmup::run(i))
               ++failed;
           }
-          ui.preparationLabel = "Graphics ready";
+          ui.preparationLabel = tr("Graphics ready");
           ui.preparationFraction = 1;
           view.draw(ui);
           present(true);
