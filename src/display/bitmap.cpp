@@ -19,6 +19,7 @@
  ** along with mkxp.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "asset_prefetch.h"
 #include "bitmap.h"
 #include "frame_profile.h"
 
@@ -1214,9 +1215,28 @@ Bitmap::Bitmap(const char *filename)
         }
     }
 
+#ifdef __vita__
+    /* Prepared on another core from this game's load history. */
+    if (!hiresBitmap)
+        if (SDL_Surface *ready = AssetPrefetch::takeImage(filename))
+        {
+            initFromSurface(ready, nullptr, false);
+            return;
+        }
+    const Uint64 loadBegan = SDL_GetPerformanceCounter();
+#endif
     BitmapOpenHandler handler;
     try {
         { FrameProfile::Scope decode(FrameProfile::ImageReadDecode); shState->fileSystem().openRead(handler, filename); }
+#ifdef __vita__
+        if (handler.surface && !hiresBitmap)
+        {
+            const double ms = double(SDL_GetPerformanceCounter() - loadBegan) * 1000.0 /
+                              double(SDL_GetPerformanceFrequency());
+            AssetPrefetch::noteImage(filename, ms);
+            AssetPrefetch::keepImage(filename, handler.surface, ms);
+        }
+#endif
         
         if (!handler.error.empty()) {
             // Not loaded with SDL, but I want it to be caught with the same exception type

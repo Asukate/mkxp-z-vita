@@ -49,6 +49,10 @@
 #include <stdio.h>
 #include <string>
 #include <chrono>
+#ifdef __vita__
+#include "asset_prefetch.h"
+#include <sys/stat.h>
+#endif
 
 SharedState *SharedState::instance = 0;
 int SharedState::rgssVersion = 0;
@@ -234,6 +238,12 @@ struct SharedStatePrivate
 			vitaDiagLog("BOOTPERF", "path_cache_end");
 		}
 
+#ifdef __vita__
+		/* Start preparing the images and sounds this game needed last time. */
+		mkdir("ux0:/data/hardrpg/cache", 0777);
+		mkdir("ux0:/data/hardrpg/cache/prefetch-v1", 0777);
+		AssetPrefetch::start(fileSystem, config.gameFolder, "ux0:/data/hardrpg/cache/prefetch-v1/");
+#endif
 		vitaDiagLog("BOOT", "before_font_discovery");
 		vitaDiagLog("BOOTPERF", "font_discovery_begin");
 #ifdef __vita__
@@ -574,5 +584,8 @@ SharedState::SharedState(RGSSThreadData *threadData)
 
 SharedState::~SharedState()
 {
+#ifdef __vita__
+	AssetPrefetch::stop();
+#endif
 	delete p;
 }

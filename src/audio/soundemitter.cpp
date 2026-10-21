@@ -29,6 +29,10 @@
 #include "debugwriter.h"
 
 #include <SDL_sound.h>
+#ifdef __vita__
+#include "asset_prefetch.h"
+#include <SDL_timer.h>
+#endif
 
 #define SE_CACHE_MEM (10*1024*1024) // 10 MB
 
@@ -237,10 +241,31 @@ SoundBuffer *SoundEmitter::allocateBuffer(const std::string &filename)
 	}
 	else
 	{
-				/* Buffer not in cache, needs to be loaded */
+		/* Buffer not in cache, needs to be loaded */
+#ifdef __vita__
+		/* Decoded on another core from this game's load history. */
+		AssetPrefetch::Sound ready;
+		if (AssetPrefetch::takeSound(filename, ready))
+		{
+			uint8_t sampleSize = formatSampleSize(ready.format);
+			buffer = new SoundBuffer;
+			buffer->bytes = uint32_t(ready.pcm.size());
+			AL::Buffer::uploadData(buffer->alBuffer, chooseALFormat(sampleSize, ready.channels),
+			                       ready.pcm.data(), buffer->bytes, ready.rate);
+		}
+		else
+		{
+			const Uint64 loadBegan = SDL_GetPerformanceCounter();
+#endif
 		SoundOpenHandler handler;
 		shState->fileSystem().openRead(handler, filename.c_str());
-buffer = handler.buffer;
+		buffer = handler.buffer;
+#ifdef __vita__
+			if (buffer)
+				AssetPrefetch::noteSound(filename, double(SDL_GetPerformanceCounter() - loadBegan) * 1000.0 /
+				                                       double(SDL_GetPerformanceFrequency()));
+		}
+#endif
 
 		if (!buffer)
 		{
