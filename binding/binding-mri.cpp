@@ -70,7 +70,12 @@ extern "C" {
 #include <assert.h>
 #include <cstring>
 #include <string>
+#include <map>
 #include <zlib.h>
+#ifdef __vita__
+#include <cstdio>
+#include <sys/stat.h>
+#endif
 
 #include <SDL_cpuinfo.h>
 #include <SDL_filesystem.h>
@@ -1047,6 +1052,224 @@ static VALUE evalString(VALUE string, VALUE filename, int *state) {
     return result;
 }
 
+#ifdef __vita__
+/* Compiled game scripts, kept between boots. Parsing and compiling a game's
+ * scripts is most of the time before its title screen (0.8 s for Ao Oni on
+ * the Vita); loading Ruby's binary form of the same instruction sequences is
+ * about five times faster. One file per game holds every script that
+ * compiled cleanly; an entry is used only for the same script name and the
+ * same source (length, CRC-32 and Adler-32) on the same Ruby build.
+ * InstructionSequence#eval runs a script at the top level with the same
+ * self, constant scope and file name as Kernel#eval did. A script that does
+ * not compile as is takes the eval and legacy-repair path below. */
+namespace ScriptCache {
+struct Entry
+{
+    uint32_t length, crc, adler;
+    std::string binary;
+};
+
+static std::map<std::string, Entry> entries;
+static std::string path, game;
+static bool dirty = false, loaded = false;
+static const char Magic[8] = {'H','R','G','I','S','Q','1','\n'};
+
+static void source(VALUE string, uint32_t &length, uint32_t &crc, uint32_t &adler)
+{
+    const Bytef *bytes = reinterpret_cast<const Bytef *>(RSTRING_PTR(string));
+    length = static_cast<uint32_t>(RSTRING_LEN(string));
+    crc = crc32(0, bytes, length);
+    adler = adler32(1, bytes, length);
+}
+
+static std::string rubyBuild()
+{
+    VALUE description = rb_const_get(rb_cObject, rb_intern("RUBY_DESCRIPTION"));
+    return std::string(RSTRING_PTR(description), RSTRING_LEN(description));
+}
+
+static void load(const std::string &gameScripts)
+{
+    if (loaded)
+        return;
+    loaded = true;
+    game = gameScripts;
+    char name[96];
+    snprintf(name, sizeof(name), "ux0:/data/hardrpg/cache/scripts-v1/%08lx.bin",
+             (unsigned long)crc32(0, reinterpret_cast<const Bytef *>(gameScripts.data()), gameScripts.size()));
+    path = name;
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f)
+        return;
+    std::string bytes;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size > 16 && size < 64 * 1024 * 1024) {
+        bytes.resize(size);
+        if (fread(&bytes[0], 1, size, f) != static_cast<size_t>(size))
+            bytes.clear();
+    }
+    fclose(f);
+    if (bytes.size() < 16 || memcmp(bytes.data(), Magic, 8))
+        return;
+    uint32_t stored;
+    memcpy(&stored, bytes.data() + bytes.size() - 4, 4);
+    if (stored != crc32(0, reinterpret_cast<const Bytef *>(bytes.data()), bytes.size() - 4))
+        return;
+    size_t at = 8, end = bytes.size() - 4;
+    auto take = [&](void *out, size_t n) {
+        if (end - at < n)
+            return false;
+        memcpy(out, bytes.data() + at, n);
+        at += n;
+        return true;
+    };
+    auto takeString = [&](std::string &out) {
+        uint32_t n;
+        if (!take(&n, 4) || end - at < n)
+            return false;
+        out.assign(bytes.data() + at, n);
+        at += n;
+        return true;
+    };
+    std::string build, game;
+    uint32_t count;
+    if (!takeString(build) || build != rubyBuild() || !takeString(game) || game != gameScripts ||
+        !take(&count, 4))
+        return;
+    std::map<std::string, Entry> read;
+    for (uint32_t i = 0; i < count; ++i) {
+        std::string scriptName;
+        Entry e;
+        if (!takeString(scriptName) || !take(&e.length, 4) || !take(&e.crc, 4) ||
+            !take(&e.adler, 4) || !takeString(e.binary))
+            return;
+        read[scriptName] = e;
+    }
+    if (at == end)
+        entries = read;
+}
+
+static void save()
+{
+    if (!dirty || path.empty())
+        return;
+    dirty = false;
+    std::string bytes(Magic, 8);
+    auto put = [&](const void *data, size_t n) { bytes.append(static_cast<const char *>(data), n); };
+    auto putString = [&](const std::string &value) {
+        uint32_t n = value.size();
+        put(&n, 4);
+        bytes += value;
+    };
+    putString(rubyBuild());
+    putString(game);
+    uint32_t count = entries.size();
+    put(&count, 4);
+    for (std::map<std::string, Entry>::const_iterator i = entries.begin(); i != entries.end(); ++i) {
+        putString(i->first);
+        put(&i->second.length, 4);
+        put(&i->second.crc, 4);
+        put(&i->second.adler, 4);
+        putString(i->second.binary);
+    }
+    uint32_t check = crc32(0, reinterpret_cast<const Bytef *>(bytes.data()), bytes.size());
+    put(&check, 4);
+
+    mkdir("ux0:/data/hardrpg/cache", 0777);
+    mkdir("ux0:/data/hardrpg/cache/scripts-v1", 0777);
+    const std::string temp = path + ".tmp";
+    FILE *f = fopen(temp.c_str(), "wb");
+    if (!f)
+        return;
+    bool ok = fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+    ok = fclose(f) == 0 && ok;
+    if (ok) {
+        remove(path.c_str());
+        ok = rename(temp.c_str(), path.c_str()) == 0;
+    }
+    if (!ok)
+        remove(temp.c_str());
+}
+
+static VALUE loadBinary(VALUE binary)
+{
+    VALUE iseqClass = rb_path2class("RubyVM::InstructionSequence");
+    return rb_funcall(iseqClass, rb_intern("load_from_binary"), 1, binary);
+}
+
+static VALUE compile(VALUE args)
+{
+    VALUE iseqClass = rb_path2class("RubyVM::InstructionSequence");
+    return rb_funcall(iseqClass, rb_intern("compile"), 2, rb_ary_entry(args, 0), rb_ary_entry(args, 1));
+}
+
+static VALUE toBinary(VALUE iseq)
+{
+    return rb_funcall(iseq, rb_intern("to_binary"), 0);
+}
+
+static VALUE evaluate(VALUE iseq)
+{
+    return rb_funcall(iseq, rb_intern("eval"), 0);
+}
+
+/* Runs one game script from the cache, or compiles it and keeps it. Returns
+ * false, with nothing run, when the script does not compile as is. */
+static bool eval(VALUE string, VALUE fname, bool last, int &state)
+{
+    const std::string name(RSTRING_PTR(fname), RSTRING_LEN(fname));
+    uint32_t length, crc, adler;
+    source(string, length, crc, adler);
+    VALUE iseq = Qnil;
+    int failed = 0;
+    std::map<std::string, Entry>::const_iterator found = entries.find(name);
+    if (found != entries.end()) {
+        const Entry *e = &found->second;
+        if (e->length == length && e->crc == crc && e->adler == adler) {
+            iseq = rb_protect(loadBinary, rb_str_new(e->binary.data(), e->binary.size()), &failed);
+            if (failed) {
+                rb_set_errinfo(Qnil);
+                iseq = Qnil;
+            }
+        }
+    }
+    if (NIL_P(iseq)) {
+        iseq = rb_protect(compile, rb_ary_new_from_args(2, string, fname), &failed);
+        if (failed) {
+            rb_set_errinfo(Qnil);
+            return false;
+        }
+        VALUE binary = rb_protect(toBinary, iseq, &failed);
+        if (failed) {
+            rb_set_errinfo(Qnil);
+        } else {
+            Entry e;
+            e.length = length;
+            e.crc = crc;
+            e.adler = adler;
+            e.binary.assign(RSTRING_PTR(binary), RSTRING_LEN(binary));
+            entries[name] = e;
+            dirty = true;
+        }
+    }
+    /* The last script runs the game and returns only when it ends. */
+    if (last)
+        save();
+    rb_protect(evaluate, iseq, &state);
+    return true;
+}
+}
+#endif
+
+#ifdef __vita__
+extern "C" void vitaScriptCacheFlush(void)
+{
+    ScriptCache::save();
+}
+#endif
+
 static void runCustomScript(const std::string &filename) {
     std::string scriptData;
     std::string scriptPath = filename;
@@ -1364,6 +1587,9 @@ static void runRMXPScripts(BacktraceData &btData) {
     if (exc != Qnil)
         return;
     
+#ifdef __vita__
+    ScriptCache::load(mkxp_fs::getCurrentDirectory() + "|" + scriptPack);
+#endif
     while (true) {
         vitaDiagLog("RUBY", "rgss_eval_begin count=%ld", scriptCount);
         vitaDiagLog("BOOTPERF", "rgss_eval_begin count=%ld", scriptCount);
@@ -1445,7 +1671,15 @@ static void runRMXPScripts(BacktraceData &btData) {
             
             int state;
             
+#ifdef __vita__
+            if (!ScriptCache::eval(string, fname, i + 1 == scriptCount, state)) {
+                if (i + 1 == scriptCount)
+                    ScriptCache::save();
+                evalString(string, fname, &state);
+            }
+#else
             evalString(string, fname, &state);
+#endif
             for (int repairs = 0; state && repairs < 16 && repairLegacySyntax(string); ++repairs) {
                 vitaDiagLog("RUBY", "rgss_legacy_syntax_repair index=%ld name=%s pass=%d",
                             i, scriptName, repairs + 1);

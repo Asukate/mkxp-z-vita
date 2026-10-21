@@ -116,8 +116,12 @@ struct VitaGLTexturePrefix
 
 #ifdef __vita__
 #include "vita_startup_timer.h"
+extern "C" void vitaScriptCacheFlush(void);
 static inline void vitaBootMarkFirstGamePresent()
 {
+	/* Writes newly compiled game scripts once the game draws: by then every
+	 * script before its main loop has run. Only a flag test otherwise. */
+	vitaScriptCacheFlush();
 	static bool done = false;
 	if (done)
 		return;
