@@ -212,20 +212,25 @@ std::string text(const json5pp::value &v, const char *name) {
 // source knows the game. RPG Maker keeps it in Graphics/Titles (XP),
 // Graphics/System/Title (VX) or Graphics/Titles1 (VX Ace), loose or inside
 // the game's encrypted archive. Without the game's data to say which file
-// the title uses, the largest picture there is taken.
+// the title uses, the largest picture there is taken. Games with a scripted
+// title (VorlorN) keep it in Graphics/Pictures as "Title...": those count
+// when there is nothing in the title folders.
 std::string lowered(std::string s) {
   for (auto &c : s)
     c = char(std::tolower((unsigned char)c));
   std::replace(s.begin(), s.end(), '\\', '/');
   return s;
 }
-bool titlePicture(const std::string &path) {
+// 2: a picture in a title folder, 1: a "Title..." picture, 0: neither.
+int titlePicture(const std::string &path) {
   auto p = lowered(path);
   auto ext = p.substr(p.find_last_of('.') == std::string::npos ? p.size() : p.find_last_of('.'));
   if (ext != ".png" && ext != ".jpg" && ext != ".jpeg")
-    return false;
-  return p.rfind("graphics/titles/", 0) == 0 || p.rfind("graphics/titles1/", 0) == 0 ||
-         p.rfind("graphics/system/title.", 0) == 0;
+    return 0;
+  if (p.rfind("graphics/titles/", 0) == 0 || p.rfind("graphics/titles1/", 0) == 0 ||
+      p.rfind("graphics/system/title.", 0) == 0)
+    return 2;
+  return p.rfind("graphics/pictures/title", 0) == 0 ? 1 : 0;
 }
 std::string readFile(const std::string &path, size_t limit) {
   std::string out;
@@ -253,22 +258,25 @@ std::string entryNamed(const std::string &dir, const std::string &want) {
 std::string looseTitle(const std::string &game) {
   std::string best;
   size_t bestSize = 0;
+  int bestRank = 0;
   auto graphics = entryNamed(game, "Graphics");
   if (graphics.empty())
     return "";
-  for (const char *sub : {"Titles1", "Titles", "System"}) {
+  for (const char *sub : {"Titles1", "Titles", "System", "Pictures"}) {
     auto folder = entryNamed(game + "/" + graphics, sub);
     if (folder.empty())
       continue;
     auto dir = game + "/" + graphics + "/" + folder;
     if (DIR *d = opendir(dir.c_str())) {
       while (auto *e = readdir(d)) {
-        if (!titlePicture(std::string("Graphics/") + sub + "/" + e->d_name))
+        int rank = titlePicture(std::string("Graphics/") + sub + "/" + e->d_name);
+        if (!rank)
           continue;
         struct stat st;
         auto path = dir + "/" + e->d_name;
-        if (stat(path.c_str(), &st) == 0 && size_t(st.st_size) > bestSize && size_t(st.st_size) <= maxDownload)
-          best = path, bestSize = size_t(st.st_size);
+        if (stat(path.c_str(), &st) == 0 && size_t(st.st_size) <= maxDownload &&
+            (rank > bestRank || (rank == bestRank && size_t(st.st_size) > bestSize)))
+          best = path, bestSize = size_t(st.st_size), bestRank = rank;
       }
       closedir(d);
     }
@@ -294,7 +302,11 @@ std::string archiveTitle(const std::string &path) {
   struct Entry {
     long offset;
     uint32_t size, key;
-  } best{0, 0, 0};
+    int rank;
+  } best{0, 0, 0, 0};
+  auto better = [&](int rank, uint32_t size) {
+    return rank && size <= maxDownload && (rank > best.rank || (rank == best.rank && size > best.size));
+  };
   if (std::fread(magic, 1, 8, f) == 8 && std::memcmp(magic, "RGSSAD\0", 7) == 0) {
     if (magic[7] == 1) {
       uint32_t key = 0xDEADCAFE, n, size;
@@ -311,8 +323,8 @@ std::string archiveTitle(const std::string &path) {
           break;
         size ^= key, key = key * 7 + 3;
         long offset = std::ftell(f);
-        if (titlePicture(name) && size > best.size && size <= maxDownload)
-          best = {offset, size, key};
+        if (better(titlePicture(name), size))
+          best = {offset, size, key, titlePicture(name)};
         if (std::fseek(f, long(size), SEEK_CUR) != 0)
           break;
       }
@@ -332,8 +344,8 @@ std::string archiveTitle(const std::string &path) {
             break;
           for (size_t i = 0; i < name.size(); ++i)
             name[i] = char((unsigned char)name[i] ^ ((key >> (8 * (i % 4))) & 0xff));
-          if (titlePicture(name) && size > best.size && size <= maxDownload)
-            best = {long(offset), size, start};
+          if (better(titlePicture(name), size))
+            best = {long(offset), size, start, titlePicture(name)};
         }
       }
     }

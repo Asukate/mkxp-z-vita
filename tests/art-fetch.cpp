@@ -424,10 +424,21 @@ int main(int argc, char **argv) {
     archive(version, dir + (version == 1 ? "/Packed.rgssad" : "/Game.rgss3a"),
             {{"Data\\Map001.rxdata", std::string(5000, 'x')},
              {version == 1 ? "Graphics\\Titles\\Title.jpg" : "Graphics\\Titles1\\Night.jpg", title},
-             {"Graphics\\Pictures\\Big.jpg", other + other}});
+             {"Graphics\\Pictures\\Big.jpg", other + other},
+             {"Graphics\\Pictures\\Title_Logo.jpg", other + other + other}});
     auto folder = "packed" + std::to_string(version);
     assert(job("Unknown Packed Game " + std::to_string(version), folder, dir) == 1);
     assert(read(root + "/art/" + folder + "/cover.jpg") == title);
+  }
+  // A scripted title (VorlorN): only Graphics/Pictures/Title_* pictures.
+  {
+    auto dir = root + "/games/scripted";
+    mkdir(dir.c_str(), 0777);
+    archive(1, dir + "/Scripted.rgssad",
+            {{"Graphics\\Pictures\\Title_Begin.jpg", small.substr(0, small.size() / 2)}, {"Graphics\\Pictures\\Title_Background.jpg", title},
+             {"Graphics\\Pictures\\Map.jpg", other + other}});
+    assert(job("Unknown Scripted Game", "scripted", dir) == 1);
+    assert(read(root + "/art/scripted/cover.jpg") == title);
   }
   ArtFetch::setTransport(nullptr);
   std::cout << "art-fetch: all checks passed\n";
