@@ -110,3 +110,27 @@ diff --git a/src/filefinder_rtp.cpp b/src/filefinder_rtp.cpp
  	AddPath("ux0:/data/easyrpg-player/rtp/" + version_str);
  #elif defined(__MORPHOS__)
  	AddPath("PROGDIR:rtp/" + version_str);
+diff --git a/src/player.cpp b/src/player.cpp
+--- a/src/player.cpp
++++ b/src/player.cpp
+@@ -406,10 +406,20 @@
+ 	return frames;
+ }
+ 
++#ifdef __vita__
++// HardRPG: defined by its Vita entry point; restarts the launcher.
++void HardRpgReturnToLauncher();
++#endif
++
+ void Player::Exit() {
+ 	if (player_config.settings_autosave.Get()) {
+ 		Scene_Settings::SaveConfig(true);
+ 	}
++#ifdef __vita__
++	// HardRPG: go back to the launcher before the display and audio threads
++	// are torn down. Saves and the config are already written.
++	HardRpgReturnToLauncher();
++#endif
+ 
+ 	Graphics::UpdateSceneCallback();
+ #ifdef EMSCRIPTEN

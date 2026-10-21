@@ -21,12 +21,24 @@ void report(const std::string &message) {
     std::fclose(f);
   }
 }
-void returnToLibrary() {
+// Leaving a game restarts the launcher. The patched Player::Exit() calls this
+// before the display and audio threads are torn down, and main() calls it
+// again once the player loop ends. Relying on the atexit handler alone left
+// HardRPG closed after a game quit, with no report from this function (0.3.0).
+// The handler stays for exit() calls such as Output::Error.
+bool returning = false;
+void returnToLibrary(const char *from) {
+  if (returning)
+    return;
+  returning = true;
+  sceClibPrintf("HardRPG EasyRPG: returning to the launcher from %s\n", from);
   std::remove(request);
   char back[] = "--hardrpg-return";
   char *args[] = {back, nullptr};
   int rc = sceAppMgrLoadExec("app0:/eboot.bin", args, nullptr);
-  report("Could not return to HardRPG (LoadExec " + std::to_string(rc) + ").");
+  // Vita3K returns 0 and swaps the process later; only an error is a failure.
+  if (rc < 0)
+    report("Could not return to HardRPG (LoadExec " + std::to_string(rc) + ").");
   sceKernelExitProcess(Player::exit_code);
 }
 void log(LogLevel level, const std::string &message, LogCallbackUserData) {
@@ -36,9 +48,11 @@ void log(LogLevel level, const std::string &message, LogCallbackUserData) {
     report(message);
 }
 } // namespace
+// Called by the patched Player::Exit() once saves and the config are written.
+void HardRpgReturnToLauncher() { returnToLibrary("Player::Exit"); }
 int main(int argc, char **argv) {
   sceClibPrintf("HardRPG EasyRPG backend\n");
-  std::atexit(returnToLibrary);
+  std::atexit([] { returnToLibrary("atexit"); });
   try {
     bool play = false;
     for (int i = 0; i < argc; ++i)
@@ -71,5 +85,6 @@ int main(int argc, char **argv) {
     Player::exit_code = 1;
     report(error.what());
   }
+  returnToLibrary("main");
   return Player::exit_code;
 }
