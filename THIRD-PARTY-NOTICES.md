@@ -21,6 +21,10 @@ in source. The source paths below refer to the matching source distribution.
 | stb_image | Dual public-domain / MIT terms in its header. |
 | dr_mp3 | MIT-0 terms in `deps/dr_libs/dr_mp3.h`. |
 | Liberation fonts | SIL Open Font License 1.1, including the packaged `launcher/font.ttf`; [license](LICENSES/Liberation.txt). |
+| Rajdhani | Launcher title font `launcher/font-display.ttf`, Indian Type Foundry; SIL Open Font License 1.1, [license](LICENSES/Rajdhani.txt). |
+| Russo One | Its letter outlines form the HardRPG wordmark (`launcher/art/wordmark*.svg`, rendered to `launcher/ui/wordmark-*.png`); Jovanny Lemonad, SIL Open Font License 1.1, [license](LICENSES/RussoOne.txt). The font file is kept only as a build source in `launcher/art/fonts/` and is not packaged. |
+| PlayStation Vita illustration | `launcher/ui/vita-640.png`, Tokyoship, Wikimedia Commons, CC BY 3.0, modified; [notice](LICENSES/Vita-illustration.txt). |
+| Launcher icons and emblem | Project-authored. SVG masters and the scripts that make them are in `launcher/art/`; the emblem is traced from HardRPG's own splash image. |
 | WenQuanYi Micro Hei | Optional CJK fallback; GPL v3 with font embedding exception / Apache 2.0. See [font notices](LICENSES/WenQuanYi.txt). |
 | EasyRPG Player backend | Optional native-launcher backend, Player 0.8.1.1 (`78328fa29f465315291e161130e6682f69410370`), GPL-3.0-or-later. HardRPG entry point and dated patch: `backends/easyrpg/`, `deps/patches/easyrpg/`. Source: https://github.com/EasyRPG/Player. |
 | liblcf | 0.8.1 (`92c4450a1bc1acb58bd02bbb99b57e5036919cdf`), MIT. Source: https://github.com/EasyRPG/liblcf. |
@@ -35,7 +39,7 @@ PhysicsFS (zlib), uchardet (MPL-1.1 / GPL / LGPL), and libiconv (LGPL).
 
 The VPK includes this document as `THIRD-PARTY-NOTICES.md` and the following
 files under `licenses/`: `GPL-2.0.txt` (the engine's `COPYING`), `GPL-3.0.txt`,
-`LGPL-3.0.txt`, `Liberation.txt`, `math-neon.txt`, `libnsgif.txt`, `curl.txt`, `MPL-2.0.txt`, `FluidLite.txt`, and `TimGM6mb.txt`. Other
+`LGPL-3.0.txt`, `Liberation.txt`, `math-neon.txt`, `libnsgif.txt`, `curl.txt`, `MPL-2.0.txt`, `FluidLite.txt`, `TimGM6mb.txt`, `Rajdhani.txt` and `Vita-illustration.txt`. Other
 component notices remain in their source files or dependency source trees.
 The matching source revision, patches, dependency lock, and build recipes
 must accompany binary distribution. The repository includes no commercial game
