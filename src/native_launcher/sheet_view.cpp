@@ -388,20 +388,28 @@ void View::buildSheet(const UI &u) {
       notes = {"Folders are searched for games each time HardRPG starts. Removing a folder here keeps its games and saves."};
       left = {hint("btn-cross-26", "Browse", Button::Cross), hint("btn-square-26", "Remove", Button::Square), back};
     } else if (u.page == Page::Keys) {
-      title = "Artwork sources";
-      subtitle = "Asked in this order for covers, backgrounds and details";
+      title = "Game info and artwork";
+      subtitle = "Covers, backgrounds, logos and details such as the year, developer and description";
       // A key shows only its ends, so it is recognisable but not readable over a shoulder.
       auto masked = [](const std::string &key) {
         return key.empty() ? std::string("Add a key") : key.size() <= 8 ? std::string("Saved") : key.substr(0, 4) + "\xe2\x80\xa6" + key.substr(key.size() - 4);
       };
+      row(Row::Toggle, "Blur adult artwork", "", u.blurAdult);
       row(Row::Nav, "SteamGridDB", masked(u.readKey(0)));
       row(Row::Nav, "RAWG", masked(u.readKey(1)));
       row(Row::Info, "Steam", "No key needed");
       row(Row::Info, "VNDB", "No key needed");
       focusRow = u.setting;
-      notes = {"SteamGridDB: covers, backgrounds and logos for almost any game. Free key: steamgriddb.com, Preferences, API.",
-               "RAWG: release dates, developers, publishers and genres. Free key: rawg.io/apidocs."};
-      left = {hint("btn-cross-26", "Type key", Button::Cross), hint("btn-square-26", "Remove key", Button::Square), back};
+      if (u.setting == 0)
+        notes = {"Covers and backgrounds a source marks as adult are shown blurred in the library and the artwork chooser."};
+      else
+        notes = {"Sources are asked in this order. Steam and VNDB need no key.",
+                 "SteamGridDB: covers, backgrounds and logos for almost any game. Free key: steamgriddb.com, Preferences, API.",
+                 "RAWG: release dates, developers, publishers and genres. Free key: rawg.io/apidocs."};
+      left = {u.setting == 0 ? hint("btn-cross-26", "Change", Button::Cross) : hint("btn-cross-26", "Type key", Button::Cross)};
+      if (u.setting > 0)
+        left.push_back(hint("btn-square-26", "Remove key", Button::Square));
+      left.push_back(back);
     } else if (u.page == Page::Errors) {
       title = "Game error history";
       for (auto &record : u.errors)
@@ -422,8 +430,7 @@ void View::buildSheet(const UI &u) {
       row(Row::Nav, "Performance and speed");
       row(Row::Nav, "Release checks", u.automaticUpdates ? "At startup" : "Off");
       int keys = !u.readKey(0).empty() + !u.readKey(1).empty();
-      row(Row::Nav, "Artwork sources", keys ? std::to_string(2 + keys) + " sources" : "Steam, VNDB");
-      row(Row::Toggle, "Blur adult artwork", "", u.blurAdult);
+      row(Row::Nav, "Game info and artwork", keys ? std::to_string(2 + keys) + " sources" : "Steam, VNDB");
       row(Row::Action, "Exit HardRPG");
       focusRow = u.setting;
       first = u.settingFirst;

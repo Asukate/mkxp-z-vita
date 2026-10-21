@@ -891,7 +891,7 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
     if (beginLayer(panelLayer, key, menuW, 30 + 5 * menuRowH + 8)) {
       rect(0, 0, menuW, 30 + 5 * menuRowH + 8, {22, 22, 24}, 248, 12);
       label(14, 9, e->name, 12, faint, 255, false, -1, menuW - 28);
-      const char *rows[] = {fav ? "Remove from favourites" : "Add to favourites", "Download artwork", "Artwork for all games",
+      const char *rows[] = {fav ? "Remove from favourites" : "Add to favourites", "Download game info", "Game info for all games",
                             "Game settings", "Rename"};
       for (int i = 0; i < 5; ++i) {
         int y = 30 + i * menuRowH;

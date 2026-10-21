@@ -328,15 +328,19 @@ class NativeLauncher(unittest.TestCase):
 
     def test_launcher_preferences_and_artwork_keys(self):
         prefs=self.root/'launcher-preferences.json'
-        # Settings: Artwork sources is row 6, Blur adult artwork row 7.
-        state=self.ui(SETTINGS+',down'*7+',cross')
+        # Settings: Game info and artwork is row 6; Exit follows it. On that
+        # page the adult artwork blur is first, then the two source keys.
+        info=SETTINGS+',down'*6+',cross'
+        self.assertEqual(self.ui(info)['page'],12)
+        self.assertTrue(self.ui(SETTINGS+',down'*7+',cross')['exitRequested'])
+        state=self.ui(info+',cross')
         self.assertFalse(state['blurAdult'])
         self.assertIs(json.loads(prefs.read_text())['blurAdult'],False)
         self.assertFalse(self.ui()['blurAdult'])
         prefs.write_text('{broken')
         self.assertTrue(self.ui()['blurAdult'])            # a damaged file falls back to blurring
-        keys=SETTINGS+',down'*6+',cross'
-        self.assertEqual(self.ui(keys)['page'],12)
+        self.ui(info+',square')                            # Square on the blur row removes nothing
+        keys=info+',down'
         grid,rawg=self.root/'steamgriddb-key.txt',self.root/'rawg-key.txt'
         # Typed keys keep only letters and digits.
         self.run_binary('--text','ab12-CD 34','--actions',keys+',cross')

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <ctime>
 #include <curl/curl.h>
@@ -33,26 +34,103 @@ std::string plain(const std::string &s) {
       out += char(std::tolower(c));
   return out;
 }
-// The name to search for: without bracketed notes or version numbers.
-std::string searchTerm(const std::string &name) {
-  std::string out;
+// Names to search for, best first. Game folders and zips are often named
+// "YumeNikki.zip", "Mogeko Castle - English VX Ace" or "Game_v1.2 [ENG]":
+// the extension, bracketed notes, version numbers and tags such as the
+// language or the engine are dropped, and joined words are split.
+std::vector<std::string> searchTerms(const std::string &name) {
+  auto lower = [](std::string s) {
+    for (auto &c : s)
+      c = char(std::tolower((unsigned char)c));
+    return s;
+  };
+  std::string base = name;
+  for (const char *ext : {".zip", ".7z", ".rar", ".exe"}) {
+    size_t n = std::strlen(ext);
+    if (base.size() > n && lower(base.substr(base.size() - n)) == ext)
+      base.resize(base.size() - n);
+  }
+  // Words, without bracketed notes; '_' separates words too.
+  std::vector<std::string> words;
+  std::string word;
   int depth = 0;
-  for (char c : name) {
-    if (c == '(' || c == '[')
+  for (char c : base + " ") {
+    if (c == '(' || c == '[' || c == '{')
       ++depth;
-    else if ((c == ')' || c == ']') && depth)
+    else if ((c == ')' || c == ']' || c == '}') && depth)
       --depth;
-    else if (!depth)
-      out += c;
+    else if (depth)
+      continue;
+    else if (c == ' ' || c == '_') {
+      if (!word.empty())
+        words.push_back(word);
+      word.clear();
+    } else
+      word += c;
   }
-  for (const char *marker : {" v1", " v2", " v0", " ver", " Ver", " V1", " V2"}) {
-    auto at = out.find(marker);
-    if (at != std::string::npos && at > 2)
-      out.resize(at);
+  // Stop at a version ("v1.2", "Ver. 1.089", "version 3") and leave out tags.
+  static const char *const tags[] = {"english", "eng", "translated", "translation", "patched", "uncensored",
+                                     "vx", "ace", "vxace", "xp", "mv", "mz", "rpgmaker", "rpgm", "2k", "2k3"};
+  std::string out;
+  for (size_t i = 0; i < words.size(); ++i) {
+    auto w = lower(words[i]);
+    bool version = (w.size() > 1 && w[0] == 'v' && std::isdigit((unsigned char)w[1])) || w == "ver" ||
+                   w == "ver." || w == "version" || (w.rfind("ver.", 0) == 0 && w.size() > 4);
+    if (version && i > 0)
+      break;
+    std::string bare;
+    for (char c : w)
+      if (std::isalnum((unsigned char)c))
+        bare += c;
+    bool tag = false;
+    for (auto *t : tags)
+      tag = tag || bare == t;
+    if (tag && i > 0)
+      continue;
+    out += (out.empty() ? "" : " ") + words[i];
   }
-  while (!out.empty() && (out.back() == ' ' || out.back() == '-' || out.back() == '_'))
+  while (!out.empty() && (out.back() == ' ' || out.back() == '-' || out.back() == ':'))
     out.pop_back();
-  return out.empty() ? name : out;
+  if (out.empty())
+    out = base;
+  std::vector<std::string> terms{out};
+  auto add = [&](const std::string &t) {
+    if (!t.empty() && std::find(terms.begin(), terms.end(), t) == terms.end())
+      terms.push_back(t);
+  };
+  // "YumeNikki" -> "Yume Nikki".
+  std::string split;
+  for (size_t i = 0; i < out.size(); ++i) {
+    if (i && std::isupper((unsigned char)out[i]) && std::islower((unsigned char)out[i - 1]))
+      split += ' ';
+    split += out[i];
+  }
+  add(split);
+  // "N.P.C. Dreams" -> "NPC Dreams".
+  std::string undotted;
+  for (char c : split)
+    if (c != '.')
+      undotted += c;
+  add(undotted);
+  return terms;
+}
+// How alike two plain names are, from 0 to 1 (edit distance).
+double likeness(const std::string &a, const std::string &b) {
+  if (a.empty() || b.empty())
+    return 0;
+  std::vector<size_t> row(b.size() + 1);
+  for (size_t j = 0; j <= b.size(); ++j)
+    row[j] = j;
+  for (size_t i = 1; i <= a.size(); ++i) {
+    size_t diag = row[0];
+    row[0] = i;
+    for (size_t j = 1; j <= b.size(); ++j) {
+      size_t up = row[j];
+      row[j] = std::min({row[j] + 1, row[j - 1] + 1, diag + (a[i - 1] != b[j - 1])});
+      diag = up;
+    }
+  }
+  return 1.0 - double(row[b.size()]) / double(std::max(a.size(), b.size()));
 }
 bool exists(const std::string &path) {
   struct stat st;
@@ -215,7 +293,15 @@ struct ArtFetch::State {
       if (n.size() >= 4 && (n.find(w) != std::string::npos || w.find(n) != std::string::npos))
         return int(i);
     }
-    return -1;
+    // Close spellings: "Yume Nikki" and "Yume Nikki!", "Ib" remakes aside.
+    int best = -1;
+    double score = 0.8;
+    for (size_t i = 0; i < names.size(); ++i) {
+      double l = likeness(w, plain(names[i]));
+      if (l >= score)
+        best = int(i), score = l;
+    }
+    return best;
   }
   // Downloads url and saves it as dir/kind.<ext> if it is a picture we can read.
   bool save(const std::string &url, const std::string &dir, const char *kind) {
@@ -506,22 +592,28 @@ struct ArtFetch::State {
   // can be blended field by field, or offered side by side.
   std::vector<Found> gather(const std::string &name, bool everything) {
     std::vector<Found> all;
-    auto term = searchTerm(name);
+    auto terms = searchTerms(name);
     const bool need[3] = {true, true, true};
-    auto ask = [&](const std::function<void(Found &)> &source) {
-      if (cancel)
-        return;
-      Found f;
-      source(f);
-      if (!f.source.empty())
-        all.push_back(std::move(f));
+    // Each source is asked with the first spelling, then the others until it
+    // knows the game.
+    auto ask = [&](const std::function<void(const std::string &, Found &)> &source) {
+      for (auto &term : terms) {
+        if (cancel)
+          return;
+        Found f;
+        source(term, f);
+        if (!f.source.empty()) {
+          all.push_back(std::move(f));
+          return;
+        }
+      }
     };
-    ask([&](Found &f) { steamGrid(term, need, f); });
-    ask([&](Found &f) { steam(term, f); });
-    ask([&](Found &f) { rawg(term, f); });
+    ask([&](const std::string &t, Found &f) { steamGrid(t, need, f); });
+    ask([&](const std::string &t, Found &f) { steam(t, f); });
+    ask([&](const std::string &t, Found &f) { rawg(t, f); });
     // VNDB is slow to search and rarely needed when another source knew the game.
     if (everything || all.empty() || pickUrl(all, 0).empty())
-      ask([&](Found &f) { vndb(term, f); });
+      ask([&](const std::string &t, Found &f) { vndb(t, f); });
     return all;
   }
   static const Found *from(const std::vector<Found> &all, const char *source) {
@@ -615,7 +707,7 @@ struct ArtFetch::State {
     Choices offer;
     offer.key = job.key;
     offer.name = job.name;
-    std::vector<std::string> bytes[3], paths[3];
+    std::vector<std::string> bytes[3], paths[3], sources[3];
     for (int k = 0; k < 3; ++k) {
       auto now = current(job, kinds[k]);
       std::string nowBytes;
@@ -630,6 +722,7 @@ struct ArtFetch::State {
         offer.options[k].push_back({"Current", thumbnail(Image::load(now), k), true});
         bytes[k].push_back("");
         paths[k].push_back(now);
+        sources[k].push_back("Current");
       }
       std::vector<std::string> seen;
       for (auto &f : all) {
@@ -646,6 +739,7 @@ struct ArtFetch::State {
         offer.options[k].push_back({f.source, thumbnail(img, k), false, f.adult});
         bytes[k].push_back(std::move(data));
         paths[k].push_back("");
+        sources[k].push_back(f.source);
       }
     }
     // Ask only when there is a real choice; otherwise take what was found.
@@ -682,9 +776,13 @@ struct ArtFetch::State {
         return false;
     }
     bool found = false;
+    // The sources whose pictures were taken: picking one confirms that source
+    // found the right game, so only those supply the details.
+    std::vector<std::string> trusted;
     for (int k = 0; k < 3; ++k) {
       if (pick[k] < 0 || pick[k] >= int(bytes[k].size()) || bytes[k][pick[k]].empty())
         continue; // nothing, or the current picture kept
+      trusted.push_back(sources[k][pick[k]]);
       // Replace in the folder the game's art is read from.
       auto now = paths[k].empty() ? "" : paths[k][0];
       auto dir = now.empty() ? root + job.folder + "/" : now.substr(0, now.find_last_of('/') + 1);
@@ -694,14 +792,25 @@ struct ArtFetch::State {
       const char *ext = uint8_t(data[0]) == 0x89 ? ".png" : uint8_t(data[0]) == 0xff ? ".jpg" : ".webp";
       found = write(dir, std::string(kinds[k]) + ext, data) || found;
     }
-    // The facts are refreshed whenever a single game is looked up.
+    // Everything kept (or the chooser closed): the lookup found the wrong
+    // game or nothing better, so the details stay as they are too.
+    if (ask && trusted.empty()) {
+      note("Kept the current artwork and details.");
+      return false;
+    }
+    std::vector<Found> facts;
+    for (auto &f : all)
+      if (!ask || std::find(trusted.begin(), trusted.end(), f.source) != trusted.end())
+        facts.push_back(f);
+    if (facts.empty())
+      return found;
     std::string infoDir = root + job.folder + "/";
     for (auto &dir : job.existing)
       if (exists(root + dir + "/info.json")) {
         infoDir = root + dir + "/";
         break;
       }
-    found = write(infoDir, "info.json", infoJson(all)) || found;
+    found = write(infoDir, "info.json", infoJson(facts)) || found;
     return found;
   }
 

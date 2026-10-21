@@ -212,7 +212,7 @@ void UI::scroll(int rows) {
     int count = page == Page::Errors    ? errors.size()
                 : page == Page::Folders ? 1 + gameFolders.size()
                 : page == Page::Home    ? settingsRows()
-               : page == Page::Keys    ? keyCount
+               : page == Page::Keys    ? keysRows
                 : page == Page::Metrics ? 2
                                         : 3;
     setting = std::max(0, std::min(setting + rows, std::max(0, count - 1)));
@@ -351,7 +351,7 @@ void UI::sheetTouch(int x, int y) {
   }
   if (focus == Focus::Settings) {
     int count = page == Page::Home      ? settingsRows()
-                : page == Page::Keys    ? keyCount
+                : page == Page::Keys    ? keysRows
                 : page == Page::Updates ? 3
                 : page == Page::Display ? 3
                 : page == Page::Metrics ? 2
@@ -1063,12 +1063,6 @@ void UI::openSetting() {
       return;
     }
     if (setting == 7) {
-      blurAdult = !blurAdult;
-      savePreferences();
-      message = blurAdult ? "Adult artwork is blurred." : "Adult artwork is shown as is.";
-      return;
-    }
-    if (setting == 8) {
       exitRequested = true;
       return;
     }
@@ -1084,7 +1078,12 @@ void UI::openSetting() {
     return;
   }
   if (page == Page::Keys) {
-    editKey(setting);
+    if (setting == 0) {
+      blurAdult = !blurAdult;
+      savePreferences();
+      message = blurAdult ? "Adult artwork is blurred." : "Adult artwork is shown as is.";
+    } else
+      editKey(setting - 1);
     return;
   }
   if (page == Page::Errors) {
@@ -1205,7 +1204,7 @@ void UI::action(Button b) {
              page == Page::Errors    ? errors.size()
              : page == Page::Folders ? 1 + gameFolders.size()
              : page == Page::Home    ? settingsRows()
-               : page == Page::Keys    ? keyCount
+               : page == Page::Keys    ? keysRows
              : page == Page::Metrics ? 2
                                      : 3,
              7, step);
@@ -1222,8 +1221,8 @@ void UI::action(Button b) {
           model.activeErrorPath = errors[setting].path;
           message = "Saved: " + model.exportError();
         }
-      } else if (page == Page::Keys) {
-        std::remove(keyFile(setting).c_str());
+      } else if (page == Page::Keys && setting > 0) {
+        std::remove(keyFile(setting - 1).c_str());
         message = "Key removed.";
       } else if (page == Page::Rtp) {
         model.setRtp(packs[rtpSelected]);

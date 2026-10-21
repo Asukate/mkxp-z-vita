@@ -39,7 +39,7 @@ std::vector<std::string> UI::artFolders(const Entry &e) const {
 
 void UI::fetchArt(bool all) {
   if (artFetch && artFetch->running()) {
-    message = "Artwork is already downloading.";
+    message = "Game info is already downloading.";
     return;
   }
   std::vector<ArtFetch::Job> jobs;
@@ -55,13 +55,13 @@ void UI::fetchArt(bool all) {
   } else if (auto *e = homeEntry())
     add(*e);
   if (jobs.empty()) {
-    message = "Collections get artwork for each game inside them.";
+    message = "Collections get game info for each game inside them.";
     return;
   }
   if (!artFetch)
     artFetch.reset(new ArtFetch);
   artFetch->start(std::move(jobs), model.paths.at("art/"), model.paths.at(""), all);
-  message = all ? "Looking for artwork..." : "Looking for artwork for " + homeEntry()->name + "...";
+  message = all ? "Looking for game info..." : "Looking for game info for " + homeEntry()->name + "...";
 }
 
 bool UI::pollArt() {
@@ -96,10 +96,10 @@ bool UI::pollArt() {
   if (!p.note.empty())
     text = p.note;
   else if (p.finished)
-    text = p.total == 1 ? (p.found ? "Artwork downloaded." : "No artwork found for this game.")
-                        : "Artwork found for " + std::to_string(p.found) + " of " + std::to_string(p.total) + " games.";
+    text = p.total == 1 ? (p.found ? "Game info and artwork saved." : "No game info found for this game.")
+                        : "Game info found for " + std::to_string(p.found) + " of " + std::to_string(p.total) + " games.";
   else if (p.total > 1)
-    text = "Downloading artwork " + std::to_string(p.done + 1) + " of " + std::to_string(p.total) + ": " + p.current;
+    text = "Downloading game info " + std::to_string(p.done + 1) + " of " + std::to_string(p.total) + ": " + p.current;
   else
     text = message;
   bool changed = text != message || !p.updated.empty();
@@ -137,7 +137,7 @@ void UI::finishChoosing(bool save) {
     artFetch->choose(save ? artPick : keep);
   home.panel = Home::NoPanel;
   artChoices = ArtFetch::Choices{};
-  message = save ? "Saving artwork..." : "Kept the current artwork.";
+  message = save ? "Saving..." : "Kept the current artwork and details.";
 }
 std::string UI::entryKey(const Entry &e) const { return key(e.node.identity(model.paths)); }
 

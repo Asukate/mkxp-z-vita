@@ -252,10 +252,12 @@ public:
   void touch(int x, int y);
   // Touch on the sheets (every screen but home).
   void sheetTouch(int x, int y);
-  // Rows on the settings page; the last two are the artwork blur and Exit.
-  int settingsRows() const { return 9; }
-  // Artwork source keys, typed on the Vita keyboard (Page::Keys).
+  // Rows on the settings page; the last is Exit.
+  int settingsRows() const { return 8; }
+  // The game info page (Page::Keys): the adult artwork blur, then the source
+  // keys, typed on the Vita keyboard.
   static constexpr int keyCount = 2;
+  static constexpr int keysRows = 1 + keyCount;
   std::string keyFile(int index) const;
   std::string readKey(int index) const;
   void editKey(int index);

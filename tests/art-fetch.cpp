@@ -157,6 +157,56 @@ int main(int argc, char **argv) {
     finish(fetch);
   }
   assert(read(dir + "cover.jpg") == other && read(dir + "hero.jpg") == hero);
+
+  // 5. Keeping every current picture (or closing the chooser) leaves the
+  // details alone: the lookup may have found another game.
+  auto before = read(dir + "info.json");
+  steamCover = picture(120);
+  steamItem.replace(steamItem.find("Steam text"), 10, "Wrong text");
+  {
+    ArtFetch fetch;
+    auto p = run(fetch, "Blend Game", "blend-game", false);
+    assert(p.choosing);
+    ArtFetch::Choices offer;
+    assert(fetch.takeChoices(offer));
+    int keep[3] = {-1, -1, -1};
+    fetch.choose(keep);
+    finish(fetch);
+    p = fetch.poll();
+    assert(p.found == 0 && p.note.find("Kept") != std::string::npos);
+  }
+  assert(read(dir + "info.json") == before && read(dir + "cover.jpg") == other);
+
+  // 6. Zip and folder names are cleaned before searching: "YumeNikki.zip"
+  // is looked up as "YumeNikki", then "Yume Nikki".
+  std::string asked;
+  steamSearch = "{\"items\":[{\"name\":\"YUMENIKKI -DREAM DIARY-\",\"id\":11},{\"name\":\"Yume Nikki\",\"id\":10}]}";
+  ArtFetch::setTransport([&](const std::string &url, const std::string &, std::string &out) {
+    if (url.find("storesearch") != std::string::npos) {
+      asked += url.substr(url.find("term=") + 5) + ";";
+      out = steamSearch;
+    } else if (url.find("GetItems") != std::string::npos)
+      out = steamItem;
+    else if (url.find("img/cover") != std::string::npos)
+      out = cover;
+    else
+      return false;
+    return true;
+  });
+  {
+    ArtFetch fetch;
+    assert(run(fetch, "YumeNikki.zip", "yume", true).found == 1);
+  }
+  assert(asked == "YumeNikki;" && exists(root + "/art/yume/cover.jpg"));
+  // "Mogeko Castle - English VX Ace" is looked up without its tags.
+  asked.clear();
+  steamSearch = "{\"items\":[]}";
+  {
+    ArtFetch fetch;
+    run(fetch, "Mogeko Castle - English VX Ace", "mogeko", true);
+    finish(fetch);
+  }
+  assert(asked == "Mogeko%20Castle;");
   ArtFetch::setTransport(nullptr);
   std::cout << "art-fetch: all checks passed\n";
 }
