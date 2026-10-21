@@ -217,6 +217,8 @@ enum InterpolationMethod
 #ifdef MKXPZ_SSL
 	xBRZ = 4,
 #endif
+	// Nearest inside each source pixel, blended only across its edges.
+	SharpBilinear = 5,
 };
 
 enum SpecialScale

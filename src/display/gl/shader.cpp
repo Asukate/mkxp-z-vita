@@ -60,6 +60,7 @@ extern "C" void glProgramBinary(GLuint, GLenum, const void *, GLsizei);
 #include "flashMap.frag.xxd"
 #include "bicubic.frag.xxd"
 #include "lanczos3.frag.xxd"
+#include "sharp.frag.xxd"
 #ifdef MKXPZ_SSL
 #include "xbrz.frag.xxd"
 #endif
@@ -1598,6 +1599,22 @@ void Lanczos3Shader::setTexSize(const Vec2i &value)
 {
 	ShaderBase::setTexSize(value);
 	gl.Uniform2f(u_sourceSize, (float)value.x, (float)value.y);
+}
+
+SharpShader::SharpShader() : Lanczos3Shader(ShaderNoConstructTag("SharpShader"))
+{
+	INIT_SHADER(simple, sharp, SharpShader);
+
+	ShaderBase::init();
+
+	GET_U(texOffsetX);
+	GET_U(sourceSize);
+	GET_U(outputScale);
+}
+
+void SharpShader::setOutputScale(const Vec2 &value)
+{
+	gl.Uniform2f(u_outputScale, value.x, value.y);
 }
 
 #ifdef MKXPZ_SSL

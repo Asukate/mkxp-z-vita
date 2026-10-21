@@ -12,6 +12,20 @@
 #include <vector>
 
 namespace hardrpg {
+// Game filtering ("smoothScaling"), in the order the launcher offers them:
+// Nearest, Sharp (even pixels at any scale, the default) and Bilinear.
+constexpr int filterCount = 3, filterDefault = 5;
+constexpr int filterValues[filterCount] = {0, 5, 1};
+constexpr const char *filterNames[filterCount] = {"Nearest", "Sharp", "Bilinear"};
+// Position of a stored value in filterValues; -1 when it is not one of them.
+inline int filterIndex(const json5pp::value &v) {
+  if (!v.is_integer())
+    return -1;
+  for (int i = 0; i < filterCount; ++i)
+    if (v.as_integer() == filterValues[i])
+      return i;
+  return -1;
+}
 using Json = json5pp::value;
 using Progress = std::function<void(uint64_t, uint64_t)>;
 using PreparationStatus = std::function<void(const std::string &)>;

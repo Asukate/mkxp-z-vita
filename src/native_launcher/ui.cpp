@@ -899,16 +899,14 @@ void UI::changeDisplay(int step, bool reset) {
   const auto k = displayKeys[setting];
   bool defaultBool = setting == 0;
   auto i = displayValues.as_object().find(k);
-  Json v = setting == 2 ? Json(Json::integer_type(0)) : Json(defaultBool);
+  Json v = setting == 2 ? Json(Json::integer_type(filterDefault)) : Json(defaultBool);
   if (i != displayValues.as_object().end())
     v = i->second;
   if (reset)
-    v = setting == 2 ? Json(Json::integer_type(0)) : Json(defaultBool);
+    v = setting == 2 ? Json(Json::integer_type(filterDefault)) : Json(defaultBool);
   else if (setting == 2) {
-    int n = v.is_integer() && v.as_integer() >= 0 && v.as_integer() <= 1
-                ? v.as_integer()
-                : 0;
-    v = Json::integer_type((n + step + 2) % 2);
+    int n = filterIndex(v);
+    v = Json::integer_type(filterValues[(n < 0 ? 1 : n + step + filterCount) % filterCount]);
   } else
     v = v.is_boolean() ? !v.as_boolean() : !defaultBool;
   if (gameOptions) model.changeGameSetting(gameEntry, k, v, reset);

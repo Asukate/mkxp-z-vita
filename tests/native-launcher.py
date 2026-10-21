@@ -445,6 +445,15 @@ class NativeLauncher(unittest.TestCase):
             smoothScaling=1, smoothScalingDown=1))
         self.ui(SETTINGS+',cross,square')
         self.assertTrue(config()['fixedAspectRatio'])
+        # Filtering: Sharp (5) is the default; Cross goes Sharp, Bilinear,
+        # Nearest, Sharp. Sharp shrinks with Bilinear; other numbers are refused.
+        file.write_text(json.dumps(dict(preloadScript=['keep.rb'])))
+        filtering = SETTINGS+',cross,down,down,cross'
+        for expected, down in ((1, 1), (0, 0), (5, 1)):
+            self.ui(filtering)
+            self.assertEqual((config()['smoothScaling'], config()['smoothScalingDown']), (expected, down))
+        self.call([{'op':'set-display','key':'smoothScaling','value':2}])
+        self.assertEqual(config()['smoothScaling'], 5)
         # Performance and speed: the overlay cycles, fast forward switches.
         file.write_text(json.dumps(dict(preloadScript=['keep.rb'])))
         speed = SETTINGS + ',down,down,down,down,cross'

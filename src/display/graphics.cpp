@@ -1758,13 +1758,13 @@ struct GraphicsPrivate {
                                       (scSize.y + scOffset.y),
                                       scSize.x,
                                       -scSize.y),
-                              GLMeta::smoothScalingMethod(scaleIsSpecial) == Bilinear);
+                              GLMeta::smoothFilter(scaleIsSpecial));
     }
     
     void metaBlitBufferFlippedScaled(const Vec2i &sourceSize, int scaleIsSpecial, bool forceNearestNeighbor=false) {
         GLMeta::blitRectangle(IntRect(0, 0, sourceSize.x, sourceSize.y),
                               IntRect(scOffset.x, scSize.y+scOffset.y, scSize.x, -scSize.y),
-                              !forceNearestNeighbor && GLMeta::smoothScalingMethod(scaleIsSpecial) == Bilinear);
+                              !forceNearestNeighbor && GLMeta::smoothFilter(scaleIsSpecial));
     }
     
     /* Fast forward: the frame passes without being drawn. Counted like a

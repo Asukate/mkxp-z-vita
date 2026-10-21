@@ -29,6 +29,12 @@
 #include "exception.h"
 #include "texpool.h"
 
+#include <algorithm>
+#include <cmath>
+
+// The filter blitSource bound, so blitRectangle can finish setting it up.
+static int sourceMethod = 0;
+
 namespace FBO
 {
 	ID boundFramebufferID;
@@ -326,6 +332,12 @@ int smoothScalingMethod(int scaleIsSpecial)
 	return shState->config().smoothScaling;
 }
 
+bool smoothFilter(int scaleIsSpecial)
+{
+	int method = smoothScalingMethod(scaleIsSpecial);
+	return method == Bilinear || method == SharpBilinear;
+}
+
 static void _blitBegin(FBO::ID fbo, const Vec2i &size, int scaleIsSpecial)
 {
 	if (HAVE_NATIVE_BLIT)
@@ -348,6 +360,16 @@ static void _blitBegin(FBO::ID fbo, const Vec2i &size, int scaleIsSpecial)
 			shader.setTranslation(Vec2i());
 			shader.setTexSize(Vec2i(size.x, size.y));
 			shader.setSharpness(shState->config().bicubicSharpness);
+		}
+
+			break;
+		case SharpBilinear:
+		{
+			SharpShader &shader = shState->shaders().sharp;
+			shader.bind();
+			shader.applyViewportProj();
+			shader.setTranslation(Vec2i());
+			shader.setTexSize(Vec2i(size.x, size.y));
 		}
 
 			break;
@@ -483,6 +505,7 @@ void blitSource(TEXFBO &source, int scaleIsSpecial)
 	}
 #endif
 
+	sourceMethod = smoothScalingMethod(scaleIsSpecial);
 	if (HAVE_NATIVE_BLIT)
 	{
 		gl.BindFramebuffer(GL_READ_FRAMEBUFFER, source.fbo.gl);
@@ -494,6 +517,14 @@ void blitSource(TEXFBO &source, int scaleIsSpecial)
 		case Bicubic:
 		{
 			BicubicShader &shader = shState->shaders().bicubic;
+			shader.bind();
+			shader.setTexSize(Vec2i(blitSrcWidthHires, blitSrcHeightHires));
+		}
+
+			break;
+		case SharpBilinear:
+		{
+			SharpShader &shader = shState->shaders().sharp;
 			shader.bind();
 			shader.setTexSize(Vec2i(blitSrcWidthHires, blitSrcHeightHires));
 		}
@@ -612,6 +643,16 @@ void blitRectangle(const IntRect &src, const IntRect &dst, bool smooth)
 			shader.setTargetScale(Vec2((float)(shState->config().xbrzScalingFactor), (float)(shState->config().xbrzScalingFactor)));
 		}
 #endif
+		// Sharp bilinear needs the scale. Only smooth blits (the screen) use
+		// it; a huge scale makes every other blit sample like nearest.
+		if (sourceMethod == SharpBilinear)
+		{
+			SharpShader &sharp = shState->shaders().sharp;
+			sharp.setOutputScale(smooth
+				? Vec2(std::abs((float)dstScaled.w) / std::max(1, std::abs(srcScaled.w)),
+				       std::abs((float)dstScaled.h) / std::max(1, std::abs(srcScaled.h)))
+				: Vec2(10000.f, 10000.f));
+		}
 		if (smooth)
 			TEX::setSmooth(true);
 

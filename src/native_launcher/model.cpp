@@ -1278,6 +1278,10 @@ Json Model::display() const {
   }
   return v;
 }
+// Shrinking a picture uses Bilinear when Sharp is chosen: Sharp only helps when enlarging.
+static Json downFilter(const Json &value) {
+  return value.is_integer() && value.as_integer() == 5 ? Json(Json::integer_type(1)) : value;
+}
 void Model::changeDisplay(const std::string &name, const Json &value) {
   if (name == "performanceMetrics") {
     if (!value.is_integer() || value.as_integer() < 0 || value.as_integer() > 2)
@@ -1285,15 +1289,14 @@ void Model::changeDisplay(const std::string &name, const Json &value) {
   } else if ((name == "fixedAspectRatio" || name == "integerScalingActive" ||
               name == "fastForward")
           ? !value.is_boolean()
-          : name != "smoothScaling" || !value.is_integer() ||
-                value.as_integer() < 0 || value.as_integer() > 1)
+          : name != "smoothScaling" || filterIndex(value) < 0)
     throw std::runtime_error("Invalid display setting");
   auto v = display();
   v.as_object()[name] = value;
   if (name == "integerScalingActive")
     v.as_object()["integerScalingLastMile"] = !value.as_boolean();
   if (name == "smoothScaling")
-    v.as_object()["smoothScalingDown"] = value;
+    v.as_object()["smoothScalingDown"] = downFilter(value);
   atomicWrite(paths.at("launcher-config.json"), v.stringify());
 }
 Json Model::gameSettings(const Entry &entry) const {
@@ -1316,9 +1319,10 @@ void Model::changeGameSetting(const Entry &entry, const std::string &name,
   bool integer = name == "smoothScaling" || name == "performanceMetrics";
   if ((!boolean && !integer) ||
       (!reset && (boolean ? !value.is_boolean()
-                          : !value.is_integer() || value.as_integer() < 0 ||
-                                value.as_integer() >
-                                    (name == "performanceMetrics" ? 2 : 1))))
+                          : name == "smoothScaling"
+                                ? filterIndex(value) < 0
+                                : !value.is_integer() || value.as_integer() < 0 ||
+                                      value.as_integer() > 2)))
     throw std::runtime_error("Invalid game setting.");
   auto file = paths.at("config/" + key(entry.node.identity(paths)) + ".json");
   auto saved =
@@ -1337,7 +1341,7 @@ void Model::changeGameSetting(const Entry &entry, const std::string &name,
     if (name == "integerScalingActive")
       values[paired] = !value.as_boolean();
     if (name == "smoothScaling")
-      values[paired] = value;
+      values[paired] = downFilter(value);
   }
   auto text = saved.stringify();
   if (text.size() > 262144)

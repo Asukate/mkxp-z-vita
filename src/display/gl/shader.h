@@ -405,6 +405,18 @@ protected:
 	GLint u_sourceSize;
 };
 
+// Sharp bilinear (shader/sharp.frag): even pixel widths at any scale.
+class SharpShader : public Lanczos3Shader
+{
+public:
+	SharpShader();
+
+	void setOutputScale(const Vec2 &value);
+
+protected:
+	GLint u_outputScale;
+};
+
 class BicubicShader : public Lanczos3Shader
 {
 public:
@@ -538,6 +550,7 @@ struct ShaderSet
 	SHADER_SET_MEMBER(KglShadowShaderH, kglShadowH);
 	SHADER_SET_MEMBER(KglShadowShaderV, kglShadowV);
 	SHADER_SET_MEMBER(BicubicShader, bicubic);
+	SHADER_SET_MEMBER(SharpShader, sharp);
 	SHADER_SET_MEMBER(Lanczos3Shader, lanczos3);
 #ifdef MKXPZ_SSL
 	SHADER_SET_MEMBER(XbrzShader, xbrz);

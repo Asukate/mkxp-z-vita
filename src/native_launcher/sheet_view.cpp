@@ -109,24 +109,23 @@ void View::buildSheet(const UI &u) {
     subtitle = u.gameOptions ? u.gameEntry.name : "Default for every game";
     const char *keys[] = {"fixedAspectRatio", "integerScalingActive", "smoothScaling"};
     const char *labels[] = {"Aspect ratio", "Scaling", "Filtering"};
-    const char *names[][2] = {{"Fill screen", "Original"}, {"Fit screen", "Whole pixels"}, {"Nearest", "Bilinear"}};
+    const char *names[][2] = {{"Fill screen", "Original"}, {"Fit screen", "Whole pixels"}};
     for (int i = 0; i < 3; ++i) {
       auto entry = values().find(keys[i]);
-      int value = i == 0 ? 1 : 0;
+      int value = i == 0 ? 1 : i == 2 ? 1 /* Sharp */ : 0;
       bool custom = false;
       if (entry != values().end()) {
         auto &v = entry->second;
         if (i == 2) {
-          custom = !v.is_integer() || v.as_integer() < 0 || v.as_integer() > 1;
-          if (!custom)
-            value = v.as_integer();
+          value = filterIndex(v);
+          custom = value < 0;
         } else {
           custom = !v.is_boolean();
           if (!custom)
             value = v.as_boolean();
         }
       }
-      row(Row::Choice, labels[i], custom ? "Custom" : names[i][value]);
+      row(Row::Choice, labels[i], custom ? "Custom" : i == 2 ? filterNames[value] : names[i][value]);
     }
     focusRow = u.setting;
     notes = {u.gameOptions ? "Saved for this game. Square goes back to the default for every game."
