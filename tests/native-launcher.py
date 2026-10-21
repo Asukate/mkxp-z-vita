@@ -329,7 +329,8 @@ class NativeLauncher(unittest.TestCase):
     def test_launcher_preferences_and_artwork_keys(self):
         prefs=self.root/'launcher-preferences.json'
         # Settings: Game info and artwork is row 6; Exit follows it. On that
-        # page the adult artwork blur is first, then the two source keys.
+        # page the adult artwork blur is first, then the source keys:
+        # SteamGridDB, IGDB's client ID and secret, RAWG.
         info=SETTINGS+',down'*6+',cross'
         self.assertEqual(self.ui(info)['page'],12)
         self.assertTrue(self.ui(SETTINGS+',down'*7+',cross')['exitRequested'])
@@ -345,8 +346,12 @@ class NativeLauncher(unittest.TestCase):
         # Typed keys keep only letters and digits.
         self.run_binary('--text','ab12-CD 34','--actions',keys+',cross')
         self.assertEqual(grid.read_text(),'ab12CD34\n')
-        self.run_binary('--text','rawg99','--actions',keys+',down,cross')
+        self.run_binary('--text','rawg99','--actions',keys+',down,down,down,cross')
         self.assertEqual(rawg.read_text(),'rawg99\n')
+        self.run_binary('--text','client1','--actions',keys+',down,cross')
+        self.run_binary('--text','secret2','--actions',keys+',down,down,cross')
+        self.assertEqual((self.root/'igdb-client-id.txt').read_text(),'client1\n')
+        self.assertEqual((self.root/'igdb-client-secret.txt').read_text(),'secret2\n')
         self.run_binary('--text','--cancel','--actions',keys+',cross')
         self.assertEqual(grid.read_text(),'ab12CD34\n')
         self.ui(keys+',square')

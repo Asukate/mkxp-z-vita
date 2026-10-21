@@ -24,6 +24,7 @@ public:
   struct Request {
     std::string key;
     bool hero = false;
+    bool shots = false;             // the screenshots instead (width x height each)
     std::string root;               // the art folder, ending in '/'
     std::vector<std::string> names; // folders under root to try, in order
     int width = 0, height = 0;      // cover or background size
@@ -34,8 +35,9 @@ public:
   };
   struct Result {
     std::string key;
-    bool hero = false, cancelled = false;
+    bool hero = false, cancelled = false, shots = false;
     Image cover, logo, background;
+    std::vector<Image> pictures; // screenshots, when asked for
     // No cover art: draw one and give it to store() under this path.
     std::string generatedPath;
     std::string info; // the game's info.json, if it has one

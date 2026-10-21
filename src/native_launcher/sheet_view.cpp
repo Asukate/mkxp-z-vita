@@ -396,16 +396,23 @@ void View::buildSheet(const UI &u) {
       };
       row(Row::Toggle, "Blur adult artwork", "", u.blurAdult);
       row(Row::Nav, "SteamGridDB", masked(u.readKey(0)));
-      row(Row::Nav, "RAWG", masked(u.readKey(1)));
-      row(Row::Info, "Steam", "No key needed");
-      row(Row::Info, "VNDB", "No key needed");
+      row(Row::Nav, "IGDB client ID", masked(u.readKey(1)));
+      row(Row::Nav, "IGDB client secret", masked(u.readKey(2)));
+      row(Row::Nav, "RAWG", masked(u.readKey(3)));
+      row(Row::Info, "Steam, DLsite, VNDB, itch.io", "No key needed");
       focusRow = u.setting;
       if (u.setting == 0)
         notes = {"Covers and backgrounds a source marks as adult are shown blurred in the library and the artwork chooser."};
+      else if (u.setting == 2 || u.setting == 3)
+        notes = {"IGDB: release details, covers and screenshots. Free: sign in at dev.twitch.tv/console, register an "
+                 "application (any name, redirect http://localhost, category Application Integration), then copy "
+                 "its Client ID and make a New Secret.",
+                 "Both are needed. A wrong pair is skipped, and the other sources still work."};
       else
-        notes = {"Sources are asked in this order. Steam and VNDB need no key.",
-                 "SteamGridDB: covers, backgrounds and logos for almost any game. Free key: steamgriddb.com, Preferences, API.",
-                 "RAWG: release dates, developers, publishers and genres. Free key: rawg.io/apidocs."};
+        notes = {"SteamGridDB: covers, backgrounds and logos for almost any game. Free key: steamgriddb.com, "
+                 "Preferences, API.",
+                 "RAWG: release dates, developers and genres. Free key: rawg.io/apidocs.",
+                 "With no source knowing a game, its own title screen is used."};
       left = {u.setting == 0 ? hint("btn-cross-26", "Change", Button::Cross) : hint("btn-cross-26", "Type key", Button::Cross)};
       if (u.setting > 0)
         left.push_back(hint("btn-square-26", "Remove key", Button::Square));
@@ -429,8 +436,8 @@ void View::buildSheet(const UI &u) {
       row(Row::Nav, "Game error history", u.errors.empty() ? "" : std::to_string(u.errors.size()));
       row(Row::Nav, "Performance and speed");
       row(Row::Nav, "Release checks", u.automaticUpdates ? "At startup" : "Off");
-      int keys = !u.readKey(0).empty() + !u.readKey(1).empty();
-      row(Row::Nav, "Game info and artwork", keys ? std::to_string(2 + keys) + " sources" : "Steam, VNDB");
+      int keys = !u.readKey(0).empty() + (!u.readKey(1).empty() && !u.readKey(2).empty()) + !u.readKey(3).empty();
+      row(Row::Nav, "Game info and artwork", std::to_string(4 + keys) + " sources");
       row(Row::Action, "Exit HardRPG");
       focusRow = u.setting;
       first = u.settingFirst;

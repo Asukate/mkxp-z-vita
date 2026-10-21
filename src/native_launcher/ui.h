@@ -258,7 +258,7 @@ public:
   int settingsRows() const { return 8; }
   // The game info page (Page::Keys): the adult artwork blur, then the source
   // keys, typed on the Vita keyboard.
-  static constexpr int keyCount = 2;
+  static constexpr int keyCount = 4;
   static constexpr int keysRows = 1 + keyCount;
   std::string keyFile(int index) const;
   std::string readKey(int index) const;

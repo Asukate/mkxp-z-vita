@@ -53,7 +53,8 @@ private:
   struct Art {
     Image cover, hero, logo, label, labelSelected;
     // Loaded means looked for: the image stays empty when there is no art.
-    bool coverLoaded = false, heroLoaded = false;
+    bool coverLoaded = false, heroLoaded = false, shotsLoaded = false;
+    std::vector<Image> shots; // screenshot thumbnails, for the details panel
     bool generate = false; // no cover art: draw one here (FreeType is not thread-safe)
     std::string generatedPath; // where the loader caches it
     std::string info;          // downloaded facts (info.json), parsed by facts()

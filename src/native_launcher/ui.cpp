@@ -847,9 +847,12 @@ void UI::changeControl(int step) {
             :"Saved for "+controlsEntry.name+". Applies on next launch.";
 }
 void UI::refreshFolders() { gameFolders = model.searchFolders(); }
-std::string UI::keyFile(int index) const {
-  return model.paths.at(index == 0 ? "steamgriddb-key.txt" : "rawg-key.txt");
-}
+// The key rows, in the order the Game info and artwork page lists them.
+static const char *const keyFiles[] = {"steamgriddb-key.txt", "igdb-client-id.txt", "igdb-client-secret.txt",
+                                       "rawg-key.txt"};
+static const char *const keyTitles[] = {"SteamGridDB API key", "IGDB (Twitch) client ID", "IGDB (Twitch) client secret",
+                                        "RAWG API key"};
+std::string UI::keyFile(int index) const { return model.paths.at(keyFiles[index]); }
 std::string UI::readKey(int index) const {
   std::ifstream in(keyFile(index));
   std::string key;
@@ -862,7 +865,7 @@ void UI::editKey(int index) {
   if (!enterText)
     return;
   std::string out;
-  if (!enterText(index == 0 ? "SteamGridDB API key" : "RAWG API key", readKey(index), out))
+  if (!enterText(keyTitles[index], readKey(index), out))
     return;
   out.erase(std::remove_if(out.begin(), out.end(), [](char c) { return !std::isalnum(static_cast<unsigned char>(c)); }),
             out.end());

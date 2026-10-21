@@ -47,7 +47,9 @@ void UI::fetchArt(bool all) {
     if (e.kind == Kind::Folder)
       return;
     auto folders = artFolders(e);
-    jobs.push_back({entryKey(e), e.name, folders[4].empty() ? folders[0] : folders[4], folders});
+    // The game's files, for its title screen: a ZIP only once unpacked.
+    std::string gameDir = e.node.archive ? model.paths.at("cache/zip-" + key(e.node.identity(model.paths))) : e.node.path();
+    jobs.push_back({entryKey(e), e.name, folders[4].empty() ? folders[0] : folders[4], folders, gameDir});
   };
   if (all) {
     for (auto &e : model.list)

@@ -86,7 +86,7 @@ void ArtLoader::beginFrame() {
 }
 void ArtLoader::want(const Request &r, double distance) {
   std::lock_guard<std::mutex> hold(lock);
-  auto id = r.key + (r.hero ? "|hero" : "|cover");
+  auto id = r.key + (r.shots ? "|shots" : r.hero ? "|hero" : "|cover");
   if (active.count(id))
     return;
   auto found = queue.find(id);
@@ -103,7 +103,7 @@ bool ArtLoader::take(Result &out) {
     return false;
   out = std::move(done.front());
   done.pop_front();
-  active.erase(out.key + (out.hero ? "|hero" : "|cover"));
+  active.erase(out.key + (out.shots ? "|shots" : out.hero ? "|hero" : "|cover"));
   return true;
 }
 bool ArtLoader::busy() {
@@ -136,6 +136,7 @@ void ArtLoader::run() {
           Result gone;
           gone.key = it->second.request.key;
           gone.hero = it->second.request.hero;
+          gone.shots = it->second.request.shots;
           gone.cancelled = true;
           done.push_back(std::move(gone));
           it = queue.erase(it);
@@ -184,6 +185,7 @@ ArtLoader::Result ArtLoader::load(const Request &q) {
   Result r;
   r.key = q.key;
   r.hero = q.hero;
+  r.shots = q.shots;
   if (rescanWanted.exchange(false))
     foldersRead = false;
   if (!foldersRead) {
@@ -232,6 +234,22 @@ ArtLoader::Result ArtLoader::load(const Request &q) {
     Image img = Image::load(file).cover(q.width, q.height);
     return blur ? img.blurred(std::max(6, q.width / 24)) : img;
   };
+  if (q.shots) {
+    for (int i = 1; i <= 4; ++i) {
+      if (!find(("shot" + std::to_string(i)).c_str(), path, stamp))
+        break;
+      auto file = cached("s-" + hashed(stamp + size) + ".jpg");
+      Image img = Image::load(file);
+      if (img.empty()) {
+        img = scaled(path);
+        if (!img.empty())
+          img.saveJpeg(file);
+      }
+      if (!img.empty())
+        r.pictures.push_back(std::move(img));
+    }
+    return r;
+  }
   if (q.hero) {
     if (find("hero", path, stamp)) {
       auto file = cached("h-" + hashed(stamp + size) + ".jpg");

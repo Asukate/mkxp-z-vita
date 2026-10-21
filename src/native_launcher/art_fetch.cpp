@@ -10,6 +10,7 @@
 #include <functional>
 #include <ctime>
 #include <curl/curl.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #ifdef __vita__
 #include <psp2/kernel/threadmgr.h>
@@ -26,12 +27,26 @@ constexpr size_t maxDownload = 8 * 1024 * 1024;
 const char *const kinds[] = {"cover", "hero", "logo"};
 
 // Lower case letters and digits only, so "LISA: The Painful" and
-// "Lisa the painful" compare equal.
+// "Lisa the painful" compare equal. Accented Latin letters count as their
+// plain ones ("Pokémon" is "pokemon"); other scripts are left out.
 std::string plain(const std::string &s) {
+  // U+00C0 to U+00FF, without the accent.
+  static const char latin[] = "aaaaaaaceeeeiiiidnooooo*ouuuuyts"
+                              "aaaaaaaceeeeiiiidnooooo/ouuuuyty";
   std::string out;
-  for (unsigned char c : s)
+  for (size_t i = 0; i < s.size(); ++i) {
+    unsigned char c = s[i];
     if (std::isalnum(c))
       out += char(std::tolower(c));
+    else if (c == 0xc3 && i + 1 < s.size()) {
+      unsigned char d = s[++i];
+      if (d >= 0x80 && d <= 0xbf) {
+        char base = latin[d - 0x80];
+        if (std::isalpha((unsigned char)base))
+          out += base;
+      }
+    }
+  }
   return out;
 }
 // Names to search for, best first. Game folders and zips are often named
@@ -50,6 +65,9 @@ std::vector<std::string> searchTerms(const std::string &name) {
     if (base.size() > n && lower(base.substr(base.size() - n)) == ext)
       base.resize(base.size() - n);
   }
+  // Folder names like "to-the-moon": hyphens separate the words.
+  if (base.find(' ') == std::string::npos && base.find('-') != std::string::npos)
+    std::replace(base.begin(), base.end(), '-', ' ');
   // Words, without bracketed notes; '_' separates words too.
   std::vector<std::string> words;
   std::string word;
@@ -190,6 +208,188 @@ std::string text(const json5pp::value &v, const char *name) {
   auto *f = field(v, name);
   return f && f->is_string() ? f->as_string() : "";
 }
+// The game's own title screen, as file bytes: the fallback picture when no
+// source knows the game. RPG Maker keeps it in Graphics/Titles (XP),
+// Graphics/System/Title (VX) or Graphics/Titles1 (VX Ace), loose or inside
+// the game's encrypted archive. Without the game's data to say which file
+// the title uses, the largest picture there is taken.
+std::string lowered(std::string s) {
+  for (auto &c : s)
+    c = char(std::tolower((unsigned char)c));
+  std::replace(s.begin(), s.end(), '\\', '/');
+  return s;
+}
+bool titlePicture(const std::string &path) {
+  auto p = lowered(path);
+  auto ext = p.substr(p.find_last_of('.') == std::string::npos ? p.size() : p.find_last_of('.'));
+  if (ext != ".png" && ext != ".jpg" && ext != ".jpeg")
+    return false;
+  return p.rfind("graphics/titles/", 0) == 0 || p.rfind("graphics/titles1/", 0) == 0 ||
+         p.rfind("graphics/system/title.", 0) == 0;
+}
+std::string readFile(const std::string &path, size_t limit) {
+  std::string out;
+  if (FILE *f = std::fopen(path.c_str(), "rb")) {
+    char buf[65536];
+    for (size_t n; out.size() < limit && (n = std::fread(buf, 1, sizeof buf, f)) > 0;)
+      out.append(buf, n);
+    std::fclose(f);
+  }
+  return out.size() <= limit ? out : std::string();
+}
+// The real name of a file or folder under dir, ignoring case; empty if none.
+std::string entryNamed(const std::string &dir, const std::string &want) {
+  std::string found;
+  if (DIR *d = opendir(dir.c_str())) {
+    while (auto *e = readdir(d))
+      if (lowered(e->d_name) == lowered(want)) {
+        found = e->d_name;
+        break;
+      }
+    closedir(d);
+  }
+  return found;
+}
+std::string looseTitle(const std::string &game) {
+  std::string best;
+  size_t bestSize = 0;
+  auto graphics = entryNamed(game, "Graphics");
+  if (graphics.empty())
+    return "";
+  for (const char *sub : {"Titles1", "Titles", "System"}) {
+    auto folder = entryNamed(game + "/" + graphics, sub);
+    if (folder.empty())
+      continue;
+    auto dir = game + "/" + graphics + "/" + folder;
+    if (DIR *d = opendir(dir.c_str())) {
+      while (auto *e = readdir(d)) {
+        if (!titlePicture(std::string("Graphics/") + sub + "/" + e->d_name))
+          continue;
+        struct stat st;
+        auto path = dir + "/" + e->d_name;
+        if (stat(path.c_str(), &st) == 0 && size_t(st.st_size) > bestSize && size_t(st.st_size) <= maxDownload)
+          best = path, bestSize = size_t(st.st_size);
+      }
+      closedir(d);
+    }
+  }
+  return best.empty() ? "" : readFile(best, maxDownload);
+}
+// Encrypted archives: Game.rgssad (XP), Game.rgss2a (VX), Game.rgss3a (VX
+// Ace); some games rename them after the game. Both formats XOR names and
+// data with a key that changes every four bytes (key * 7 + 3).
+std::string archiveTitle(const std::string &path) {
+  FILE *f = std::fopen(path.c_str(), "rb");
+  if (!f)
+    return "";
+  std::string out;
+  auto u32 = [&](uint32_t &v) {
+    unsigned char b[4];
+    if (std::fread(b, 1, 4, f) != 4)
+      return false;
+    v = uint32_t(b[0]) | uint32_t(b[1]) << 8 | uint32_t(b[2]) << 16 | uint32_t(b[3]) << 24;
+    return true;
+  };
+  char magic[8];
+  struct Entry {
+    long offset;
+    uint32_t size, key;
+  } best{0, 0, 0};
+  if (std::fread(magic, 1, 8, f) == 8 && std::memcmp(magic, "RGSSAD\0", 7) == 0) {
+    if (magic[7] == 1) {
+      uint32_t key = 0xDEADCAFE, n, size;
+      for (int guard = 0; guard < 100000 && u32(n); ++guard) {
+        n ^= key, key = key * 7 + 3;
+        if (n == 0 || n > 512)
+          break;
+        std::string name(n, '\0');
+        if (std::fread(&name[0], 1, n, f) != n)
+          break;
+        for (auto &c : name)
+          c = char((unsigned char)c ^ (key & 0xff)), key = key * 7 + 3;
+        if (!u32(size))
+          break;
+        size ^= key, key = key * 7 + 3;
+        long offset = std::ftell(f);
+        if (titlePicture(name) && size > best.size && size <= maxDownload)
+          best = {offset, size, key};
+        if (std::fseek(f, long(size), SEEK_CUR) != 0)
+          break;
+      }
+    } else if (magic[7] == 3) {
+      uint32_t key, offset, size, start, n;
+      if (u32(key)) {
+        key = key * 9 + 3;
+        for (int guard = 0; guard < 100000 && u32(offset); ++guard) {
+          offset ^= key;
+          if (offset == 0 || !u32(size) || !u32(start) || !u32(n))
+            break;
+          size ^= key, start ^= key, n ^= key;
+          if (n == 0 || n > 512)
+            break;
+          std::string name(n, '\0');
+          if (std::fread(&name[0], 1, n, f) != n)
+            break;
+          for (size_t i = 0; i < name.size(); ++i)
+            name[i] = char((unsigned char)name[i] ^ ((key >> (8 * (i % 4))) & 0xff));
+          if (titlePicture(name) && size > best.size && size <= maxDownload)
+            best = {long(offset), size, start};
+        }
+      }
+    }
+  }
+  if (best.size && std::fseek(f, best.offset, SEEK_SET) == 0) {
+    out.resize(best.size);
+    if (std::fread(&out[0], 1, best.size, f) != best.size)
+      out.clear();
+    uint32_t key = best.key;
+    for (size_t i = 0; i < out.size(); ++i) {
+      out[i] = char((unsigned char)out[i] ^ ((key >> (8 * (i % 4))) & 0xff));
+      if (i % 4 == 3)
+        key = key * 7 + 3;
+    }
+  }
+  std::fclose(f);
+  return out;
+}
+std::string titleScreen(const std::string &game, bool deeper = true) {
+  if (game.empty())
+    return "";
+  auto loose = looseTitle(game);
+  if (!loose.empty())
+    return loose;
+  std::string bytes;
+  if (DIR *d = opendir(game.c_str())) {
+    while (auto *e = readdir(d)) {
+      auto n = lowered(e->d_name);
+      auto dot = n.find_last_of('.');
+      auto ext = dot == std::string::npos ? "" : n.substr(dot);
+      if (ext == ".rgssad" || ext == ".rgss2a" || ext == ".rgss3a") {
+        bytes = archiveTitle(game + "/" + e->d_name);
+        if (!bytes.empty())
+          break;
+      }
+    }
+    closedir(d);
+  }
+  // A ZIP often holds the game in a folder of its own.
+  if (bytes.empty() && deeper)
+    if (DIR *d = opendir(game.c_str())) {
+      while (auto *e = readdir(d)) {
+        if (e->d_name[0] == '.')
+          continue;
+        auto sub = game + "/" + e->d_name;
+        struct stat st;
+        if (stat(sub.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+          bytes = titleScreen(sub, false);
+          if (!bytes.empty())
+            break;
+        }
+      }
+      closedir(d);
+    }
+  return bytes;
+}
 size_t collect(char *data, size_t size, size_t count, void *out) {
   auto &bytes = *static_cast<std::string *>(out);
   size_t n = size * count;
@@ -206,7 +406,8 @@ ArtFetch::Transport transport;
 
 struct ArtFetch::State {
   std::vector<Job> jobs;
-  std::string root, gridKey, rawgKey;
+  std::string root, gridKey, rawgKey, igdbId, igdbSecret, igdbToken;
+  bool igdbFailed = false;
   bool strict = false;
   std::atomic<bool> cancel{false}, done{false};
   mutable std::mutex lock;
@@ -221,7 +422,9 @@ struct ArtFetch::State {
     std::string urls[3];
     std::string heroFallback; // a small store banner, if nothing better turns up
     bool adult = false;       // the source rates the game (or picture) adults only
+    bool rpgMaker = false;    // the source says the game was made with RPG Maker
     std::string title, released, developer, publisher, genres, description, source;
+    std::vector<std::string> shots; // screenshots, best first
     bool complete(const bool need[3]) const {
       for (int k = 0; k < 3; ++k)
         if (need[k] && urls[k].empty())
@@ -235,7 +438,8 @@ struct ArtFetch::State {
   }
   // GET (or POST, with a JSON body) url; false on any failure or a status
   // other than 200.
-  bool get(const std::string &url, std::string &out, const std::string &bearer = "", const std::string &post = "") {
+  bool get(const std::string &url, std::string &out, const std::string &bearer = "", const std::string &post = "",
+           const char *contentType = "application/json", const std::string &header = "") {
     out.clear();
     if (transport)
       return transport(url, post, out) && !cancel;
@@ -262,8 +466,10 @@ struct ArtFetch::State {
     curl_slist *headers = nullptr;
     if (!bearer.empty())
       headers = curl_slist_append(headers, ("Authorization: Bearer " + bearer).c_str());
+    if (!header.empty())
+      headers = curl_slist_append(headers, header.c_str());
     if (!post.empty()) {
-      headers = curl_slist_append(headers, "Content-Type: application/json");
+      headers = curl_slist_append(headers, (std::string("Content-Type: ") + contentType).c_str());
       curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post.c_str());
     }
     if (headers)
@@ -403,7 +609,8 @@ struct ArtFetch::State {
     auto app = std::to_string(ids[at]);
     auto query = "{\"ids\":[{\"appid\":" + app +
                  "}],\"context\":{\"language\":\"english\",\"country_code\":\"US\"},"
-                 "\"data_request\":{\"include_assets\":true,\"include_basic_info\":true,\"include_release\":true}}";
+                 "\"data_request\":{\"include_assets\":true,\"include_basic_info\":true,\"include_release\":true,"
+                 "\"include_screenshots\":true}}";
     if (!get("https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=" + escaped(query), body))
       return;
     try {
@@ -435,6 +642,18 @@ struct ArtFetch::State {
           return u.empty() ? "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/" + app + "/logo.png" : u;
         });
       }
+      // Screenshots, in their 600x338 size: "steam/apps/1/ss_x.jpg?t=2".
+      if (auto *shots = field(item, "screenshots"))
+        if (auto *list = field(*shots, "all_ages_screenshots"))
+          if (list->is_array())
+            for (auto &shot : list->as_array()) {
+              auto file = text(shot, "filename");
+              auto dot = file.find(".jpg");
+              if (dot == std::string::npos || f.shots.size() >= 4)
+                continue;
+              file.insert(dot, ".600x338");
+              f.shots.push_back("https://shared.akamai.steamstatic.com/store_item_assets/" + file);
+            }
       take(f.title, [&] { return names[at]; });
       // Content descriptors 3 and 4: adult-only or frequent sexual content.
       if (auto *rating = field(item, "content_descriptorids"))
@@ -485,6 +704,11 @@ struct ArtFetch::State {
       if (auto *esrb = field(g, "esrb_rating"))
         f.adult = text(*esrb, "slug") == "adults-only";
       take(f.urls[1], [&] { return text(g, "background_image"); });
+      // The first "short screenshot" is the background again.
+      if (auto *shots = field(g, "short_screenshots"))
+        if (shots->is_array())
+          for (size_t i = 1; i < shots->as_array().size() && f.shots.size() < 4; ++i)
+            f.shots.push_back(text(shots->as_array()[i], "image"));
       take(f.title, [&] { return names[at]; });
       take(f.released, [&] { return text(g, "released").substr(0, 4); });
       if (auto *genres = field(g, "genres"))
@@ -569,13 +793,14 @@ struct ArtFetch::State {
         take(f.urls[0], [&] { return text(*image, "url"); });
         f.adult = f.adult || explicitImage(*image);
       }
-      // A background: the first screenshot that is not explicit.
+      // A background and screenshots: those that are not explicit.
       if (auto *shots = field(g, "screenshots"))
         if (shots->is_array())
           for (auto &shot : shots->as_array())
-            if (!explicitImage(shot)) {
+            if (!explicitImage(shot) && !text(shot, "url").empty()) {
               take(f.urls[1], [&] { return text(shot, "url"); });
-              break;
+              if (f.shots.size() < 4)
+                f.shots.push_back(text(shot, "url"));
             }
       take(f.title, [&] { return text(g, "title"); });
       take(f.released, [&] { return text(g, "released").substr(0, 4); });
@@ -585,6 +810,240 @@ struct ArtFetch::State {
           take(f.developer, [&] { return text(devs->as_array()[0], "name"); });
       take(f.source, [] { return std::string("VNDB"); });
     } catch (...) {
+    }
+  }
+
+  // IGDB (Twitch): the widest catalogue of release details, with covers,
+  // artwork and screenshots. Needs a Twitch app's client ID and secret.
+  // Many games share a name ("Flow", "Ib", "To the Moon"), so among exact
+  // matches the one made with RPG Maker wins, then the oldest.
+  void igdb(const std::string &term, Found &f) {
+    if (igdbId.empty() || igdbSecret.empty() || igdbFailed)
+      return;
+    std::string body;
+    if (igdbToken.empty()) {
+      if (!get("https://id.twitch.tv/oauth2/token", body, "",
+               "client_id=" + escaped(igdbId) + "&client_secret=" + escaped(igdbSecret) + "&grant_type=client_credentials",
+               "application/x-www-form-urlencoded")) {
+        igdbFailed = true; // a wrong key: do not ask again for every game
+        return;
+      }
+      try {
+        igdbToken = text(json5pp::parse(body), "access_token");
+      } catch (...) {
+      }
+      if (igdbToken.empty()) {
+        igdbFailed = true;
+        return;
+      }
+    }
+    std::string name;
+    for (char c : term)
+      if (c != '"' && c != '\\')
+        name += c;
+    const std::string fields =
+        " fields name,first_release_date,summary,cover.image_id,artworks.image_id,screenshots.image_id,"
+        "involved_companies.company.name,involved_companies.developer,involved_companies.publisher,genres.name,"
+        "themes,game_engines.name; limit 10;";
+    // Its search leaves out some short or common names ("OFF", "To the
+    // Moon"), so the exact name is asked for as well.
+    std::vector<json5pp::value> results;
+    std::vector<int64_t> ids;
+    for (auto query : {"search \"" + name + "\";" + fields, "where name ~ \"" + name + "\";" + fields}) {
+      if (!get("https://api.igdb.com/v4/games", body, igdbToken, query, "text/plain", "Client-ID: " + igdbId))
+        continue;
+      try {
+        auto list = json5pp::parse(body);
+        for (auto &g : list.as_array()) {
+          auto *id = field(g, "id");
+          int64_t n = id && id->is_number() ? int64_t(id->as_number()) : -1;
+          if (std::find(ids.begin(), ids.end(), n) == ids.end()) {
+            ids.push_back(n);
+            results.push_back(g);
+          }
+        }
+      } catch (...) {
+      }
+    }
+    std::vector<std::string> names;
+    for (auto &g : results)
+      names.push_back(text(g, "name"));
+    auto year = [](const json5pp::value &g) {
+      auto *when = field(g, "first_release_date");
+      if (!when || !when->is_number())
+        return 9999;
+      std::time_t t = std::time_t(when->as_number());
+      return std::gmtime(&t)->tm_year + 1900;
+    };
+    auto rpgMaker = [](const json5pp::value &g) {
+      if (auto *engines = field(g, "game_engines"))
+        if (engines->is_array())
+          for (auto &e : engines->as_array()) {
+            auto n = plain(text(e, "name"));
+            if (n.find("rpgmaker") != std::string::npos || n.find("tsukuru") != std::string::npos ||
+                n.find("wolfrpg") != std::string::npos)
+              return true;
+          }
+      return false;
+    };
+    int at = -1, best = 0;
+    for (size_t i = 0; i < results.size(); ++i)
+      if (plain(names[i]) == plain(term)) {
+        int rank = (rpgMaker(results[i]) ? 0 : 10000) + year(results[i]);
+        if (at < 0 || rank < best)
+          at = int(i), best = rank;
+      }
+    if (at < 0)
+      at = pick(term, names);
+    if (at < 0)
+      return;
+    auto &g = results[at];
+    f.rpgMaker = rpgMaker(g);
+    auto image = [](const json5pp::value &img, const char *size) {
+      auto id = text(img, "image_id");
+      return id.empty() ? std::string() : "https://images.igdb.com/igdb/image/upload/t_" + std::string(size) + "/" + id + ".jpg";
+    };
+    if (auto *cover = field(g, "cover"))
+      take(f.urls[0], [&] { return image(*cover, "cover_big_2x"); });
+    for (const char *kind : {"artworks", "screenshots"})
+      if (auto *list = field(g, kind))
+        if (list->is_array() && !list->as_array().empty())
+          take(f.urls[1], [&] { return image(list->as_array()[0], "1080p"); });
+    if (auto *list = field(g, "screenshots"))
+      if (list->is_array())
+        for (auto &shot : list->as_array())
+          if (f.shots.size() < 4)
+            f.shots.push_back(image(shot, "screenshot_big"));
+    // Theme 42 is "Erotic".
+    if (auto *themes = field(g, "themes"))
+      if (themes->is_array())
+        for (auto &t : themes->as_array())
+          if (t.is_number() && t.as_number() == 42)
+            f.adult = true;
+    take(f.title, [&] { return names[at]; });
+    if (year(g) != 9999)
+      take(f.released, [&] { return std::to_string(year(g)); });
+    take(f.description, [&] { return plainText(text(g, "summary"), 600); });
+    if (auto *companies = field(g, "involved_companies"))
+      if (companies->is_array())
+        for (auto &c : companies->as_array()) {
+          auto *company = field(c, "company");
+          auto *dev = field(c, "developer");
+          auto *pub = field(c, "publisher");
+          if (company && dev && dev->is_boolean() && dev->as_boolean())
+            take(f.developer, [&] { return text(*company, "name"); });
+          if (company && pub && pub->is_boolean() && pub->as_boolean())
+            take(f.publisher, [&] { return text(*company, "name"); });
+        }
+    if (auto *genres = field(g, "genres"))
+      if (genres->is_array()) {
+        std::string list;
+        for (auto &x : genres->as_array())
+          list += (list.empty() ? "" : ", ") + text(x, "name");
+        take(f.genres, [&] { return list; });
+      }
+    take(f.source, [] { return std::string("IGDB"); });
+  }
+
+  // DLsite: Japanese doujin games, many of them RPG Maker ones. No API: its
+  // search page lists product IDs, and a small JSON reply describes each.
+  // Searched on its adult, all-ages and game floors.
+  void dlsite(const std::string &term, Found &f) {
+    std::string words = escaped(term), page;
+    for (size_t at; (at = words.find("%20")) != std::string::npos;)
+      words.replace(at, 3, "+"); // DLsite refuses %20
+    struct Hit {
+      std::string site, id, title;
+    };
+    std::vector<Hit> hits;
+    for (const char *site : {"maniax", "home", "soft"}) {
+      if (cancel || !get("https://www.dlsite.com/" + std::string(site) + "/fsr/=/keyword/" + words + "/", page))
+        continue;
+      // Each result: product_id/RJ123456.html" title="Name"
+      const std::string mark = "product_id/";
+      for (size_t at = page.find(mark); at != std::string::npos; at = page.find(mark, at + 1)) {
+        size_t id = at + mark.size(), end = page.find(".html\" title=\"", id);
+        if (end == std::string::npos || end - id < 8 || end - id > 10 || (page[id] != 'R'))
+          continue;
+        size_t t = end + 14, close = page.find('"', t);
+        if (close == std::string::npos || close - t > 300)
+          continue;
+        Hit h{site, page.substr(id, end - id), page.substr(t, close - t)};
+        bool seen = false;
+        for (auto &x : hits)
+          seen = seen || x.id == h.id;
+        if (!seen)
+          hits.push_back(h);
+      }
+    }
+    std::vector<std::string> names;
+    for (auto &h : hits)
+      names.push_back(h.title);
+    int at = pick(term, names);
+    if (at < 0)
+      return;
+    auto &h = hits[at];
+    if (!get("https://www.dlsite.com/" + h.site + "/product/info/ajax?product_id=" + h.id + "&cdn_cache_min=1", page))
+      return;
+    try {
+      auto all = json5pp::parse(page);
+      auto *info = field(all, h.id.c_str());
+      if (!info)
+        return;
+      auto picture = text(*info, "work_image"); // //img.dlsite.jp/.../RJ123456_img_main.jpg
+      if (picture.rfind("//", 0) == 0)
+        picture = "https:" + picture;
+      take(f.urls[0], [&] { return picture; });
+      f.heroFallback = picture;
+      auto main = picture.find("_img_main");
+      for (int i = 1; i <= 4 && main != std::string::npos; ++i)
+        f.shots.push_back(picture.substr(0, main) + "_img_smp" + std::to_string(i) + picture.substr(main + 9));
+      auto *age = field(*info, "age_category");
+      f.adult = age && ((age->is_string() && age->as_string() == "3") || (age->is_number() && age->as_number() == 3));
+      take(f.title, [&] { return text(*info, "work_name"); });
+      take(f.released, [&] { return text(*info, "regist_date").substr(0, 4); });
+      take(f.source, [] { return std::string("DLsite"); });
+    } catch (...) {
+    }
+  }
+
+  // itch.io: free indie games. Its search has no API and is full of fan
+  // games and assets with the same names, so only an exact name counts.
+  void itch(const std::string &term, Found &f) {
+    std::string page;
+    if (!get("https://itch.io/search?q=" + escaped(term), page))
+      return;
+    // Results: a cell per game (data-game_id) holding a lazily loaded cover
+    // and a title link.
+    const std::string cell = "data-game_id=\"";
+    for (size_t at = page.find(cell); at != std::string::npos;) {
+      size_t next = page.find(cell, at + 1);
+      auto part = page.substr(at, (next == std::string::npos ? page.size() : next) - at);
+      at = next;
+      auto title = part.find("class=\"title game_link\"");
+      if (title == std::string::npos)
+        continue;
+      auto open = part.rfind("<a ", title), close = part.find('>', title), end = part.find('<', close);
+      if (open == std::string::npos || close == std::string::npos || end == std::string::npos)
+        continue;
+      auto name = part.substr(close + 1, end - close - 1);
+      for (auto entity : {std::make_pair("&amp;", "&"), std::make_pair("&#39;", "'"), std::make_pair("&quot;", "\"")})
+        for (size_t e; (e = name.find(entity.first)) != std::string::npos;)
+          name.replace(e, std::strlen(entity.first), entity.second);
+      if (plain(name) != plain(term) || plain(name).empty())
+        continue;
+      auto img = part.find("data-lazy_src=\"");
+      std::string cover;
+      if (img != std::string::npos && img < title)
+        cover = part.substr(img + 15, part.find('"', img + 15) - img - 15);
+      auto small = cover.find("/315x250%23c/");
+      if (small != std::string::npos)
+        cover.replace(small, 13, "/630x500%23c/");
+      take(f.urls[0], [&] { return cover; });
+      f.heroFallback = cover;
+      take(f.title, [&] { return name; });
+      take(f.source, [] { return std::string("itch.io"); });
+      return;
     }
   }
 
@@ -610,10 +1069,27 @@ struct ArtFetch::State {
     };
     ask([&](const std::string &t, Found &f) { steamGrid(t, need, f); });
     ask([&](const std::string &t, Found &f) { steam(t, f); });
+    ask([&](const std::string &t, Found &f) { igdb(t, f); });
+    ask([&](const std::string &t, Found &f) { dlsite(t, f); });
     ask([&](const std::string &t, Found &f) { rawg(t, f); });
-    // VNDB is slow to search and rarely needed when another source knew the game.
+    // VNDB is slow to search and rarely needed when another source knew the
+    // game; itch.io is full of fan games with the same names, so it is asked
+    // only when nothing else has a cover.
     if (everything || all.empty() || pickUrl(all, 0).empty())
       ask([&](const std::string &t, Found &f) { vndb(t, f); });
+    if (all.empty() || pickUrl(all, 0).empty())
+      ask([&](const std::string &t, Found &f) { itch(t, f); });
+    // IGDB sometimes knows only another game of the same name. When a source
+    // that matched the name gives a release year more than a year apart,
+    // IGDB found the wrong game, unless IGDB's is an RPG Maker game (Steam
+    // sells the 2022 remake of Ib; IGDB found the 2012 original).
+    auto igdbAt = std::find_if(all.begin(), all.end(), [](const Found &f) { return f.source == "IGDB"; });
+    if (igdbAt != all.end() && !igdbAt->released.empty() && !igdbAt->rpgMaker)
+      for (auto &f : all)
+        if (&f != &*igdbAt && f.released.size() == 4 && std::abs(std::atoi(f.released.c_str()) - std::atoi(igdbAt->released.c_str())) > 1) {
+          all.erase(igdbAt);
+          break;
+        }
     return all;
   }
   static const Found *from(const std::vector<Found> &all, const char *source) {
@@ -624,17 +1100,51 @@ struct ArtFetch::State {
   }
   // The preferred source for each picture.
   static std::string pickUrl(const std::vector<Found> &all, int kind) {
-    static const char *order[3][4] = {{"SteamGridDB", "Steam", "VNDB", ""},
-                                      {"SteamGridDB", "Steam", "RAWG", "VNDB"},
-                                      {"SteamGridDB", "Steam", "", ""}};
+    static const char *order[3][7] = {{"SteamGridDB", "Steam", "IGDB", "DLsite", "VNDB", "itch.io", ""},
+                                      {"SteamGridDB", "Steam", "IGDB", "RAWG", "VNDB", "", ""},
+                                      {"SteamGridDB", "Steam", "", "", "", "", ""}};
     for (auto *name : order[kind])
-      if (auto *f = from(all, name))
-        if (!f->urls[kind].empty())
-          return f->urls[kind];
+      if (*name)
+        if (auto *f = from(all, name))
+          if (!f->urls[kind].empty())
+            return f->urls[kind];
     if (kind == 1)
-      if (auto *f = from(all, "Steam"))
-        return f->heroFallback;
+      for (auto *name : {"Steam", "DLsite", "itch.io"})
+        if (auto *f = from(all, name))
+          if (!f->heroFallback.empty())
+            return f->heroFallback;
     return "";
+  }
+  // Screenshots from the first source that has them.
+  static const Found *shotsFrom(const std::vector<Found> &all) {
+    for (auto *name : {"IGDB", "Steam", "VNDB", "RAWG", "DLsite"})
+      if (auto *f = from(all, name))
+        if (!f->shots.empty())
+          return f;
+    return nullptr;
+  }
+  // Saves up to four screenshots as shot1..shot4 in dir, replacing old ones.
+  bool saveShots(const Found &f, const std::string &dir) {
+    int n = 0;
+    std::vector<std::string> data;
+    for (auto &url : f.shots) {
+      std::string bytes;
+      if (cancel || data.size() >= 4 || !get(url, bytes))
+        continue;
+      if (Image::decode(std::vector<uint8_t>(bytes.begin(), bytes.end())).empty())
+        continue;
+      data.push_back(std::move(bytes));
+    }
+    if (data.empty())
+      return false;
+    for (int i = 1; i <= 4; ++i)
+      for (const char *ext : {".png", ".jpg", ".webp"})
+        std::remove((dir + "shot" + std::to_string(i) + ext).c_str());
+    for (auto &bytes : data) {
+      const char *ext = uint8_t(bytes[0]) == 0x89 ? ".png" : uint8_t(bytes[0]) == 0xff ? ".jpg" : ".webp";
+      n += write(dir, "shot" + std::to_string(n + 1) + ext, bytes);
+    }
+    return n > 0;
   }
   // Facts, each from the source that knows it best: RAWG for dates and
   // credits, Steam for the store description.
@@ -652,12 +1162,13 @@ struct ArtFetch::State {
       sources += (sources.empty() ? "" : ", ") + f.source;
       adult = adult || f.adult;
     }
-    return "{\n  \"title\": " + quoted(best(&Found::title, {"Steam", "RAWG", "VNDB", "SteamGridDB"})) +
-           ",\n  \"released\": " + quoted(best(&Found::released, {"RAWG", "Steam", "VNDB"})) +
-           ",\n  \"developer\": " + quoted(best(&Found::developer, {"RAWG", "Steam", "VNDB"})) +
-           ",\n  \"publisher\": " + quoted(best(&Found::publisher, {"RAWG", "Steam"})) +
-           ",\n  \"genres\": " + quoted(best(&Found::genres, {"RAWG"})) +
-           ",\n  \"description\": " + quoted(best(&Found::description, {"Steam", "RAWG", "VNDB"})) +
+    return "{\n  \"title\": " +
+           quoted(best(&Found::title, {"Steam", "IGDB", "RAWG", "VNDB", "SteamGridDB", "DLsite", "itch.io"})) +
+           ",\n  \"released\": " + quoted(best(&Found::released, {"IGDB", "RAWG", "Steam", "VNDB", "DLsite"})) +
+           ",\n  \"developer\": " + quoted(best(&Found::developer, {"IGDB", "RAWG", "Steam", "VNDB"})) +
+           ",\n  \"publisher\": " + quoted(best(&Found::publisher, {"IGDB", "RAWG", "Steam"})) +
+           ",\n  \"genres\": " + quoted(best(&Found::genres, {"IGDB", "RAWG"})) +
+           ",\n  \"description\": " + quoted(best(&Found::description, {"Steam", "IGDB", "RAWG", "VNDB"})) +
            ",\n  \"adult\": " + (adult ? "true" : "false") + ",\n  \"sources\": " + quoted(sources) + "\n}\n";
   }
   // Where a game's picture of this kind is now, if it has one.
@@ -687,13 +1198,28 @@ struct ArtFetch::State {
     for (auto &dir : job.existing)
       if (exists(root + dir + "/info.json"))
         info = false;
-    if (!need[0] && !need[1] && !need[2] && !info)
+    bool shots = current(job, "shot1").empty();
+    if (!need[0] && !need[1] && !need[2] && !info && !shots)
       return false;
     auto all = gather(job.name, false);
     auto dir = root + job.folder + "/";
     for (int k = 0; k < 3; ++k)
       if (need[k] && !cancel)
         found = save(pickUrl(all, k), dir, kinds[k]) || found;
+    // No source knew the game: its own title screen becomes its cover and
+    // background.
+    if ((need[0] || need[1]) && !cancel && pickUrl(all, 0).empty() && pickUrl(all, 1).empty()) {
+      auto title = titleScreen(job.gameDir);
+      if (!title.empty() && !Image::decode(std::vector<uint8_t>(title.begin(), title.end())).empty()) {
+        const char *ext = uint8_t(title[0]) == 0x89 ? ".png" : ".jpg";
+        for (int k = 0; k < 2; ++k)
+          if (need[k])
+            found = write(dir, std::string(kinds[k]) + ext, title) || found;
+      }
+    }
+    if (shots && !cancel)
+      if (auto *f = shotsFrom(all))
+        found = saveShots(*f, dir) || found;
     if (info && !cancel && !all.empty())
       found = write(dir, "info.json", infoJson(all)) || found;
     return found;
@@ -702,7 +1228,7 @@ struct ArtFetch::State {
   // One game: every source's pictures are offered beside the current one.
   bool choose(const Job &job) {
     auto all = gather(job.name, true);
-    if (all.empty() || cancel)
+    if (cancel || (all.empty() && titleScreen(job.gameDir).empty()))
       return false;
     Choices offer;
     offer.key = job.key;
@@ -725,6 +1251,17 @@ struct ArtFetch::State {
         sources[k].push_back("Current");
       }
       std::vector<std::string> seen;
+      // The game's own title screen, as a cover or background.
+      if (k < 2 && !cancel) {
+        auto title = titleScreen(job.gameDir);
+        Image img = title.empty() || title == nowBytes ? Image() : Image::decode(std::vector<uint8_t>(title.begin(), title.end()));
+        if (!img.empty()) {
+          offer.options[k].push_back({"Title screen", thumbnail(img, k), false, false});
+          bytes[k].push_back(std::move(title));
+          paths[k].push_back("");
+          sources[k].push_back("Title screen");
+        }
+      }
       for (auto &f : all) {
         auto url = f.urls[k].empty() && k == 1 && f.source == "Steam" ? f.heroFallback : f.urls[k];
         std::string data;
@@ -811,6 +1348,8 @@ struct ArtFetch::State {
         break;
       }
     found = write(infoDir, "info.json", infoJson(facts)) || found;
+    if (auto *f = shotsFrom(facts))
+      found = saveShots(*f, infoDir) || found;
     return found;
   }
 
@@ -910,6 +1449,8 @@ void ArtFetch::start(std::vector<Job> jobs, const std::string &artRoot, const st
   state->progress.total = int(state->jobs.size());
   state->gridKey = readKey(dataRoot + "steamgriddb-key.txt");
   state->rawgKey = readKey(dataRoot + "rawg-key.txt");
+  state->igdbId = readKey(dataRoot + "igdb-client-id.txt");
+  state->igdbSecret = readKey(dataRoot + "igdb-client-secret.txt");
 #ifdef __vita__
   auto holder = new std::shared_ptr<State>(state);
   auto thread = sceKernelCreateThread("hardrpg_art_fetch", State::entry, 0x10000100, 256 * 1024, 0, 0, nullptr);

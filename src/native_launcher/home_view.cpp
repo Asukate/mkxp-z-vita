@@ -179,6 +179,11 @@ void View::receiveArt() {
     if (found == art.end() || r.cancelled)
       continue;
     Art &a = found->second;
+    if (r.shots) {
+      a.shotsLoaded = true;
+      a.shots = std::move(r.pictures);
+      continue;
+    }
     if (!r.hero) {
       a.coverLoaded = true;
       a.generate = r.cover.empty();
@@ -612,11 +617,26 @@ void View::buildHome(const UI &u) {
   // Details panel, sliding in from the right over the darkened art.
   if (details > 0.01 && current) {
     auto &a = artFor(u, *current, 0);
+    // Screenshots, four across above the folder line.
+    const int shotW = 135, shotH = 76, shotGap = 12;
+    if (!a.shotsLoaded) {
+      ArtLoader::Request r;
+      r.key = u.entryKey(*current);
+      r.shots = true;
+      r.root = u.model.paths.at("art/");
+      r.names = u.artFolders(*current);
+      r.cache = u.model.paths.at("cache/art/");
+      r.width = shotW;
+      r.height = shotH;
+      r.blurAdult = u.blurAdult;
+      loader->want(r, -1);
+    }
     auto act = u.activity.find(u.entryKey(*current));
     Activity stat = act == u.activity.end() ? Activity{} : act->second;
     bool fav = u.favourites.count(u.entryKey(*current));
     std::string key = u.entryKey(*current) + "|" + std::to_string(fav) + "|" + std::to_string(stat.seconds) + "|" +
-                      std::to_string(stat.last) + "|" + std::to_string(a.logo.id) + "|" + a.info;
+                      std::to_string(stat.last) + "|" + std::to_string(a.logo.id) + "|" + a.info + "|" +
+                      std::to_string(a.shots.size());
     if (beginLayer(detailsLayer, key, width - detailsX - 16, playY - detailsY + buttonH)) {
       int w = width - detailsX - 40;
       // Facts downloaded with the artwork, blended from several sources.
@@ -679,9 +699,10 @@ void View::buildHome(const UI &u) {
       }
       y += 58;
       int by = playY - detailsY;
+      int shotsH = a.shots.empty() ? 0 : shotH + 14;
       if (!description.empty()) {
         auto lines = wrap(description, 15, w);
-        int room = std::max(0, (by - 40 - y) / 20);
+        int room = std::max(0, (by - 40 - shotsH - y) / 20);
         for (int i = 0; i < int(lines.size()) && i < room; ++i) {
           auto text = lines[i];
           if (i == room - 1 && i + 1 < int(lines.size()))
@@ -700,6 +721,14 @@ void View::buildHome(const UI &u) {
       endLayer();
     }
     layerQuad(detailsLayer, detailsX + (1 - details) * 24, detailsY, details);
+    for (size_t i = 0; i < a.shots.size() && i < 4; ++i) {
+      Quad q;
+      q.image = &a.shots[i];
+      q.x = float(detailsX + (1 - details) * 24 + int(i) * (shotW + shotGap));
+      q.y = float(playY - 24 - 10 - shotH);
+      q.w = float(shotW), q.h = float(shotH), q.alpha = float(details), q.radius = 4;
+      scene.push_back(q);
+    }
   }
 
   // Top bar: brand on the left; About, clock, battery and settings on the right.

@@ -1,4 +1,4 @@
-// The artwork downloader against canned Steam, RAWG and VNDB replies: which
+// The artwork downloader against canned Steam, RAWG, VNDB, IGDB, DLsite and itch.io replies: which
 // source wins each picture and fact, the adult flag, VNDB's RPG Maker check,
 // and the per-game chooser. Usage: art-fetch WORK_DIR
 #include "native_launcher/art_fetch.h"
@@ -207,6 +207,228 @@ int main(int argc, char **argv) {
     finish(fetch);
   }
   assert(asked == "Mogeko%20Castle;");
+
+  // 7. IGDB: the login comes first; its search may miss a short name
+  // ("OFF"), so the exact name is asked too; among same-name games the one
+  // made with RPG Maker wins over a newer one; screenshots are saved.
+  std::ofstream(root + "/igdb-client-id.txt") << "clientid\n";
+  std::ofstream(root + "/igdb-client-secret.txt") << "secret\n";
+  std::vector<std::string> igdbBodies;
+  int logins = 0;
+  ArtFetch::setTransport([&](const std::string &url, const std::string &post, std::string &out) {
+    auto has = [&](const char *part) { return url.find(part) != std::string::npos; };
+    if (has("id.twitch.tv/oauth2/token")) {
+      ++logins;
+      out = "{\"access_token\":\"tok\"}";
+    } else if (has("api.igdb.com/v4/games")) {
+      igdbBodies.push_back(post);
+      if (post.rfind("search", 0) == 0)
+        out = "[]";
+      else
+        out = "[{\"id\":1,\"name\":\"Off\",\"first_release_date\":1700000000,\"cover\":{\"image_id\":\"newcover\"}},"
+              "{\"id\":2,\"name\":\"OFF\",\"first_release_date\":1215000000,\"cover\":{\"image_id\":\"oldcover\"},"
+              "\"game_engines\":[{\"name\":\"RPG Maker 2003\"}],\"summary\":\"A batter purifies zones.\","
+              "\"screenshots\":[{\"image_id\":\"s1\"},{\"image_id\":\"s2\"}],"
+              "\"involved_companies\":[{\"company\":{\"name\":\"Mortis Ghost\"},\"developer\":true,\"publisher\":false}]}]";
+    } else if (has("images.igdb.com") && has("oldcover"))
+      out = cover;
+    else if (has("images.igdb.com") && (has("/s1.") || has("/s2.")))
+      out = hero;
+    else if (has("images.igdb.com"))
+      out = other;
+    else if (has("storesearch"))
+      out = "{\"items\":[]}";
+    else if (has("kana/vn") || has("kana/release"))
+      out = "{\"results\":[]}";
+    else if (has("api.rawg.io"))
+      out = "{\"results\":[]}";
+    else
+      return false; // DLsite, itch.io: nothing
+    return true;
+  });
+  {
+    ArtFetch fetch;
+    assert(run(fetch, "OFF", "off", true).found == 1);
+    finish(fetch);
+  }
+  assert(logins == 1 && igdbBodies.size() == 2 && igdbBodies[1].rfind("where name ~ \"OFF\";", 0) == 0);
+  assert(read(root + "/art/off/cover.jpg") == cover);
+  assert(read(root + "/art/off/shot1.jpg") == hero && exists(root + "/art/off/shot2.jpg") && !exists(root + "/art/off/shot3.jpg"));
+  info = read(root + "/art/off/info.json");
+  assert(info.find("\"released\": \"2008\"") != std::string::npos && info.find("\"developer\": \"Mortis Ghost\"") != std::string::npos);
+  std::remove((root + "/igdb-client-id.txt").c_str());
+
+  // 8. DLsite: its search page names the product; a small JSON reply gives
+  // the cover, the year and the adult rating. Spaces are sent as '+'.
+  std::string dlsiteAsked;
+  ArtFetch::setTransport([&](const std::string &url, const std::string &, std::string &out) {
+    auto has = [&](const char *part) { return url.find(part) != std::string::npos; };
+    if (has("dlsite.com/maniax/fsr")) {
+      dlsiteAsked = url;
+      out = "<a href=\"https://www.dlsite.com/maniax/work/=/product_id/RJ01000001.html\" title=\"Other Game\">"
+            "<a href=\"https://www.dlsite.com/maniax/work/=/product_id/RJ203687.html\" title=\"Dream Diary -夢-\">";
+    } else if (has("product/info/ajax?product_id=RJ203687"))
+      out = "{\"RJ203687\":{\"work_name\":\"Dream Diary -夢-\",\"age_category\":3,\"regist_date\":\"2017-08-29 00:00:00\","
+            "\"work_image\":\"//img.dlsite.jp/x/RJ203687_img_main.jpg\"}}";
+    else if (has("img.dlsite.jp/x/RJ203687_img_main"))
+      out = cover;
+    else if (has("RJ203687_img_smp1"))
+      out = hero;
+    else if (has("storesearch"))
+      out = "{\"items\":[]}";
+    else if (has("kana/"))
+      out = "{\"results\":[]}";
+    else
+      return false;
+    return true;
+  });
+  {
+    ArtFetch fetch;
+    assert(run(fetch, "Dream Diary", "dream", true).found == 1);
+    finish(fetch);
+  }
+  assert(dlsiteAsked.find("keyword/Dream+Diary/") != std::string::npos);
+  assert(read(root + "/art/dream/cover.jpg") == cover && read(root + "/art/dream/shot1.jpg") == hero);
+  info = read(root + "/art/dream/info.json");
+  assert(info.find("\"adult\": true") != std::string::npos && info.find("\"released\": \"2017\"") != std::string::npos);
+
+  // 9. itch.io is asked last and only an exact name counts: a fan game
+  // whose name merely contains the game's is ignored. Folder names like
+  // "to-the-moon" are searched as words.
+  std::string itchAsked;
+  std::string itchPage =
+      "<div data-game_id=\"5\"><img data-lazy_src=\"https://img.itch.zone/a/315x250%23c/fan.png\">"
+      "<a class=\"title game_link\" href=\"https://x.itch.io/fan\">To the Moon Fan Remake</a></div>"
+      "<div data-game_id=\"6\"><img data-lazy_src=\"https://img.itch.zone/b/315x250%23c/real.png\">"
+      "<a class=\"title game_link\" href=\"https://y.itch.io/real\" data-label=\"game:6:title\">To the Moon</a></div>";
+  ArtFetch::setTransport([&](const std::string &url, const std::string &, std::string &out) {
+    auto has = [&](const char *part) { return url.find(part) != std::string::npos; };
+    if (has("itch.io/search")) {
+      itchAsked = url;
+      out = itchPage;
+    } else if (has("img.itch.zone/b/630x500%23c/real.png"))
+      out = cover;
+    else if (has("storesearch"))
+      out = "{\"items\":[]}";
+    else if (has("kana/"))
+      out = "{\"results\":[]}";
+    else
+      return false;
+    return true;
+  });
+  {
+    ArtFetch fetch;
+    assert(run(fetch, "to-the-moon", "moon", true).found == 1);
+    finish(fetch);
+  }
+  assert(itchAsked.find("q=to%20the%20moon") != std::string::npos && read(root + "/art/moon/cover.jpg") == cover);
+
+  // Accented letters match their plain ones in a library run.
+  steamSearch = "{\"items\":[{\"name\":\"Pok\xc3\xa9mon Fusion\",\"id\":10}]}";
+  ArtFetch::setTransport([&](const std::string &url, const std::string &, std::string &out) {
+    if (url.find("storesearch") != std::string::npos)
+      out = steamSearch;
+    else if (url.find("GetItems") != std::string::npos)
+      out = steamItem;
+    else if (url.find("img/cover") != std::string::npos)
+      out = cover;
+    else if (url.find("kana/") != std::string::npos)
+      out = "{\"results\":[]}";
+    else
+      return false;
+    return true;
+  });
+  {
+    ArtFetch fetch;
+    assert(run(fetch, "Pokemon Fusion", "fusion", true).found == 1);
+    finish(fetch);
+  }
+
+  // 10. Nothing found anywhere: the game's own title screen becomes its
+  // cover and background, from loose files or the encrypted archive.
+  ArtFetch::setTransport([&](const std::string &url, const std::string &, std::string &out) {
+    if (url.find("storesearch") != std::string::npos)
+      out = "{\"items\":[]}";
+    else if (url.find("kana/") != std::string::npos)
+      out = "{\"results\":[]}";
+    else
+      return false;
+    return true;
+  });
+  auto title = picture(222), small = picture(10);
+  auto game = root + "/games/loose";
+  mkdir((root + "/games").c_str(), 0777);
+  mkdir(game.c_str(), 0777);
+  mkdir((game + "/Graphics").c_str(), 0777);
+  mkdir((game + "/Graphics/Titles1").c_str(), 0777);
+  std::ofstream(game + "/Graphics/Titles1/Small.jpg", std::ios::binary) << small.substr(0, small.size() / 2);
+  std::ofstream(game + "/Graphics/Titles1/Castle.jpg", std::ios::binary) << title;
+  auto job = [&](const std::string &name, const std::string &folder, const std::string &dir) {
+    ArtFetch fetch;
+    ArtFetch::Job j{"key-" + folder, name, folder, {folder}, dir};
+    fetch.start({j}, root + "/art/", root + "/", true);
+    finish(fetch);
+    return fetch.poll().found;
+  };
+  assert(job("Unknown Loose Game", "loose", game) == 1);
+  assert(read(root + "/art/loose/cover.jpg") == title && read(root + "/art/loose/hero.jpg") == title);
+  // XP and VX archives (version 1) and VX Ace archives (version 3).
+  auto archive = [&](int version, const std::string &path, const std::vector<std::pair<std::string, std::string>> &files) {
+    std::string out = std::string("RGSSAD\0", 7) + char(version);
+    auto put = [&](uint32_t v) {
+      for (int i = 0; i < 4; ++i)
+        out += char((v >> (8 * i)) & 0xff);
+    };
+    auto crypt = [](std::string data, uint32_t key) {
+      for (size_t i = 0; i < data.size(); ++i) {
+        data[i] = char((unsigned char)data[i] ^ ((key >> (8 * (i % 4))) & 0xff));
+        if (i % 4 == 3)
+          key = key * 7 + 3;
+      }
+      return data;
+    };
+    if (version == 1) {
+      uint32_t key = 0xDEADCAFE;
+      for (auto &f : files) {
+        put(uint32_t(f.first.size()) ^ key), key = key * 7 + 3;
+        for (char c : f.first)
+          out += char((unsigned char)c ^ (key & 0xff)), key = key * 7 + 3;
+        put(uint32_t(f.second.size()) ^ key), key = key * 7 + 3;
+        out += crypt(f.second, key);
+      }
+    } else {
+      uint32_t seed = 7, key = seed * 9 + 3;
+      put(seed);
+      size_t table = 0; // the entry table, after the 12 header bytes already written
+      for (auto &f : files)
+        table += 16 + f.first.size();
+      table += 4;
+      uint32_t offset = uint32_t(out.size() + table);
+      std::string data;
+      for (auto &f : files) {
+        uint32_t fileKey = 0x1234567u + uint32_t(f.second.size());
+        put(offset ^ key), put(uint32_t(f.second.size()) ^ key), put(fileKey ^ key), put(uint32_t(f.first.size()) ^ key);
+        for (size_t i = 0; i < f.first.size(); ++i)
+          out += char((unsigned char)f.first[i] ^ ((key >> (8 * (i % 4))) & 0xff));
+        data += crypt(f.second, fileKey);
+        offset += uint32_t(f.second.size());
+      }
+      put(0 ^ key);
+      out += data;
+    }
+    std::ofstream(path, std::ios::binary) << out;
+  };
+  for (int version : {1, 3}) {
+    auto dir = root + "/games/packed" + std::to_string(version);
+    mkdir(dir.c_str(), 0777);
+    archive(version, dir + (version == 1 ? "/Packed.rgssad" : "/Game.rgss3a"),
+            {{"Data\\Map001.rxdata", std::string(5000, 'x')},
+             {version == 1 ? "Graphics\\Titles\\Title.jpg" : "Graphics\\Titles1\\Night.jpg", title},
+             {"Graphics\\Pictures\\Big.jpg", other + other}});
+    auto folder = "packed" + std::to_string(version);
+    assert(job("Unknown Packed Game " + std::to_string(version), folder, dir) == 1);
+    assert(read(root + "/art/" + folder + "/cover.jpg") == title);
+  }
   ArtFetch::setTransport(nullptr);
   std::cout << "art-fetch: all checks passed\n";
 }
