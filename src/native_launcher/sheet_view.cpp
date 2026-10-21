@@ -139,7 +139,7 @@ void View::buildSheet(const UI &u) {
       row(Row::Choice, labels[i], custom ? "Custom" : i == 2 ? filterNames[value] : names[i][value]);
     }
     focusRow = u.setting;
-    notes = {tr(u.gameOptions ? "Saved for this game. Square goes back to the default for every game."
+    notes = {tr(u.gameOptions ? "Saved for this game. <square> Square goes back to the default for every game."
                               : "Used by games without settings of their own.")};
     left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", u.gameOptions ? "Use default" : "Reset", Button::Square), back};
   };
@@ -152,10 +152,10 @@ void View::buildSheet(const UI &u) {
       mode = i->second.as_integer();
     const char *modes[] = {"Off", "FPS", "FPS and frame timing"};
     row(Row::Choice, "Overlay in game", modes[mode]);
-    row(Row::Toggle, "Fast forward with L+R", "", boolean("fastForward", true));
+    row(Row::Toggle, "Fast forward with <l>+<r>", "", boolean("fastForward", true));
     focusRow = u.setting;
     if (u.setting == 1)
-      notes = {tr("L+R switches up to twice the speed; »» shows in the corner while it is on. Busy maps run as fast "
+      notes = {tr("<l>+<r> switches up to twice the speed; »» shows in the corner while it is on. Busy maps run as fast "
                   "as they can."),
                tr("Any button can also be mapped to Fast forward in Controls. Applies the next time a game starts.")};
     else
@@ -231,9 +231,9 @@ void View::buildSheet(const UI &u) {
       first = u.settingFirst;
       notes = {!u.message.empty() ? u.message
                : tr(u.controlsAdvanced ? "Pointer options need a game that reads the mouse."
-                    : u.setting >= 1 && u.setting <= 12 ? "Cross gives this button a keyboard key or an RPG Maker action."
+                    : u.setting >= 1 && u.setting <= 12 ? "<cross> Cross gives this button a keyboard key or an RPG Maker action."
                     : u.controls.enabled ? "Each button does what is shown. Saved for this game."
-                                         : "Pick a button and press Cross to map it to any keyboard key.")};
+                                         : "Pick a button and press <cross> Cross to map it to any keyboard key.")};
       left = {cross, back};
     }
   } else if (!u.errorReport.empty()) {
@@ -267,10 +267,10 @@ void View::buildSheet(const UI &u) {
     first = u.browserFirst;
     if (u.browser->list.empty())
       notes = {tr(u.browser->path.empty() ? "No storage found."
-                  : rtp || folder        ? "No folders here. Square uses this folder."
-                                         : "No folders here. Square looks for games in this folder.")};
+                  : rtp || folder        ? "No folders here. <square> Square uses this folder."
+                                         : "No folders here. <square> Square looks for games in this folder.")};
     else if (!rtp && !folder)
-      notes = {tr("Square looks for games in the folder shown above, including the folders inside it. Games stay where they are.")};
+      notes = {tr("<square> Square looks for games in the folder shown above, including the folders inside it. Games stay where they are.")};
     left = {hint("btn-cross-26", "Open", Button::Cross),
             hint("btn-square-26", rtp || folder ? "Use this folder" : "Add games here", Button::Square), back};
     right = {{"START", tr("Close"), Button::Start}};
@@ -694,7 +694,7 @@ void View::buildSheet(const UI &u) {
     place(caption.image, 228, 204);
     if (u.controlsCount() == 1) {
       int m = rear ? u.controls.rear : u.controls.front;
-      std::string text = tr(m == 2 ? (rear ? "Trackpad: hold L and slide to move the pointer." : "Mouse pointer: touches move and click the pointer.")
+      std::string text = tr(m == 2 ? (rear ? "Trackpad: hold <l> and slide to move the pointer." : "Mouse pointer: touches move and click the pointer.")
                                    : "Off. Choose a mode with Left and Right to map zones.");
       auto &l = rowCache["padoff|" + text];
       if (l.key.empty()) {

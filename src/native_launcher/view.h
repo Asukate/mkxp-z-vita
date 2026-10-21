@@ -92,6 +92,9 @@ private:
   void blitScaled(const Image &, double x, double y, double w, double h, int alpha = 255, int brightness = 256, int radius = 0);
   void rect(int x, int y, int w, int h, Color, int alpha, int radius = 0);
   int measure(const std::string &, int size, bool display = false);
+  // Button tokens in text ("<cross>", "<l>"): their width, and drawing one.
+  int tokenWidth(const void *token, int size);
+  void drawToken(const void *token, int x, int y, int size, int alpha);
   // Draws text with its top-left at x,y; align -1 left, 0 centre, 1 right.
   void label(int x, int y, const std::string &, int size, Color, int alpha = 255, bool display = false, int align = -1, int maxWidth = 0);
   struct Hint {
@@ -110,7 +113,9 @@ private:
   // The welcome guide (welcome.cpp): the screen, and one slide as a layer.
   void buildWelcome(const UI &);
   const Image &welcomeSlide(const UI &, int slide);
+  void welcomeMotion(const UI &, int slide, double ox, double alpha, double clock, bool behind);
   std::map<std::string, Layer> welcomeCache;
+  std::map<std::string, int> welcomeExtra; // where a slide's moving part sits
   void homePanels(const UI &, const std::vector<size_t> &list);
   void homeHints(const UI &, const std::vector<size_t> &list);
   struct Glyph {

@@ -80,10 +80,19 @@ in English. In-app release notes stay in English. Text is drawn with the full
 Liberation Sans (`font.ttf`, Latin, Greek and Cyrillic) and Rajdhani for
 titles; the launcher tests check that every translation has its glyphs in both.
 
-On the first start a short welcome guide shows: language, where games go, the
-RTP, a few defaults and game info. Cross moves on, Circle goes back, Start
-skips it. Finishing or skipping it records `welcomeSeen` in
+On the first start a short welcome guide shows: language, where games go
+(with an example folder list and what ZIP games cost), the RTP (the folder
+names it looks for), the library view, a few defaults and game info. Cross
+moves on, Circle goes back, Start skips it. On the view slide Left/Right pick
+the carousel or the grid. Finishing or skipping it records `welcomeSeen` in
 `launcher-preferences.json`; Settings -> Welcome guide shows it again.
+
+The library view is kept there too (`homeGrid`): the toolbar's view button and
+the guide both save it, so the library opens in the view used last.
+
+Text can show button icons: `<cross>`, `<circle>`, `<square>`, `<triangle>`
+draw the face button icons and `<start>`, `<select>`, `<l>`, `<r>` and the
+arrows a small badge. Translations must keep the same tokens (tested).
 
 ## Rendering and keyboard integration
 

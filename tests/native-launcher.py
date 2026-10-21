@@ -277,7 +277,10 @@ class NativeLauncher(unittest.TestCase):
         state=self.ui('up,left,left,left,cross,down,down,down,right')
         self.assertTrue(state['homeGrid'])
         self.assertEqual(state['homeTarget'],11)
+        # The view is kept between starts, so tapping the button now goes back.
+        self.assertFalse(self.ui('touch:39:91')['homeGrid'])
         self.assertTrue(self.ui('touch:39:91')['homeGrid'])
+        self.assertFalse(self.ui('touch:39:91')['homeGrid'])
         # Filter panel: favourites only, with no favourites, shows nothing.
         state=self.ui('up,cross,down,down,down,down,cross')
         self.assertEqual(state['homePanel'],1)
@@ -373,6 +376,8 @@ class NativeLauncher(unittest.TestCase):
                 with self.subTest(language=code, text=english):
                     self.assertTrue(text)
                     self.assertEqual(text.count('{}'), english.count('{}'))
+                    # Button icons ("<cross>", "<l>") stay, as many of each.
+                    self.assertEqual(sorted(re.findall(r'<[a-z]+>', text)), sorted(re.findall(r'<[a-z]+>', english)))
 
     def test_welcome_guide_shows_once_and_again_from_settings(self):
         self.game(self.games/'Ace', 3, 'Ace')
@@ -384,17 +389,25 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(state['welcomeSlide'], 0)
         self.assertFalse(state['homeActive'])
         # Cross goes on, Circle back; it is not marked seen until it ends.
-        self.assertEqual(guide('cross,cross,cross')['welcomeSlide'], 3)
+        self.assertEqual(guide('cross,cross,cross,cross')['welcomeSlide'], 4)
         self.assertEqual(guide('cross,cross,circle')['welcomeSlide'], 1)
         self.assertEqual(guide('circle')['welcomeSlide'], 0)
         self.assertFalse(guide('cross,cross')['welcomeSeen'])
         self.assertTrue(guide()['welcomeActive'])
+        # The library view slide (3): Left and Right choose carousel or grid,
+        # saved at once; Cross still moves on.
+        self.assertFalse(guide()['homeGrid'])
+        state = guide('cross,cross,cross,right')
+        self.assertEqual((state['welcomeSlide'], state['homeGrid']), (3, True))
+        self.assertIs(json.loads(prefs.read_text())['homeGrid'], True)
+        self.assertEqual(guide('cross,cross,cross,left,cross')['welcomeSlide'], 4)
+        self.assertFalse(json.loads(prefs.read_text())['homeGrid'])
         # Down on the language slide switches the language at once.
         state = guide('down')
         self.assertEqual((state['language'], state['welcomeSlide']), ('es', 0))
         self.assertEqual(json.loads(prefs.read_text())['language'], 'es')
         # Cross on the last slide ends it: home, and it is remembered.
-        state = guide('cross,'*5)
+        state = guide('cross,'*6)
         self.assertFalse(state['welcomeActive'])
         self.assertTrue(state['homeActive'])
         self.assertTrue(state['welcomeSeen'])
@@ -416,10 +429,22 @@ class NativeLauncher(unittest.TestCase):
         # Its slides draw in every language.
         prefs.unlink()
         for lang in ['en', 'es', 'pt-BR']:
-            for slide in range(5):
+            for slide in range(6):
                 shot = self.storage/f'welcome-{lang}-{slide}.png'
                 self.run_binary('--welcome', 'auto', '--language', lang, '--actions', ','.join(['cross']*slide), '--snapshot', shot)
                 self.assertGreater(shot.stat().st_size, 10000)
+
+    def test_library_view_is_kept_between_starts(self):
+        self.game(self.games/'Ace', 3, 'Ace')
+        prefs = self.root/'launcher-preferences.json'
+        self.assertFalse(self.ui()['homeGrid'])
+        # The toolbar's first button switches the view; the next start keeps it.
+        view = 'up,left,left,left,cross'
+        self.assertTrue(self.ui(view)['homeGrid'])
+        self.assertIs(json.loads(prefs.read_text())['homeGrid'], True)
+        self.assertTrue(self.ui()['homeGrid'])
+        self.assertFalse(self.ui(view)['homeGrid'])
+        self.assertFalse(self.ui()['homeGrid'])
 
     def test_launcher_preferences_and_artwork_keys(self):
         prefs=self.root/'launcher-preferences.json'

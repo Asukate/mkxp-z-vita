@@ -316,11 +316,66 @@ uint32_t decode(const std::string &s, size_t &i) {
 }
 } // namespace
 
+// Button tokens in text: "<cross>" draws the Cross icon, "<l>" an L badge.
+namespace {
+struct ButtonToken {
+  const char *name, *icon, *badge;
+};
+const ButtonToken buttonTokens[] = {
+    {"cross", "btn-cross-26", nullptr},   {"circle", "btn-circle-26", nullptr}, {"square", "btn-square-26", nullptr},
+    {"triangle", "btn-triangle-26", nullptr}, {"start", nullptr, "START"},     {"select", nullptr, "SELECT"},
+    {"l", nullptr, "L"},                  {"r", nullptr, "R"},                  {"up", nullptr, "\xe2\x86\x91"},
+    {"down", nullptr, "\xe2\x86\x93"},   {"left", nullptr, "\xe2\x86\x90"},   {"right", nullptr, "\xe2\x86\x92"},
+};
+// The token starting at s[i], or null; len is its length with the brackets.
+const ButtonToken *buttonToken(const std::string &s, size_t i, size_t &len) {
+  if (s[i] != '<')
+    return nullptr;
+  auto end = s.find('>', i);
+  if (end == std::string::npos || end - i > 10)
+    return nullptr;
+  for (auto &t : buttonTokens)
+    if (s.compare(i + 1, end - i - 1, t.name) == 0 && std::strlen(t.name) == end - i - 1) {
+      len = end - i + 1;
+      return &t;
+    }
+  return nullptr;
+}
+} // namespace
+
+int View::tokenWidth(const void *token, int size) {
+  auto &t = *static_cast<const ButtonToken *>(token);
+  if (t.icon)
+    return size + 6;
+  return measure(t.badge, std::max(9, size * 2 / 3)) + 12;
+}
+
+void View::drawToken(const void *token, int x, int y, int size, int alpha) {
+  auto &t = *static_cast<const ButtonToken *>(token);
+  int line = size + size / 5; // about the height of a line of text
+  if (t.icon) {
+    blitScaled(icon(t.icon), x + 1, y + (line - size - 2) / 2, size + 2, size + 2, alpha);
+    return;
+  }
+  int small = std::max(9, size * 2 / 3), w = tokenWidth(token, size) - 4, h = small + 8;
+  int top = y + (line - h) / 2;
+  rect(x + 1, top, w, h, {255, 255, 255}, 90 * alpha / 255, 4);
+  rect(x + 2, top + 1, w - 2, h - 2, {12, 12, 14}, alpha, 3);
+  label(x + 1 + w / 2, top + 3, t.badge, small, {222, 222, 224}, alpha, false, 0);
+}
+
 int View::measure(const std::string &s, int size, bool alt) {
   FT_Face f = alt && display ? display : face;
   FT_Set_Pixel_Sizes(f, 0, size);
   int pen = 0;
   for (size_t i = 0; i < s.size();) {
+    size_t len;
+    if (auto *t = buttonToken(s, i, len)) {
+      pen += tokenWidth(t, size);
+      FT_Set_Pixel_Sizes(f, 0, size);
+      i += len;
+      continue;
+    }
     auto index = FT_Get_Char_Index(f, decode(s, i));
     if (!index)
       index = FT_Get_Char_Index(f, '?');
@@ -339,6 +394,13 @@ void View::label(int x, int y, const std::string &s, int size, Color color, int 
   if (maxWidth > 0 && w > maxWidth) {
     // Trim on character boundaries and add an ellipsis.
     while (!str.empty() && measure(str + "...", size, alt) > maxWidth) {
+      // A button token goes whole.
+      auto open = str.rfind('<');
+      size_t len;
+      if (str.back() == '>' && open != std::string::npos && buttonToken(str, open, len) && open + len == str.size()) {
+        str.erase(open);
+        continue;
+      }
       str.pop_back();
       while (!str.empty() && (static_cast<unsigned char>(str.back()) & 0xc0) == 0x80)
         str.pop_back();
@@ -354,6 +416,14 @@ void View::label(int x, int y, const std::string &s, int size, Color color, int 
   int pen = align < 0 ? x : align == 0 ? x - w / 2 : x - w;
   int baseline = y + asc;
   for (size_t i = 0; i < str.size();) {
+    size_t len;
+    if (auto *t = buttonToken(str, i, len)) {
+      drawToken(t, pen, y, size, alpha);
+      pen += tokenWidth(t, size);
+      FT_Set_Pixel_Sizes(f, 0, size);
+      i += len;
+      continue;
+    }
     auto index = FT_Get_Char_Index(f, decode(str, i));
     if (!index)
       index = FT_Get_Char_Index(f, '?');

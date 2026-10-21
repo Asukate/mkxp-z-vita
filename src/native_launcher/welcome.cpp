@@ -14,6 +14,7 @@ void UI::openWelcome() {
   welcome.slide = 0;
   welcome.from = -1;
   welcome.amount = 1;
+  welcome.clock = 0;
   welcome.languageFocus = language();
   message.clear();
 }
@@ -32,9 +33,18 @@ void UI::welcomeAction(Button b) {
     welcome.slide += step;
     welcome.direction = step;
     welcome.amount = 0;
+    welcome.clock = 0;
   };
   int last = Welcome::SlideCount - 1;
-  if (b == Button::Cross || b == Button::Right) {
+  if (welcome.slide == Welcome::View && (b == Button::Left || b == Button::Right)) {
+    // Left is the carousel, Right the grid; the library opens in it from now on.
+    bool grid = b == Button::Right;
+    if (home.grid != grid) {
+      home.grid = grid;
+      home.details = false;
+      savePreferences();
+    }
+  } else if (b == Button::Cross || b == Button::Right) {
     if (welcome.slide == last)
       finishWelcome();
     else
@@ -67,6 +77,11 @@ void UI::welcomeTap(int x, int y) {
         selectLanguage(i);
         return;
       }
+  if (welcome.slide == Welcome::View)
+    for (int i = 0; i < 2; ++i)
+      if (inside(x, y, slideX + welcomeLayout::viewX(i), slideY + viewTop, viewW, viewH + viewLabelH)) {
+        welcomeAction(i ? Button::Right : Button::Left);
+        return;
+      }
 }
-
 } // namespace hardrpg

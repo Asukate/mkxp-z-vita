@@ -130,6 +130,8 @@ void UI::loadHome() {
         lang = languageFromCode(o.at("language").as_string());
       if (o.count("welcomeSeen") && o.at("welcomeSeen").is_boolean())
         welcomeSeen = o.at("welcomeSeen").as_boolean();
+      if (o.count("homeGrid") && o.at("homeGrid").is_boolean())
+        home.grid = o.at("homeGrid").as_boolean();
     }
   } catch (...) {
     // A damaged file only loses the preferences.
@@ -144,6 +146,7 @@ void UI::savePreferences() {
   o["blurAdult"] = blurAdult;
   o["language"] = std::string(languageCode(language()));
   o["welcomeSeen"] = welcomeSeen;
+  o["homeGrid"] = home.grid;
   try {
     atomicWrite(model.paths.at("launcher-preferences.json"), prefs.stringify());
   } catch (const std::exception &e) {
@@ -413,6 +416,7 @@ void UI::homeAction(Button b) {
       if (home.toolbarFocus == 0) {
         home.grid = !home.grid;
         home.details = false;
+        savePreferences(); // the library opens in this view from now on
       } else if (home.toolbarFocus == 1)
         openBrowser(BrowseMode::Games);
       else if (home.toolbarFocus == 2)
@@ -687,8 +691,9 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
 }
 
 bool UI::animating() const {
+  // The guide's slides animate for a moment; the view previews keep moving.
   if (welcome.active)
-    return welcome.amount < 1;
+    return welcome.amount < 1 || welcome.clock < 2.5 || welcome.slide == Welcome::View;
   if (!homeActive())
     return false;
   return home.dragging || std::fabs(home.target - home.position) > 0.002 ||
@@ -697,11 +702,14 @@ bool UI::animating() const {
 }
 
 void UI::tick(double seconds) {
-  if (welcome.active && welcome.amount < 1) {
+  if (welcome.active) {
+    welcome.clock += seconds;
     // A slide change takes about a quarter of a second.
-    welcome.amount = std::min(1.0, welcome.amount + seconds / 0.26);
-    if (welcome.amount >= 1)
-      welcome.from = -1;
+    if (welcome.amount < 1) {
+      welcome.amount = std::min(1.0, welcome.amount + seconds / 0.26);
+      if (welcome.amount >= 1)
+        welcome.from = -1;
+    }
   }
   if (home.dragging)
     return;

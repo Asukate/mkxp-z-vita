@@ -491,7 +491,7 @@ void UI::finishRemove() {
   home.target = std::max(0, std::min(home.target, int(homeList().size()) - 1));
   message = removeFiles || removeUnpacked
                 ? trf("{} removed and its files deleted.", {name})
-                : trf("{} removed from the list. Files kept; Start adds it again.", {name});
+                : trf("{} removed from the list. Files kept; <start> adds it again.", {name});
 }
 void UI::renameGame(const Entry &entry) {
   if (!editName)
@@ -730,7 +730,7 @@ static const char *const frontModeNames[] = {
     "Off", "Two drawn corner buttons", "Mouse pointer", "D-pad + drawn button",
     "Whole screen", "Left / right halves", "Four corners"};
 static const char *const rearModeNames[] = {
-    "Off", "Two upper zones", "Trackpad (hold L)", "Four corners",
+    "Off", "Two upper zones", "Trackpad (hold <l>)", "Four corners",
     "Whole pad", "Left / right halves"};
 std::string UI::zoneName(int row) const {
   unsigned mask = padMask();
@@ -749,7 +749,7 @@ std::string UI::controlLabel(int row) const {
   }
   if (!controlsAdvanced) {
     if (row >= 1 && row <= 12)
-      return trf("{} button", {buttonText(row - 1)});
+      return std::string(buttonIcon(row - 1)) + " " + trf("{} button", {buttonText(row - 1)});
     return tr(row == 0 ? "Custom controls" : row == 13 ? "Tap to walk"
               : row == 14 ? "Front touch screen"
               : row == 15 ? "Rear touch pad"
@@ -757,7 +757,7 @@ std::string UI::controlLabel(int row) const {
               : row == 17 ? "Test inputs" : "Reset everything");
   }
   const char *labels[] = {"Stick deadzone", "Right stick moves pointer",
-                          "Pointer speed", "Square toggles its action"};
+                          "Pointer speed", "<square> Square toggles its action"};
   return row >= 0 && row < 4 ? tr(labels[row]) : "";
 }
 std::string UI::controlValue(int row) const {
@@ -966,17 +966,17 @@ void UI::changeAudio(bool reset) {
 }
 void UI::preparation(const std::string &label) {
   preparationLabel = tr(label);
-  message = trf("{} - Circle: cancel", {preparationLabel});
+  message = trf("{} - <circle> Circle: cancel", {preparationLabel});
   if (progressPump) progressPump();
 }
 void UI::progress(uint64_t done, uint64_t total) {
   auto label = preparationLabel.empty() ? std::string(tr("Preparing ZIP")) : preparationLabel;
-  message = total ? trf("{}: {}% - Circle: cancel", {label, std::to_string(done * 100 / total)})
-                  : trf("{}: reading contents - Circle: cancel", {label});
+  message = total ? trf("{}: {}% - <circle> Circle: cancel", {label, std::to_string(done * 100 / total)})
+                  : trf("{}: reading contents - <circle> Circle: cancel", {label});
   if (progressPump) progressPump();
 }
 void UI::scanProgress(size_t count, const std::string &) {
-  message = trf("Scanning folder {} - Circle: cancel", {std::to_string(count)});
+  message = trf("Scanning folder {} - <circle> Circle: cancel", {std::to_string(count)});
   if (progressPump)
     progressPump();
 }

@@ -79,14 +79,22 @@ inline std::string controlText(int code) {
 inline std::string buttonText(int index) {
   return index == 4 || index == 5 ? controlSources[index] : tr(controlSources[index]);
 }
+// The token that draws a Vita button's icon in text (controlSources order).
+inline const char *buttonIcon(int index) {
+  static const char *const tokens[] = {"<cross>", "<circle>", "<square>", "<triangle>", "<select>", "<start>",
+                                       "<up>",    "<down>",   "<left>",   "<right>",    "<l>",      "<r>"};
+  return index >= 0 && index < 12 ? tokens[index] : "";
+}
 // The welcome guide shown on the first start: language, where games go, the
-// RTP, a few defaults, game info. Cross moves on, Circle goes back.
+// RTP, the library view, a few defaults, game info. Cross moves on, Circle
+// goes back.
 struct Welcome {
-  enum Slide { Language, Games, Rtp, Defaults, Artwork, SlideCount };
+  enum Slide { Language, Games, Rtp, View, Defaults, Artwork, SlideCount };
   bool active = false;
   int slide = 0, from = -1; // from: the slide sliding out, or -1
   int direction = 1;        // 1 forward, -1 back
   double amount = 1;        // 0 when a slide change starts, 1 once it is done
+  double clock = 0;         // seconds since the slide came in, for its own animations
   int languageFocus = 0;
 };
 // This state machine is shared by the Vita front end and the desktop preview.
