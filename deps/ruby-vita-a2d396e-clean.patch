@@ -430,10 +430,20 @@ index f63cecd..5b8fd73 100644
 +#endif
  }
 diff --git a/thread_pthread.c b/thread_pthread.c
-index 6f0cc3d..715d27d 100644
+index 6f0cc3d..8c45cc5 100644
 --- a/thread_pthread.c
 +++ b/thread_pthread.c
-@@ -47,7 +47,7 @@
+@@ -12,6 +12,9 @@
+ #ifdef THREAD_SYSTEM_DEPENDENT_IMPLEMENTATION
+ 
+ #include "gc.h"
++#ifdef __vita__
++#include <psp2/kernel/threadmgr.h>
++#endif
+ #include "mjit.h"
+ 
+ #ifdef HAVE_SYS_RESOURCE_H
+@@ -47,7 +50,7 @@
  #  define USE_EVENTFD (0)
  #endif
  
@@ -442,7 +452,7 @@ index 6f0cc3d..715d27d 100644
  #  define USE_UBF_LIST 1
  #endif
  
-@@ -80,6 +80,13 @@
+@@ -80,6 +83,13 @@
  #define UBF_TIMER_POSIX 1
  #define UBF_TIMER_PTHREAD 2
  
@@ -456,7 +466,7 @@ index 6f0cc3d..715d27d 100644
  #ifndef UBF_TIMER
  #  if defined(HAVE_TIMER_SETTIME) && defined(HAVE_TIMER_CREATE) && \
        defined(CLOCK_MONOTONIC) && defined(USE_UBF_LIST)
-@@ -193,7 +200,7 @@ static const rb_thread_t *sigwait_th;
+@@ -193,7 +203,7 @@ static const rb_thread_t *sigwait_th;
  #define native_thread_yield() ((void)0)
  #endif
  
@@ -465,7 +475,7 @@ index 6f0cc3d..715d27d 100644
      defined(CLOCK_REALTIME) && defined(CLOCK_MONOTONIC) && \
      defined(HAVE_CLOCK_GETTIME)
  static pthread_condattr_t condattr_mono;
-@@ -637,7 +644,7 @@ static void native_thread_init(rb_thread_t *th);
+@@ -637,7 +647,7 @@ static void native_thread_init(rb_thread_t *th);
  void
  Init_native_thread(rb_thread_t *th)
  {
@@ -474,7 +484,31 @@ index 6f0cc3d..715d27d 100644
      if (condattr_monotonic) {
          int r = pthread_condattr_init(condattr_monotonic);
          if (r == 0) {
-@@ -1805,6 +1812,9 @@ ubf_timer_create(rb_pid_t current)
+@@ -1003,7 +1013,22 @@ native_thread_init_stack(rb_thread_t *th)
+ 	th->ec->machine.stack_maxsize = native_main_thread.stack_maxsize;
+     }
+     else {
+-#ifdef STACKADDR_AVAILABLE
++#if defined(__vita__)
++	/* Vita: pthread attributes do not describe the stack the kernel gave
++	 * this thread (Vita pthread ignores a caller-provided stack address and
++	 * asks the kernel for its own). Use the kernel's record of this
++	 * thread's stack, as the Fiber code does; otherwise the collector scans
++	 * outside the stack and the thread faults on its first GC. */
++	SceKernelThreadInfo vita_thread_info = {0};
++	vita_thread_info.size = sizeof(vita_thread_info);
++	if (sceKernelGetThreadInfo(sceKernelGetThreadId(), &vita_thread_info) >= 0 &&
++	    vita_thread_info.stack != NULL && vita_thread_info.stackSize > 0) {
++	    char *stack_low = (char *)vita_thread_info.stack;
++	    char *here = (char *)&curr;
++	    th->ec->machine.stack_start = (VALUE *)&curr;
++	    th->ec->machine.stack_maxsize = (size_t)(here - stack_low);
++	}
++#elif defined(STACKADDR_AVAILABLE)
+ 	void *start;
+ 	size_t size;
+ 
+@@ -1805,6 +1830,9 @@ ubf_timer_create(rb_pid_t current)
  static void
  rb_thread_create_timer_thread(void)
  {
@@ -484,7 +518,7 @@ index 6f0cc3d..715d27d 100644
      /* we only create the pipe, and lazy-spawn */
      rb_pid_t current = getpid();
      rb_pid_t owner = signal_self_pipe.owner_process;
-@@ -1824,6 +1834,7 @@ rb_thread_create_timer_thread(void)
+@@ -1824,6 +1852,7 @@ rb_thread_create_timer_thread(void)
          sigwait_th = THREAD_INVALID;
          signal_self_pipe.owner_process = current;
      }
@@ -492,7 +526,7 @@ index 6f0cc3d..715d27d 100644
  }
  
  static void
-@@ -2039,6 +2050,10 @@ rb_thread_create_mjit_thread(void (*worker_func)(void))
+@@ -2039,6 +2068,10 @@ rb_thread_create_mjit_thread(void (*worker_func)(void))
  int
  rb_sigwait_fd_get(const rb_thread_t *th)
  {
@@ -503,7 +537,7 @@ index 6f0cc3d..715d27d 100644
      if (signal_self_pipe.normal[0] >= 0) {
          VM_ASSERT(signal_self_pipe.owner_process == getpid());
          /*
-@@ -2052,6 +2067,7 @@ rb_sigwait_fd_get(const rb_thread_t *th)
+@@ -2052,6 +2085,7 @@ rb_sigwait_fd_get(const rb_thread_t *th)
          }
      }
      return -1; /* avoid thundering herd and work stealing/starvation */
@@ -511,7 +545,7 @@ index 6f0cc3d..715d27d 100644
  }
  
  void
-@@ -2215,9 +2231,13 @@ native_ppoll_sleep(rb_thread_t *th, rb_hrtime_t *rel)
+@@ -2215,9 +2249,13 @@ native_ppoll_sleep(rb_thread_t *th, rb_hrtime_t *rel)
  static void
  native_sleep(rb_thread_t *th, rb_hrtime_t *rel)
  {
@@ -526,7 +560,7 @@ index 6f0cc3d..715d27d 100644
      if (sigwait_fd >= 0) {
          rb_native_mutex_lock(&th->interrupt_lock);
          th->unblock.func = ubf_sigwait;
-@@ -2243,6 +2263,8 @@ native_sleep(rb_thread_t *th, rb_hrtime_t *rel)
+@@ -2243,6 +2281,8 @@ native_sleep(rb_thread_t *th, rb_hrtime_t *rel)
          native_cond_sleep(th, rel);
      }
  
