@@ -844,6 +844,10 @@ void View::buildSheet(const UI &u) {
       endLayer();
     }
     place(messageLayer.image, 0, 232);
+    if (u.preparationFraction >= 0) {
+      solidQuad(white, 280, 318, 400, 6, 0.14, 3);
+      solidQuad(ruby, 280, 318, 400 * std::min(1.0, u.preparationFraction), 6, 1, 3);
+    }
   }
 }
 } // namespace hardrpg

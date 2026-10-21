@@ -136,6 +136,8 @@ public:
   int setting = 0, settingFirst = 0, rtpSelected = 0;
   int engineFilter = 0, aboutScroll = 0;
   std::string query, launchingName, preparationLabel;
+  // A step-by-step job before launch (0..1); below 0 when there is none.
+  double preparationFraction = -1;
   std::vector<ErrorRecord> errors;
   int rtpPending = -1;
   std::shared_ptr<RtpCheck> rtpCheck;

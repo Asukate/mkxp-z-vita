@@ -30,6 +30,7 @@
 #include "vita_startup_timer.h"
 #include "display/gl/program-cache.h"
 #include "shader-cache-build-id.h"
+#include "display/gl/shader-warmup.h"
 #include <sys/stat.h>
 #include <vector>
 #include <string>
@@ -938,6 +939,33 @@ int runNativeLauncher(bool returning) {
           if (!moving)
             SDL_Delay(12);
         }
+#ifdef __vita__
+        // After an update, compile the engine's shaders here, on the
+        // "Starting" screen, instead of during the game's first scenes.
+        if (!quit && !ui.exitRequested && ui.launchRequested && engineFor(ui.launchFormat) &&
+            std::strcmp(engineFor(ui.launchFormat)->id, "mkxp-z") == 0 && ShaderWarmup::needed()) {
+          const int steps = ShaderWarmup::count();
+          int failed = 0;
+          for (int i = 0; i < steps; ++i) {
+            ui.preparationLabel = "Preparing graphics for this HardRPG version (only once): " +
+                                  std::to_string(i + 1) + " of " + std::to_string(steps) + ", " +
+                                  ShaderWarmup::label(i);
+            ui.preparationFraction = double(i) / steps;
+            view.draw(ui);
+            present(true);
+            if (!ShaderWarmup::run(i))
+              ++failed;
+          }
+          ui.preparationLabel = "Graphics ready";
+          ui.preparationFraction = 1;
+          view.draw(ui);
+          present(true);
+          if (!failed)
+            ShaderWarmup::finish();
+          else
+            std::fprintf(stderr, "Shader warm-up: %d of %d steps failed\n", failed, steps);
+        }
+#endif
       }
       if (quit || ui.exitRequested)
         return 0;

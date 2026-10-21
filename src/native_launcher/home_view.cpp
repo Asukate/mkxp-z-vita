@@ -810,6 +810,10 @@ void View::buildHome(const UI &u) {
       endLayer();
     }
     layerQuad(messageLayer, 0, 232);
+    if (u.preparationFraction >= 0) {
+      solid(white, 280, 318, 400, 6, 0.14, 3);
+      solid(ruby, 280, 318, 400 * std::min(1.0, u.preparationFraction), 6, 1, 3);
+    }
   }
   pendingLoads = pendingLoads || loader->busy();
   trimArt();

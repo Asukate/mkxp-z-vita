@@ -144,6 +144,7 @@ main_source = files(
     'display/gl/glstate.cpp',
     'display/gl/scene.cpp',
     'display/gl/shader.cpp',
+    'display/gl/shader-warmup.cpp',
     'display/gl/texpool.cpp',
     'display/gl/tileatlas.cpp',
     'display/gl/tileatlasvx.cpp',

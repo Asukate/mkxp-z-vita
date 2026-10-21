@@ -55,6 +55,7 @@ void UI::launchFailed(int code, const std::string &executable) {
   launchFormat = 0;
   launchingName.clear();
   preparationLabel.clear();
+  preparationFraction = -1;
   char hexadecimal[16];
   std::snprintf(hexadecimal, sizeof(hexadecimal), "0x%08x", unsigned(code));
   message = "Could not start game (LoadExec " + std::to_string(code) +

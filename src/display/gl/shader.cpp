@@ -24,6 +24,8 @@
 #ifdef __vita__
 #include "program-cache.h"
 #include "shader-cache-build-id.h"
+#include <SDL_timer.h>
+#include <cstdio>
 #include <sys/stat.h>
 #include <unistd.h>
 extern "C" void glGetProgramBinary(GLuint, GLsizei, GLsizei *, GLenum *, void *);
@@ -620,6 +622,8 @@ void Shader::init(const unsigned char *vert, int vertSize,
             program = gl.CreateProgram();
         }
     }
+#endif
+#ifdef __vita__
 #endif
     FrameProfile::Scope compileProfile(FrameProfile::ShaderCompile);
 	/* Compile vertex shader */
