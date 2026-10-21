@@ -45,12 +45,10 @@ trap 'rm -rf -- "$STAGE"' EXIT
 "$BIN/arm-vita-eabi-strip" --strip-debug "$ELF" -o "$STAGE/eboot-stripped.elf"
 "$BIN/vita-elf-create" "$STAGE/eboot-stripped.elf" "$STAGE/eboot.velf"
 "$BIN/vita-make-fself" "$STAGE/eboot.velf" "$STAGE/eboot.bin"
-NATIVE="$(python3 -c 'import json,sys; print("true" if json.load(open(sys.argv[1]))["native_launcher"] else "false")' "$WS/engine-state.json")"
-APP_VER="$(python3 - "$ROOT/src/native_launcher/release.h" "$NATIVE" <<'PY2'
+[[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["native_launcher"])' "$WS/engine-state.json")" == True ]] ||
+    { echo 'the engine was built without the HardRPG launcher' >&2; exit 1; }
+APP_VER="$(python3 - "$ROOT/src/native_launcher/release.h" <<'PY2'
 import re,sys
-if sys.argv[2] == 'false':
-    print('00.20') # The alternative RGSS launcher remains at 0.2 Alpha.
-    raise SystemExit(0)
 text=open(sys.argv[1]).read()
 match=re.search(r'^#define HARDRPG_APP_VER "([0-9]{2}\.[0-9]{2})"$',text,re.M)
 if not match: raise SystemExit('missing release app version')
@@ -62,23 +60,17 @@ PY2
 # less); EasyRPG's Vita package needs the same mode.
 MEMORY_ARGS=(-d ATTRIBUTE2=12)
 "$BIN/vita-mksfoex" "${MEMORY_ARGS[@]}" -s "TITLE_ID=$TITLE_ID" -s "APP_VER=$APP_VER" 'HardRPG' "$STAGE/param.sfo"
-PICKER_ARGS=()
-if [[ "$NATIVE" == true ]]; then
-    python3 "$ROOT/scripts/build-livearea.py" "$ROOT/launcher/livearea/template.xml" \
-        "$STAGE/template.xml" --release "$ROOT/src/native_launcher/release.h"
-    PICKER_ARGS=(-a "$ROOT/launcher/native-backend.txt=launcher-backend.txt")
-    FONT="$ROOT/assets/liberation.ttf"
-else
-    python3 "$ROOT/scripts/build-livearea.py" "$ROOT/launcher/livearea/template.xml" \
-        "$STAGE/template.xml" --version '0.2.0 Alpha'
-    FONT="$ROOT/launcher/font.ttf"
-    ruby "$ROOT/scripts/build-picker.rb" "$STAGE/stub"
-    PICKER_ARGS=(-a stub/Game.ini=stub/Game.ini -a stub/Data/Scripts.rvdata2=stub/Data/Scripts.rvdata2)
-fi
+python3 "$ROOT/scripts/build-livearea.py" "$ROOT/launcher/livearea/template.xml" \
+    "$STAGE/template.xml" --release "$ROOT/src/native_launcher/release.h"
+LAUNCHER_ARGS=(-a "$ROOT/launcher/native-backend.txt=launcher-backend.txt")
+# Home screen: title font, icons and brand marks (rendered from SVG).
+LAUNCHER_ARGS+=(-a "$ROOT/launcher/font-display.ttf=font-display.ttf" -a "$ROOT/LICENSES/Rajdhani.txt=licenses/Rajdhani.txt" -a "$ROOT/LICENSES/Vita-illustration.txt=licenses/Vita-illustration.txt")
+for ui in "$ROOT"/launcher/ui/*.png; do
+    LAUNCHER_ARGS+=(-a "$ui=ui/$(basename "$ui")")
+done
 
 EASY_ARGS=()
 if [[ -n "$EASY_WS" ]]; then
-    [[ "$NATIVE" == true ]] || { echo 'EasyRPG requires the native launcher' >&2; exit 1; }
     EASY_WS="$(realpath "$EASY_WS")"
     python3 "$ROOT/scripts/easyrpg-state.py" verify "$EASY_WS"
     EASY_ARGS=(-a "$EASY_WS/runtime/easyrpg.bin=easyrpg.self"
@@ -107,7 +99,7 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/assets/TimGM6mb.sf2=TimGM6mb.sf2" \
     -a "$ROOT/LICENSES/FluidLite.txt=licenses/FluidLite.txt" \
     -a "$ROOT/LICENSES/TimGM6mb.txt=licenses/TimGM6mb.txt" \
-    -a "$FONT=font.ttf" \
+    -a "$ROOT/assets/liberation.ttf=font.ttf" \
     -a "$ROOT/launcher/assets/hardrpg-splash.png=stub/Graphics/Pictures/hardrpg-splash.png" \
     -a "$ROOT/THIRD-PARTY-NOTICES.md=THIRD-PARTY-NOTICES.md" \
     -a "$ROOT/COPYING=licenses/GPL-2.0.txt" \
@@ -118,7 +110,7 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/LICENSES/curl.txt=licenses/curl.txt" \
     -a "$ROOT/LICENSES/MPL-2.0.txt=licenses/MPL-2.0.txt" \
     -a "$ROOT/src/display/libnsgif/COPYING=licenses/libnsgif.txt" \
-    "${PICKER_ARGS[@]}" \
+    "${LAUNCHER_ARGS[@]}" \
     "${EASY_ARGS[@]}" \
     "$VPK")
 python3 "$ROOT/scripts/verify-launcher-payload.py" "$VPK" "$TITLE_ID"

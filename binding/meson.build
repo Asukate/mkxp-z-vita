@@ -41,8 +41,4 @@ if miniffi == true
     binding_source += files('miniffi.cpp')
 endif
 
-if get_option('proto_launcher')
-    binding_source += files('launcher-filesystem-binding.cpp')
-endif
-
 global_sources += binding_source

@@ -5,6 +5,9 @@
 #include <SDL.h>
 #include <iostream>
 #include <sstream>
+#include <chrono>
+#include <ctime>
+#include <thread>
 
 namespace {
 using namespace hardrpg;
@@ -153,6 +156,10 @@ void preview(UI &ui, View &view) {
     throw std::runtime_error(SDL_GetError());
   }
   auto draw = [&] {
+    std::time_t now = std::time(nullptr);
+    char clock[8];
+    std::strftime(clock, sizeof clock, "%H:%M", std::localtime(&now));
+    ui.clockText = clock;
     view.draw(ui);
     SDL_BlitSurface(frame, nullptr, SDL_GetWindowSurface(window), nullptr);
     SDL_UpdateWindowSurface(window);
@@ -169,12 +176,38 @@ void preview(UI &ui, View &view) {
     }
     draw();
   };
+  uint32_t lastTick = SDL_GetTicks();
   while (!quit && !ui.exitRequested && !ui.launchRequested) {
     SDL_Event e;
-    if (!SDL_WaitEventTimeout(&e, 50))
+    bool moving = ui.animating() || view.animating();
+    if (!SDL_WaitEventTimeout(&e, moving ? 16 : 50)) {
+      uint32_t now = SDL_GetTicks();
+      if (moving) {
+        ui.tick((now - lastTick) / 1000.0);
+        draw();
+      }
+      lastTick = now;
       continue;
+    }
+    lastTick = SDL_GetTicks();
     if (e.type == SDL_QUIT)
       quit = true;
+    // The mouse stands in for the front touch screen.
+    if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP ||
+        (e.type == SDL_MOUSEMOTION && (e.motion.state & SDL_BUTTON_LMASK))) {
+      int state = e.type == SDL_MOUSEBUTTONDOWN ? 0 : e.type == SDL_MOUSEMOTION ? 1 : 2;
+      int x = state == 1 ? e.motion.x : e.button.x, y = state == 1 ? e.motion.y : e.button.y;
+      if (ui.homeActive() || state == 2) {
+        if (ui.homeActive())
+          ui.homePointer(state, x, y, SDL_GetTicks());
+        else
+          ui.touch(x, y);
+        while (ui.service()) {
+        }
+        draw();
+      }
+      continue;
+    }
     if (e.type == SDL_KEYDOWN) {
       Button b = Button::None;
       switch (e.key.keysym.sym) {
@@ -253,9 +286,10 @@ int main(int argc, char **argv) {
     }
     hardrpg::Paths paths;
     std::string font = "assets/liberation.ttf", snapshot, script, actions, releaseFixture,
-                rename, search;
-    bool edit = false;
+                rename, search, text;
+    bool edit = false, settle = false, returning = false;
     bool interactive = false, storageSet = false;
+    int battery = 78;
     for (int i = 1; i < argc; ++i) {
       std::string arg = argv[i];
       if (arg == "--interactive") {
@@ -284,10 +318,18 @@ int main(int argc, char **argv) {
         script = value;
       else if (arg == "--actions")
         actions = value;
+      else if (arg == "--battery")
+        battery = std::stoi(value);
       else if (arg == "--rename") {
         rename = value;
         edit = true;
-      } else
+      } else if (arg == "--text")
+        text = value;
+      else if (arg == "--returning") {
+        settle = true;
+        returning = value == "yes";
+      }
+      else
         throw std::runtime_error("Unknown preview option");
     }
     if (!script.empty()) {
@@ -299,6 +341,18 @@ int main(int argc, char **argv) {
       return 0;
     }
     hardrpg::UI ui(paths);
+    if (settle) {
+      // As the Vita does at boot: "yes" after a game handed back, "no" after
+      // a fresh start.
+      ui.model.settleActivity(returning);
+      ui.loadHome();
+    }
+    ui.batteryPercent = battery;
+    if (!text.empty())
+      ui.enterText = [&](const std::string &, const std::string &, std::string &out) {
+        out = text;
+        return text != "--cancel";
+      };
     if (edit)
       ui.editName = [&](const std::string &, std::string &out) {
         out = rename;
@@ -315,6 +369,34 @@ int main(int argc, char **argv) {
           int x, y;
           if (std::sscanf(action.c_str(), "touch:%d:%d", &x, &y) == 2)
             ui.touch(x, y);
+        } else if (action.find("drag:") == 0) {
+          // drag:x1:x2:y  a horizontal swipe on the front screen, 200 ms long.
+          int x1, x2, y;
+          if (std::sscanf(action.c_str(), "drag:%d:%d:%d", &x1, &x2, &y) == 3) {
+            ui.homePointer(0, x1, y, 0);
+            for (int step = 1; step <= 10; ++step)
+              ui.homePointer(1, x1 + (x2 - x1) * step / 10, y, step * 20);
+            ui.homePointer(2, x2, y, 200);
+          }
+        } else if (action.find("sample:") == 0) {
+          // sample:BUTTONS:LX:LY:RX:RY[:FX:FY]  what the controls test would read
+          // from the Vita: a button bit mask, sticks, and one front touch.
+          unsigned buttons;
+          int lx, ly, rx, ry;
+          float fx = -1, fy = -1;
+          if (std::sscanf(action.c_str(), "sample:%u:%d:%d:%d:%d:%f:%f", &buttons, &lx, &ly, &rx, &ry, &fx, &fy) >= 5) {
+            ui.controlsSample.buttons = uint16_t(buttons);
+            ui.controlsSample.lx = lx, ui.controlsSample.ly = ly, ui.controlsSample.rx = rx, ui.controlsSample.ry = ry;
+            if (fx >= 0)
+              ui.controlsSample.front = {{0, fx, fy}};
+          }
+        } else if (action == "wait-art") {
+          // Let an artwork download finish (up to two minutes).
+          for (int i = 0; i < 1200 && ui.artFetch && ui.artFetch->running() && ui.home.panel != Home::Artwork; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            ui.pollArt();
+          }
+          ui.pollArt();
         } else if (action.find("scroll:") == 0)
           ui.scroll(std::stoi(action.substr(7)));
         else if (action == "loadexec-fail")
@@ -324,7 +406,23 @@ int main(int argc, char **argv) {
       }
     while (ui.service()) {
     }
+    for (int frame = 0; frame < 600 && ui.animating(); ++frame)
+      ui.tick(1 / 60.0);
+    {
+      std::time_t now = std::time(nullptr);
+      char clock[8];
+      std::strftime(clock, sizeof clock, "%H:%M", std::localtime(&now));
+      ui.clockText = clock;
+    }
     if (!snapshot.empty()) {
+      // Let artwork finish loading on its thread, then end fades.
+      view.draw(ui);
+      auto start = std::chrono::steady_clock::now();
+      while (view.pendingLoads && std::chrono::steady_clock::now() - start < std::chrono::seconds(10)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        view.draw(ui);
+      }
+      view.settle();
       view.draw(ui);
       view.save(snapshot);
     }
@@ -336,6 +434,23 @@ int main(int argc, char **argv) {
     for (auto index : ui.visible())
       visible.push_back(ui.model.list[index]);
     state.as_object()["visibleEntries"] = listing(visible, paths);
+    {
+      // Home: its games in the order shown, and where the focus is.
+      std::vector<Entry> shown;
+      for (auto index : ui.homeList())
+        shown.push_back(ui.model.list[index]);
+      auto &o = state.as_object();
+      o["homeEntries"] = listing(shown, paths);
+      o["homeActive"] = ui.homeActive();
+      o["homeTarget"] = ui.home.target;
+      o["homeZone"] = int(ui.home.zone);
+      o["homePanel"] = int(ui.home.panel);
+      o["homeGrid"] = ui.home.grid;
+      o["homeDetails"] = ui.home.details;
+      o["homeSort"] = ui.home.sort;
+      o["homeDirection"] = ui.home.direction;
+      o["blurAdult"] = ui.blurAdult;
+    }
     state.as_object()["query"] = ui.query;
     state.as_object()["engineFilter"] = ui.engineFilter;
     auto errors = array();
@@ -347,7 +462,6 @@ int main(int argc, char **argv) {
     }
     state.as_object()["errors"] = errors;
     state.as_object()["message"] = ui.message;
-    state.as_object()["menu"] = ui.menu;
     state.as_object()["launchRequested"] = ui.launchRequested;
     state.as_object()["launchFormat"] = ui.launchFormat;
     state.as_object()["launchingName"] = ui.launchingName;
@@ -375,11 +489,10 @@ int main(int argc, char **argv) {
     state.as_object()["settingFirst"] = ui.settingFirst;
     state.as_object()["automaticUpdates"] = ui.automaticUpdates;
     state.as_object()["focus"] = int(ui.focus);
-    state.as_object()["selected"] = ui.selected;
-    state.as_object()["first"] = ui.first;
     state.as_object()["errorScroll"] = ui.errorScroll;
     state.as_object()["errorLines"] = int(ui.errorReport.size());
     state.as_object()["exitRequested"] = ui.exitRequested;
+    state.as_object()["browserOpen"] = bool(ui.browser);
     state.as_object()["browserPath"] = ui.browser ? ui.browser->path : "";
     std::cout << state.stringify() << "\n";
   } catch (const std::exception &e) {

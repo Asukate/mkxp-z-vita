@@ -2,26 +2,24 @@
 # HardRPG Vita engine build.
 #
 # Usage:
-#   VITASDK=/opt/vitasdk ./scripts/build-vita.sh [--ws <dir>] [--profile real-vita|vita3k] [--rgss-launcher] [-j N]
+#   VITASDK=/opt/vitasdk ./scripts/build-vita.sh [--ws <dir>] [--profile real-vita|vita3k] [-j N]
 #
 # Requires a completed bootstrap-vita.sh in the same workspace.
 # Configures the Vita engine and leaves a verified ELF for packaging.
 set -euo pipefail
 
-WS=""; PROFILE="real-vita"; JOBS="4"; NATIVE="true"
+WS=""; PROFILE="real-vita"; JOBS="4"
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [--native-launcher|--rgss-launcher] [-j N]\n' "$0"; exit 0;;
+        -h|--help) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [-j N]\n' "$0"; exit 0;;
         --ws|--profile|-j|--out|--title-id)
             [[ $# -ge 2 && "$2" != --* && -n "$2" ]] || { printf 'missing value for %s\n' "$1" >&2; exit 2; } ;;
     esac
     case "$1" in
-        --native-launcher) NATIVE="true"; shift;;
-        --rgss-launcher) NATIVE="false"; shift;;
         --ws) WS="$2"; shift 2;;
         --profile) PROFILE="$2"; shift 2;;
         -j) JOBS="$2"; shift 2;;
-        *) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [--native-launcher|--rgss-launcher] [-j N]\n' "$0" >&2; exit 2;;
+        *) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [-j N]\n' "$0" >&2; exit 2;;
     esac
 done
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo 'jobs must be a positive integer' >&2; exit 2; }
@@ -56,7 +54,7 @@ cpp_args = ['-marm', '-mcpu=cortex-a9', '-mfpu=neon', '-mfloat-abi=hard', '-O3',
 cpp_link_args = ['-Wl,-q', '-Wl,--allow-multiple-definition', '-L$PREFIX/lib']
 EOF2
 
-if [[ "$NATIVE" == true ]]; then bash "$SCRIPT_DIR/bootstrap-release-network.sh" "$WS" "$JOBS"; fi
+bash "$SCRIPT_DIR/bootstrap-release-network.sh" "$WS" "$JOBS"
 NETWORK="$WS/release-network/prefix/lib"
 if [[ ! -f "$BUILD/build.ninja" ]]; then
     meson setup "$BUILD" "$CAND_SRC" \
@@ -64,16 +62,13 @@ if [[ ! -f "$BUILD/build.ninja" ]]; then
         --cross-file="$OVERLAY" \
         -Dbuildtype=release -Denable-https=false \
         -Dshared_fluid=false -Dvita_diagnostics=false -Dproto_launcher=true \
-        -Dnative_launcher="$NATIVE" \
         -Dvita_libdir="$PREFIX/lib" -Dvita_network_libdir="$NETWORK" \
         -Dvita_sdk_libdir="$VITASDK/arm-vita-eabi/lib"
 else
-    meson setup --clearcache --reconfigure "$BUILD" "$CAND_SRC" -Dvita_diagnostics=false -Dproto_launcher=true -Dnative_launcher="$NATIVE" -Dvita_network_libdir="$NETWORK"
+    meson setup --clearcache --reconfigure "$BUILD" "$CAND_SRC" -Dvita_diagnostics=false -Dproto_launcher=true -Dvita_network_libdir="$NETWORK"
 fi
 ninja -C "$BUILD" -j"$JOBS"
-if [[ "$NATIVE" == true ]]; then
-    python3 "$CAND_SRC/tests/vita-launcher-threading.py" "$VITASDK/bin/arm-vita-eabi-nm" "$BUILD/mkxp-z"
-fi
+python3 "$CAND_SRC/tests/vita-launcher-threading.py" "$VITASDK/bin/arm-vita-eabi-nm" "$BUILD/mkxp-z"
 python3 "$SCRIPT_DIR/build-state.py" engine "$WS" "$PROFILE"
 printf '=== BUILD %s complete ===\n' "$PROFILE"
 ls -lh "$BUILD/mkxp-z"

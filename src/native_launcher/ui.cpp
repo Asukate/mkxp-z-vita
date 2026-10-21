@@ -1,6 +1,9 @@
+#include "home_layout.h"
 #include "ui.h"
 #include "release.h"
 #include <algorithm>
+#include <cctype>
+#include <fstream>
 #include <sstream>
 #include <atomic>
 #include <cstdio>
@@ -30,13 +33,13 @@ UI::UI(Paths paths)
     : model(std::move(paths)),
       displayValues(std::initializer_list<Json::pair_type>{}),
       rtpChoices(std::initializer_list<Json::pair_type>{}) {
-  sources = model.libraryRoots();
   try {auto text=readFile(model.paths.at("update-settings.json"),4096);
     if(!text.empty())automaticUpdates=json5pp::parse(text).as_object().at("automatic").as_boolean();
   }catch(...) {}
   errorReport = model.takeError();
   if (errorReport.empty())
     model.takeError(true);
+  loadHome();
 }
 void UI::launchFailed(int code, const std::string &executable) {
   launchRequested = false;
@@ -47,10 +50,6 @@ void UI::launchFailed(int code, const std::string &executable) {
   std::snprintf(hexadecimal, sizeof(hexadecimal), "0x%08x", unsigned(code));
   message = "Could not start game (LoadExec " + std::to_string(code) +
             ", " + hexadecimal + "; " + executable + ").";
-}
-void UI::resetSelection() {
-  selected = first = 0;
-  message.clear();
 }
 struct RtpCheck {
   unsigned generation;
@@ -177,9 +176,10 @@ void UI::search(const std::string &text) {
   query = text;
   if (query.size() > 512)
     query.resize(512);
-  selected = first = 0;
 }
 void UI::scroll(int rows) {
+  if (homeActive())
+    return;
   if (gameOptions && page != Page::Controls) {
     if (browser || !errorReport.empty() || !releaseReport.empty() || !missingRtp.empty()) return;
     int count = optionRows();
@@ -190,34 +190,20 @@ void UI::scroll(int rows) {
   if(page==Page::Controls) {if(!controlsTesting && !controlPicking) {setting=std::max(0,std::min(controlsCount()-1,setting+rows));settingFirst=std::max(0,setting-6);} return;}
   if (controlsTesting || browser || !errorReport.empty() || !releaseReport.empty() || !missingRtp.empty())
     return;
-  if (menu == 0 && focus != Focus::Sources) {
-    focus = Focus::Games;
-    auto count = int(visible().size());
-    first =
-        std::max(0, std::min(first + rows, std::max(0, count - gameRows())));
-    selected = std::max(
-        first, std::min(selected, std::min(count - 1, first + gameRows() - 1)));
-    if (!count)
-      selected = first = 0;
-  } else if (focus == Focus::About) {
+  if (focus == Focus::About) {
     aboutScroll = std::max(
         0, std::min(aboutScroll + rows, std::max(0, int(sizeof(releaseNotes) /
                                                         sizeof(*releaseNotes)) -
                                                         9)));
-  } else if (focus == Focus::Sources) {
-    int lines = 0;
-    for (auto &s : sources)
-      lines += (s.size() + 71) / 72 + 1;
-    sourceScroll =
-        std::max(0, std::min(sourceScroll + rows, std::max(0, lines - 12)));
-  } else if (menu == 1 && focus == Focus::Settings) {
+  } else if (focus == Focus::Settings) {
     if (page == Page::Rtp) {
       rtpSelected = std::max(0, std::min(rtpSelected + rows, rtpPackCount - 1));
       return;
     }
     int count = page == Page::Errors    ? errors.size()
                 : page == Page::Folders ? 1 + gameFolders.size()
-                : page == Page::Home    ? 6
+                : page == Page::Home    ? settingsRows()
+               : page == Page::Keys    ? keyCount
                 : page == Page::Metrics ? 2
                                         : 3;
     setting = std::max(0, std::min(setting + rows, std::max(0, count - 1)));
@@ -227,6 +213,14 @@ void UI::scroll(int rows) {
   }
 }
 void UI::touch(int x, int y) {
+  if (homeActive()) {
+    try {
+      homeTap(x, y);
+    } catch (const std::exception &e) {
+      message = e.what();
+    }
+    return;
+  }
   if(page==Page::Controls && controlPicking) {
     for (int i = 0; i < controlPickCount; ++i) {
       int kx, ky, kw, kh;
@@ -260,95 +254,110 @@ void UI::touch(int x, int y) {
     }
     return;
   }
-  if(page==Page::Controls) {if(!controlsTesting && x>=184 && x<918 && y>=151 && y<445) {int row=settingFirst+(y-151)/42;if(row<controlsCount()) {bool activate=setting==row;setting=row;if(activate) {if(controlTarget(row))openControlPicker();else changeControl(1);}}}return;}
-  if (controlsTesting || browser || !errorReport.empty() || !releaseReport.empty() || !missingRtp.empty())
+  sheetTouch(x, y);
+}
+void UI::sheetTouch(int x, int y) {
+  using namespace homeLayout;
+  // The hint bar's buttons act like the buttons they show.
+  if (y >= hintsY) {
+    for (auto &h : hintHit)
+      if (inside(x, y, h.x, hintsY, h.w, 544 - hintsY)) {
+        action(h.button);
+        return;
+      }
+    return;
+  }
+  bool busy = browser || !errorReport.empty() || !releaseReport.empty() || !missingRtp.empty() || gameOptions ||
+              page == Page::Controls;
+  if (y < topHeight) {
+    // Settings and About from their icons; the brand goes home.
+    if (busy)
+      return;
+    if (inside(x, y, gearX, topIconY, topIcon, topIcon)) {
+      focus = Focus::Settings;
+      openPage(Page::Home);
+    } else if (inside(x, y, aboutX, topIconY, topIcon, topIcon)) {
+      focus = Focus::About;
+    } else if (x < 300) {
+      focus = Focus::Home;
+      message.clear();
+    }
+    return;
+  }
+  // The row under the finger, or -1.
+  auto rowAt = [&](int rowH, int visible) {
+    if (x < sheetX || x >= sheetX + sheetW || y < sheetTop)
+      return -1;
+    int r = (y - sheetTop) / rowH;
+    return r < visible ? r : -1;
+  };
+  // A first tap moves the focus to a row; tapping the focused row opens it.
+  auto pickRow = [&](int &target, int index, int count) {
+    if (index < 0 || index >= count)
+      return;
+    bool again = target == index;
+    target = index;
+    if (again)
+      action(Button::Cross);
+  };
+  if (page == Page::Controls) {
+    if (controlsTesting)
+      return;
+    int r = rowAt(sheetRowH, sheetRows);
+    if (r < 0 || settingFirst + r >= controlsCount())
+      return;
+    int row = settingFirst + r;
+    bool again = setting == row;
+    setting = row;
+    if (again) {
+      if (controlTarget(row))
+        openControlPicker();
+      else
+        changeControl(1);
+    }
+    return;
+  }
+  if (!missingRtp.empty()) {
+    int r = rowAt(sheetRowH, 2);
+    if (r >= 0)
+      action(r == 0 ? Button::Cross : Button::Circle);
+    return;
+  }
+  if (browser) {
+    int r = rowAt(browserRowH, browserRows);
+    if (r >= 0)
+      pickRow(browserSelected, browserFirst + r, int(browser->list.size()));
+    return;
+  }
+  if (!errorReport.empty() || !releaseReport.empty() || focus == Focus::About)
+    return;
+  bool rtp = page == Page::Rtp;
+  int r = rowAt(rtp ? rtpRowH : sheetRowH, rtp ? rtpPackCount : sheetRows);
+  if (r < 0)
     return;
   if (gameOptions) {
-    if (x >= 184 && x < 918 && y >= 151 && y < 445 && page != Page::GameInfo) {
-      int count = optionRows();
-      int row = settingFirst + (y - 151) / (page == Page::Rtp ? 54 : 42);
-      if (row < count) {
-        int &target = page == Page::Rtp ? rtpSelected : setting;
-        bool activate = target == row;
-        target = row;
-        if (activate) action(Button::Cross);
-      }
-    }
+    if (page != Page::GameInfo)
+      pickRow(rtp ? rtpSelected : setting, (rtp ? 0 : settingFirst) + r, optionRows());
     return;
   }
-  if (x >= 22 && x < 152 && y >= 92 && y < 244) {
-    menu = (y - 92) / 38;
-    focus = Focus::Menu;
-    page = Page::Home;
-    return;
-  }
-  if (x < 184 || x > 932)
-    return;
-  if (focus == Focus::Sources) {
-    action(Button::Circle);
-    return;
-  }
-  if (menu == 0) {
-    if (y < 146) {
-      action(Button::Paths);
-      return;
-    }
-    if (y < 178) {
-      action(x < 580 ? Button::Select : Button::R);
-      return;
-    }
-    int row = (y - gameTop()) / 32;
-    auto list = visible();
-    if (y >= gameTop() && row < gameRows() && first + row < int(list.size())) {
-      if (x >= 918) {
-        int count = list.size();
-        first = std::max(
-            0, std::min((y - gameTop()) * std::max(0, count - gameRows()) /
-                            (gameRows() * 32),
-                        std::max(0, count - gameRows())));
-        selected = first;
-      } else {
-        bool activate = focus == Focus::Games && selected == first + row;
-        focus = Focus::Games;
-        selected = first + row;
-        if (activate)
-          action(Button::Cross);
-      }
-    }
-  } else if (menu == 1) {
-    int top = page == Page::Folders ? 183 : 151;
-    int row = (y - top) / (page == Page::Rtp       ? 54
-                           : page == Page::Folders ? 36
-                                                   : 42);
-    int count = page == Page::Home      ? 6
+  if (focus == Focus::Settings) {
+    int count = page == Page::Home      ? settingsRows()
+                : page == Page::Keys    ? keyCount
                 : page == Page::Updates ? 3
                 : page == Page::Display ? 3
                 : page == Page::Metrics ? 2
-                : page == Page::Rtp ? rtpPackCount
-                : page == Page::Folders ? 1 + gameFolders.size()
-                                        : errors.size();
-    if (y >= top && row < (page == Page::Rtp ? rtpPackCount : 7) &&
-        row + settingFirst < count) {
-      int target = row + settingFirst;
-      bool activate = focus == Focus::Settings &&
-                      (page == Page::Rtp ? rtpSelected : setting) == target;
-      focus = Focus::Settings;
-      if (page == Page::Rtp)
-        rtpSelected = target;
-      else
-        setting = target;
-      if (activate)
-        action(Button::Cross);
-    }
-  } else if (menu == 2)
-    focus = Focus::About;
+                : page == Page::Rtp     ? rtpPackCount
+                : page == Page::Folders ? 1 + int(gameFolders.size())
+                                        : int(errors.size());
+    pickRow(rtp ? rtpSelected : setting, (rtp ? 0 : settingFirst) + r, count);
+  }
 }
+
 void UI::openControls() {
   auto entry = gameEntry;
   auto profile = model.controls(entry);
   controlsEntry = entry;
   controls = profile;
-  menu = 0;
   page = Page::Controls;
   setting = settingFirst = 0;
   focus = Focus::Settings;
@@ -359,11 +368,10 @@ void UI::openControls() {
   controlsTestState.reset();
   message.clear();
 }
-void UI::openGameMenu() {
-  auto shown = visible();
-  if (shown.empty() || selected < 0 || size_t(selected) >= shown.size())
+void UI::openGameMenu(size_t index) {
+  if (index >= model.list.size())
     return;
-  auto source = model.list[shown[selected]];
+  auto source = model.list[index];
   Entry entry;
   if (!configurableGame(source, entry))
     throw std::runtime_error(
@@ -382,7 +390,6 @@ void UI::openGameMenu() {
   }
   gameOptions = true;
   gameSetting = setting = settingFirst = 0;
-  menu = 0;
   page = Page::Game;
   focus = Focus::Settings;
   message.clear();
@@ -446,8 +453,7 @@ void UI::answerRemove(bool yes) {
     model.deleteZip(gameEntry);
     gameOptions = false;
     page = Page::Home;
-    focus = Focus::Games;
-    menu = 0;
+    focus = Focus::Home;
     message = "ZIP deleted. " + name + " plays from its unpacked copy.";
     return;
   }
@@ -467,11 +473,9 @@ void UI::finishRemove() {
   model.remove(gameEntry, removeFiles, removeUnpacked);
   gameOptions = false;
   page = Page::Home;
-  focus = Focus::Games;
-  menu = 0;
-  auto shown = visible();
-  selected = std::max(0, std::min(selected, int(shown.size()) - 1));
-  first = std::max(0, std::min(first, selected));
+  focus = Focus::Home;
+  // The neighbour takes the removed game's place on home.
+  home.target = std::max(0, std::min(home.target, int(homeList().size()) - 1));
   message = removeFiles || removeUnpacked
                 ? name + " removed and its files deleted."
                 : name + " removed from the list. Files kept; Start adds it again.";
@@ -496,15 +500,13 @@ void UI::renameGame(const Entry &entry) {
         break;
       }
   }
-  auto shown = visible();
-  selected = first = 0;
-  for (size_t i = 0; i < shown.size(); ++i)
-    if (model.list[shown[i]].node.identity(model.paths) == id) {
-      selected = i;
-      if (selected >= first + gameRows())
-        first = selected - gameRows() + 1;
-      break;
-    }
+  // Home keeps the renamed game focused; when the search no longer shows
+  // it, its neighbour takes its place.
+  auto list = homeList();
+  home.target = std::max(0, std::min(home.target, int(list.size()) - 1));
+  for (size_t i = 0; i < list.size(); ++i)
+    if (model.list[list[i]].node.identity(model.paths) == id)
+      home.target = int(i);
   message =
       name.empty() ? "Original game name restored." : "Display name saved.";
 }
@@ -535,13 +537,12 @@ void UI::gameAction(Button b) {
     if (page == Page::Game) {
       gameOptions = false;
       page = Page::Home;
-      focus = Focus::Games;
+      focus = Focus::Home;
     } else {
       page = Page::Game;
       setting = gameSetting;
       settingFirst = std::max(0, setting - 6);
     }
-    menu = 0;
     message.clear();
     return;
   }
@@ -836,6 +837,33 @@ void UI::changeControl(int step) {
             :"Saved for "+controlsEntry.name+". Applies on next launch.";
 }
 void UI::refreshFolders() { gameFolders = model.searchFolders(); }
+std::string UI::keyFile(int index) const {
+  return model.paths.at(index == 0 ? "steamgriddb-key.txt" : "rawg-key.txt");
+}
+std::string UI::readKey(int index) const {
+  std::ifstream in(keyFile(index));
+  std::string key;
+  std::getline(in, key);
+  key.erase(std::remove_if(key.begin(), key.end(), [](char c) { return !std::isalnum(static_cast<unsigned char>(c)); }),
+            key.end());
+  return key;
+}
+void UI::editKey(int index) {
+  if (!enterText)
+    return;
+  std::string out;
+  if (!enterText(index == 0 ? "SteamGridDB API key" : "RAWG API key", readKey(index), out))
+    return;
+  out.erase(std::remove_if(out.begin(), out.end(), [](char c) { return !std::isalnum(static_cast<unsigned char>(c)); }),
+            out.end());
+  if (out.empty()) {
+    std::remove(keyFile(index).c_str());
+    message = "Key removed.";
+    return;
+  }
+  std::ofstream(keyFile(index)) << out << "\n";
+  message = "Key saved. Artwork downloads use it from now on.";
+}
 void UI::openPage(Page next) {
   if (next == Page::Display || next == Page::Metrics || next == Page::Audio || next == Page::GameInfo)
     displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
@@ -883,6 +911,7 @@ void UI::changeDisplay(int step, bool reset) {
 }
 void UI::changeMetrics(int step, bool reset) {
   if (setting == 1) {
+    // Fast forward (L+R in game): on unless switched off.
     auto found = displayValues.as_object().find("fastForward");
     bool on = found == displayValues.as_object().end() || !found->second.is_boolean() ||
               found->second.as_boolean();
@@ -892,9 +921,8 @@ void UI::changeMetrics(int step, bool reset) {
     else
       model.changeDisplay("fastForward", value);
     displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
-    message = gameOptions
-                  ? "Saved for " + gameEntry.name + ". Applies on next launch."
-                  : "Fast forward saved for the next game launch.";
+    message = gameOptions ? "Saved for " + gameEntry.name + ". Applies on next launch."
+                          : "Fast forward saved for the next game launch.";
     return;
   }
   auto i = displayValues.as_object().find("performanceMetrics");
@@ -941,7 +969,6 @@ void UI::scanProgress(size_t count, const std::string &) {
 void UI::chooseRtp(const std::string &path) {
   model.setRtp(packs[rtpSelected], path);
   browser.reset();
-  menu = gameOptions ? 0 : 1;
   focus = Focus::Settings;
   page = Page::Rtp;
   refreshRtp();
@@ -950,7 +977,7 @@ void UI::chooseRtp(const std::string &path) {
 }
 void UI::browserAction(Button b) {
   if (b == Button::Up || b == Button::Down) {
-    move(browserSelected, browserFirst, browser->list.size(), 10,
+    move(browserSelected, browserFirst, browser->list.size(), homeLayout::browserRows,
          b == Button::Up ? -1 : 1);
     return;
   }
@@ -995,20 +1022,16 @@ void UI::browserAction(Button b) {
                    ? model.addSearchFolder(browser->path, callback)
                    : model.addFolder(browser->path, callback);
   if (browseMode == BrowseMode::Folder) {
-    menu = 1;
     focus = Focus::Settings;
     page = Page::Folders;
     setting = settingFirst = 0;
     refreshFolders();
-  } else {
-    menu = 0;
-    focus = Focus::Games;
-  }
-  sources = model.libraryRoots();
+  } else
+    focus = Focus::Home;
   auto mode = browseMode;
   browser.reset();
-  history.clear();
-  resetSelection();
+  home.target = 0;
+  home.position = 0;
   message = mode == BrowseMode::Folder
                 ? "Extra game folder saved. Found " + std::to_string(added) +
                       " games; files stay in place."
@@ -1016,74 +1039,75 @@ void UI::browserAction(Button b) {
                       (added == 1 ? "" : "s") +
                       ". Files stay in their original folders.";
 }
-void UI::select() {
-  if (focus == Focus::Menu) {
-    if (menu == 3) {
+void UI::openSetting() {
+  if(page==Page::Updates) {
+    if(setting==0) {
+      automaticUpdates=!automaticUpdates;
+      Json saved(std::initializer_list<Json::pair_type>{});saved.as_object()["automatic"]=automaticUpdates;
+      atomicWrite(model.paths.at("update-settings.json"),saved.stringify());
+    } else if(setting==1) {checkReleaseRequested=true;message="Checking releases...";}
+    else if(!releaseNotice.tag.empty())showRelease();
+    else message="No newer release has been found.";
+    return;
+  }
+  if (page == Page::Home) {
+    if (setting == 6) {
+      openPage(Page::Keys);
+      return;
+    }
+    if (setting == 7) {
+      blurAdult = !blurAdult;
+      savePreferences();
+      message = blurAdult ? "Adult artwork is blurred." : "Adult artwork is shown as is.";
+      return;
+    }
+    if (setting == 8) {
       exitRequested = true;
       return;
     }
-    if (menu == 0)
-      focus = Focus::Games;
-    if (menu == 2)
-      focus = Focus::About;
-    if (menu == 1) {
-      focus = Focus::Settings;
-      openPage(Page::Home);
+    if (setting == 4) {openPage(Page::Metrics);return;}
+    if (setting == 5) {openPage(Page::Updates);return;}
+    if (setting == 3) {
+      openPage(Page::Errors);
+      return;
+    }
+    openPage(setting == 0   ? Page::Display
+             : setting == 1 ? Page::Rtp
+                            : Page::Folders);
+    return;
+  }
+  if (page == Page::Keys) {
+    editKey(setting);
+    return;
+  }
+  if (page == Page::Errors) {
+    if (!errors.empty()) {
+      model.activeErrorPath = errors[setting].path;
+      errorReport = model.readError(model.activeErrorPath);
+      errorScroll = 0;
+      if (errorReport.empty())
+        message = "This report could not be read.";
     }
     return;
   }
-  if (focus == Focus::Settings) {
-    if(page==Page::Updates) {
-      if(setting==0) {
-        automaticUpdates=!automaticUpdates;
-        Json saved(std::initializer_list<Json::pair_type>{});saved.as_object()["automatic"]=automaticUpdates;
-        atomicWrite(model.paths.at("update-settings.json"),saved.stringify());
-      } else if(setting==1) {checkReleaseRequested=true;message="Checking releases...";}
-      else if(!releaseNotice.tag.empty())showRelease();
-      else message="No newer release has been found.";
-      return;
-    }
-    if (page == Page::Home) {
-      if (setting == 4) {openPage(Page::Metrics);return;}
-      if (setting == 5) {openPage(Page::Updates);return;}
-      if (setting == 3) {
-        openPage(Page::Errors);
-        return;
-      }
-      openPage(setting == 0   ? Page::Display
-               : setting == 1 ? Page::Rtp
-                              : Page::Folders);
-      return;
-    }
-    if (page == Page::Errors) {
-      if (!errors.empty()) {
-        model.activeErrorPath = errors[setting].path;
-        errorReport = model.readError(model.activeErrorPath);
-        errorScroll = 0;
-        if (errorReport.empty())
-          message = "This report could not be read.";
-      }
-      return;
-    }
-    if (page == Page::Display) {
-      changeDisplay();
-      return;
-    }
-    if (page == Page::Metrics) { changeMetrics(); return; }
-    openBrowser(page == Page::Rtp ? BrowseMode::Rtp : BrowseMode::Folder);
-    if (page == Page::Folders && setting > 0) {
-      auto folders = gameFolders;
-      if (size_t(setting - 1) < folders.size() &&
-          directory(folders[setting - 1]))
-        browser->enter(folders[setting - 1]);
-    }
+  if (page == Page::Display) {
+    changeDisplay();
     return;
   }
-  auto list = visible();
-  if (list.empty())
+  if (page == Page::Metrics) { changeMetrics(); return; }
+  openBrowser(page == Page::Rtp ? BrowseMode::Rtp : BrowseMode::Folder);
+  if (page == Page::Folders && setting > 0) {
+    auto folders = gameFolders;
+    if (size_t(setting - 1) < folders.size() &&
+        directory(folders[setting - 1]))
+      browser->enter(folders[setting - 1]);
+  }
+}
+void UI::play(size_t index) {
+  if (index >= model.list.size())
     return;
   Entry chosen;
-  auto e = model.list[list[selected]];
+  auto e = model.list[index];
   launchingName = e.name;
   if (beginLaunch && e.kind != Kind::Folder)
     beginLaunch();
@@ -1092,40 +1116,32 @@ void UI::select() {
     model.launch(chosen, [this](uint64_t done, uint64_t total) {
       progress(done, total);
     }, [this](const std::string &label) { preparation(label); });
+    model.recordLaunch(entryKey(e));
     launchFormat = chosen.version;
     launchRequested = true;
   } else {
-    history.push_back({selected, first});
+    // A collection opened: its games start from the first.
     query.clear();
-    resetSelection();
+    message.clear();
     launchingName.clear();
+    home.target = 0;
+    home.position = 0;
   }
 }
 void UI::action(Button b) {
   try {
+    if (homeActive()) {
+      homeAction(b);
+      return;
+    }
     if(!releaseReport.empty()) {
       if(b==Button::Circle || b==Button::Cross)releaseReport.clear();
       if(b==Button::Up || b==Button::Down)releaseScroll=std::max(0,std::min(releaseScroll+(b==Button::Up?-1:1),std::max(0,int(releaseReport.size())-11)));
       return;
     }
-    if (focus == Focus::Sources) {
-      if (b == Button::Circle || b == Button::Paths) {
-        focus = Focus::Menu;
-        return;
-      }
-      if (b == Button::Up)
-        sourceScroll = std::max(0, sourceScroll - 1);
-      if (b == Button::Down) {
-        int lines = 0;
-        for (auto &s : sources)
-          lines += (s.size() + 71) / 72 + 1;
-        sourceScroll = std::min(sourceScroll + 1, std::max(0, lines - 12));
-      }
-      return;
-    }
     if (focus == Focus::About) {
       if (b == Button::Circle || b == Button::Left) {
-        focus = Focus::Menu;
+        focus = Focus::Home;
         return;
       }
       if (b == Button::Up || b == Button::Down)
@@ -1155,7 +1171,6 @@ void UI::action(Button b) {
           if (missingRtp == packs[i])
             rtpSelected = i;
         openPage(Page::Rtp);
-        menu = gameOptions ? 0 : 1;
         focus = Focus::Settings;
         missingRtp.clear();
       } else if (b == Button::Circle)
@@ -1167,74 +1182,42 @@ void UI::action(Button b) {
       return;
     }
     if (gameOptions) { gameAction(b); return; }
+    // What is left is the settings sheet and its pages.
+    if (focus != Focus::Settings)
+      return;
     if (b == Button::Start) {
       openBrowser(BrowseMode::Games);
       return;
     }
-    if (menu == 0 && b == Button::Paths) {
-      sources = model.libraryRoots();
-      focus = Focus::Sources;
-      sourceScroll = 0;
-      return;
-    }
-    if (menu == 0 && b == Button::Select) {
-      if (searchText) {
-        std::string out;
-        if (searchText(query, out)) {
-          search(out);
-          focus = Focus::Games;
-        }
-      }
-      return;
-    }
-    if (menu == 0 && (b == Button::L || b == Button::R)) {
-      engineFilter =
-          (engineFilter + (b == Button::R ? 1 : engineFilterCount - 1)) %
-          engineFilterCount;
-      selected = first = 0;
-      return;
-    }
     if (b == Button::Up || b == Button::Down) {
       int step = b == Button::Up ? -1 : 1;
-      if (focus == Focus::Menu)
-        menu = (menu + step + 4) % 4;
-      else if (focus == Focus::Settings) {
-        if (page == Page::Rtp)
-          rtpSelected = (rtpSelected + step + rtpPackCount) % rtpPackCount;
-        else
-          move(setting, settingFirst,
-               page == Page::Errors    ? errors.size()
-               : page == Page::Folders ? 1 + gameFolders.size()
-               : page == Page::Home    ? 6
-               : page == Page::Metrics ? 2
-                                       : 3,
-               7, step);
-      } else
-        move(selected, first, visible().size(), gameRows(), step);
+      if (page == Page::Rtp)
+        rtpSelected = (rtpSelected + step + rtpPackCount) % rtpPackCount;
+      else
+        move(setting, settingFirst,
+             page == Page::Errors    ? errors.size()
+             : page == Page::Folders ? 1 + gameFolders.size()
+             : page == Page::Home    ? settingsRows()
+               : page == Page::Keys    ? keyCount
+             : page == Page::Metrics ? 2
+                                     : 3,
+             7, step);
       message.clear();
       return;
     }
     if (b == Button::Cross) {
-      select();
+      openSetting();
       return;
     }
-    if (b == Button::Right && focus == Focus::Menu && menu < 3) {
-      select();
-      return;
-    }
-    if (b == Button::Square && focus == Focus::Games && !visible().empty()) {
-      auto e = model.list[visible()[selected]];
-      if (e.kind == Kind::Folder)
-        throw std::runtime_error("Select a game or ZIP to rename.");
-      renameGame(e);
-      return;
-    }
-    if (b == Button::Square && focus == Focus::Settings) {
+    if (b == Button::Square) {
       if (page == Page::Errors) {
         if (!errors.empty()) {
           model.activeErrorPath = errors[setting].path;
           message = "Saved: " + model.exportError();
         }
+      } else if (page == Page::Keys) {
+        std::remove(keyFile(setting).c_str());
+        message = "Key removed.";
       } else if (page == Page::Rtp) {
         model.setRtp(packs[rtpSelected]);
         refreshRtp();
@@ -1255,46 +1238,26 @@ void UI::action(Button b) {
       }
       return;
     }
-    if ((b == Button::Left || b == Button::Right) && focus == Focus::Settings &&
+    if ((b == Button::Left || b == Button::Right) &&
         (page == Page::Display || page == Page::Metrics)) {
       if (page == Page::Metrics) changeMetrics(b == Button::Left ? -1 : 1);
       else changeDisplay(b == Button::Left ? -1 : 1);
       return;
     }
     if (b == Button::Triangle) {
-      if (focus == Focus::Settings && page == Page::Rtp) {
+      if (page == Page::Rtp) {
         model.clearRtpCache();
         refreshRtp();
         message = "Checking RTP locations...";
-      } else if (focus == Focus::Games && menu == 0)
-        openGameMenu();
+      }
       return;
     }
     if (b == Button::Circle || b == Button::Left) {
-      if (focus == Focus::Settings) {
-        if (page == Page::Home) {
-          focus = Focus::Menu;
-          message.clear();
-        } else
-          openPage(Page::Home);
-      } else if (focus == Focus::Games) {
-        if (model.back()) {
-          auto pos = history.empty() ? std::make_pair(0, 0) : history.back();
-          if (!history.empty())
-            history.pop_back();
-          selected = pos.first;
-          first = pos.second;
-          if (size_t(selected) >= visible().size())
-            selected = first = 0;
-          message.clear();
-        } else {
-          focus = Focus::Menu;
-          message.clear();
-        }
-      } else {
-        menu = 0;
+      if (page == Page::Home) {
+        focus = Focus::Home;
         message.clear();
-      }
+      } else
+        openPage(Page::Home);
     }
   } catch (const MissingRtp &e) {
     launchingName.clear();

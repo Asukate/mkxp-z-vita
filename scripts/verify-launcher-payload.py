@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import pathlib
 import re
-import subprocess
 import struct
 import sys
 import zipfile
@@ -73,15 +72,15 @@ def main() -> int:
             raise ValueError('VPK title must be HardRPG')
         release = (root / 'src/native_launcher/release.h').read_text()
         app_version = re.search(r'^#define HARDRPG_APP_VER "([0-9]{2}\.[0-9]{2})"$', release, re.M)
-        native = "launcher-backend.txt" in names
+        if "launcher-backend.txt" not in names:
+            raise ValueError("package needs the HardRPG launcher")
         from importlib.util import spec_from_file_location, module_from_spec
         overlay_spec = spec_from_file_location('livearea_version', root/'scripts/build-livearea.py')
         overlay = module_from_spec(overlay_spec); overlay_spec.loader.exec_module(overlay)
-        label = overlay.release_version(root/'src/native_launcher/release.h') if native else '0.2.0 Alpha'
+        label = overlay.release_version(root/'src/native_launcher/release.h')
         expected['sce_sys/livearea/contents/template.xml'] = hashlib.sha256(overlay.render(
             (root/'launcher/livearea/template.xml').read_bytes(), label)).hexdigest()
-        expected_version = app_version[1] if native and app_version else '00.20'
-        if not app_version or metadata.get('APP_VER') != expected_version:
+        if not app_version or metadata.get('APP_VER') != app_version[1]:
             raise ValueError('VPK app version must match release metadata')
         if args.title_id and metadata.get('TITLE_ID') != args.title_id:
             raise ValueError('VPK Title ID does not match requested package')
@@ -91,20 +90,14 @@ def main() -> int:
         # Source/assertion strings survive debug stripping in static libraries.
         if developer_home_paths(executable):
             raise ValueError('VPK contains a developer home path; rebuild in the /source and /work CI layout')
-        native = "launcher-backend.txt" in names
-        if native:
-            if vpk.read("launcher-backend.txt") != (root / "launcher/native-backend.txt").read_bytes():
-                raise ValueError("invalid native backend marker")
-            if b"HardRPG native launcher backend" not in executable:
-                raise ValueError("native launcher package needs a native-enabled engine")
-            expected.pop("stub/Game.ini")
-            expected["font.ttf"] = hashlib.sha256((root / "assets/liberation.ttf").read_bytes()).hexdigest()
-        picker_names = {"launcher-backend.txt"} if native else {"stub/Data/Scripts.rvdata2"}
+        if vpk.read("launcher-backend.txt") != (root / "launcher/native-backend.txt").read_bytes():
+            raise ValueError("invalid launcher backend marker")
+        if b"HardRPG native launcher backend" not in executable:
+            raise ValueError("the package needs an engine built with the HardRPG launcher")
+        picker_names = {"launcher-backend.txt"}
         if 'easyrpg.self' in names or 'runtime/easyrpg-manifest.json' in names:
             if metadata.get('ATTRIBUTE2', 0) & 12 != 12:
                 raise ValueError('EasyRPG requires ATTRIBUTE2=12 extended memory flags')
-            if not native:
-                raise ValueError('EasyRPG requires the native launcher')
             from importlib.util import spec_from_file_location, module_from_spec
             spec = spec_from_file_location('easyrpg_state', root/'scripts/easyrpg-state.py')
             state = module_from_spec(spec); spec.loader.exec_module(state)
@@ -137,20 +130,6 @@ def main() -> int:
             actual = hashlib.sha256(vpk.read(name)).hexdigest()
             if actual != digest:
                 print(f"release payload mismatch: {name}: {actual}", file=sys.stderr)
-                return 1
-        if not native:
-            picker = subprocess.run(
-                ["ruby", "-rzlib", "-e",
-                 "x=Marshal.load(STDIN.read); "
-                 "abort 'invalid picker entries' unless x.is_a?(Array) && x.size==2 && "
-                 "x.each_with_index.all? { |e,i| e.is_a?(Array) && e.size==3 && e[0]==i+1 && "
-                 "e[1]==%w[library.rb picker.rb][i] }; STDOUT.binmode; "
-                 "STDOUT.write(x.map { |e| Zlib.inflate(e[2]) }.join)"],
-                input=vpk.read("stub/Data/Scripts.rvdata2"), capture_output=True,
-            )
-            source = b''.join((root / 'launcher' / name).read_bytes() for name in ['library.rb', 'picker.rb'])
-            if picker.returncode or picker.stdout != source:
-                print("release payload mismatch: picker source", file=sys.stderr)
                 return 1
     print("release launcher payload matches")
     return 0

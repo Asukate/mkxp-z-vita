@@ -12,6 +12,7 @@
 #include <malloc.h>
 #include <psp2/kernel/sysmem.h>
 #include <psp2/kernel/processmgr.h>
+#include <psp2/appmgr.h>
 #include <vitaGL.h>
 #include "native_launcher/release.h"
 #endif
@@ -194,6 +195,24 @@ bool vitaErrorReportSave(const char *directory) {
     }
     if (close(file) != 0) ok = false;
     if (!ok) { std::remove(temp); return false; }
+    // Every HardRPG app (release, test builds) shares this folder. The owner
+    // file names the app whose game failed, so only that app's launcher shows
+    // the report; the others only add it to the error history.
+    char owner[1040], ownerTemp[1048];
+    snprintf(owner, sizeof(owner), "%s.owner", path);
+    snprintf(ownerTemp, sizeof(ownerTemp), "%s.tmp", owner);
+    std::remove(owner);
+#ifdef __vita__
+    char title[16] = {};
+    if (sceAppMgrAppParamGetString(0, 12, title, sizeof(title)) >= 0 && title[0]) {
+        const int ownerFile = open(ownerTemp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (ownerFile >= 0) {
+            bool written = write(ownerFile, title, strlen(title)) == static_cast<ssize_t>(strlen(title));
+            if (close(ownerFile) != 0 || !written || std::rename(ownerTemp, owner) != 0)
+                std::remove(ownerTemp);
+        }
+    }
+#endif
     struct stat old;
     if (stat(path, &old) == 0) {
         std::remove(previous);

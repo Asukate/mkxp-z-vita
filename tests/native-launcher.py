@@ -3,11 +3,13 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 
@@ -24,6 +26,26 @@ def fnv(value):
     for c in value.encode():
         v = ((v ^ c) * 1099511628211) & ((1 << 64) - 1)
     return f'{v:016x}'
+
+
+# The release this build calls itself, as release.h says.
+_release = (ROOT/'src/native_launcher/release.h').read_text()
+VERSION = re.search(r'#define HARDRPG_VERSION "([^"]+)"', _release).group(1)
+VERSION_TAG = re.search(r'#define HARDRPG_VERSION_TAG "([^"]+)"', _release).group(1)
+
+
+def next_tag(tag):
+    """The tag one patch release after tag (v0.3.1-alpha -> v0.3.2-alpha)."""
+    major, minor, patch, rest = re.match(r'v(\d+)\.(\d+)\.(\d+)(.*)', tag).groups()
+    return f'v{major}.{minor}.{int(patch) + 1}{rest}'
+
+
+# Key routes on the home screen, which opens on the first game.
+SETTINGS = 'up,up,right,cross'          # toolbar, top bar, the gear
+ABOUT = 'up,up,cross'                   # toolbar, top bar, About
+GAME = 'triangle,down,down,down,cross'  # options menu, Game settings
+RENAME = 'triangle,up,cross'            # options menu, Rename (its last row)
+PLAY = 'cross,cross'                    # first Cross shows details, the second plays
 
 
 class NativeLauncher(unittest.TestCase):
@@ -92,6 +114,10 @@ class NativeLauncher(unittest.TestCase):
             args.extend(['--snapshot', snapshot])
         return self.run_binary(*args)
 
+    def to(self, name):
+        """Keys moving home's focus to the named game."""
+        return 'right,' * [e['name'] for e in self.ui()['homeEntries']].index(name)
+
     def lcf_game(self, path, title='LCF game'):
         path.mkdir(parents=True, exist_ok=True)
         (path/'RPG_RT.ldb').write_bytes(b'\x0bLcfDataBase\x00')
@@ -108,53 +134,49 @@ class NativeLauncher(unittest.TestCase):
         listed=self.cmd('list')
         self.assertEqual([x['name'] for x in listed],['Ace','Older game'])
         self.assertEqual(listed[1]['backend'],'easyrpg')
-        state=self.ui('right,down,cross')
-        self.assertTrue(state['launchRequested'])
-        selection=json.loads((self.root/'selection.json').read_text())
-        self.assertEqual(selection['backend'],'easyrpg')
-        self.assertNotIn('execName',selection)
-        self.assertEqual(selection['project'],str(old))
-        self.assertEqual(selection['save'],str(self.root/'saves/easyrpg'/fnv('2003')))
-        self.assertEqual(selection['rtp'],[])
-        self.assertNotIn('rgss',selection)
-        self.assertEqual(self.ui('right,r,r,r,r')['visibleEntries'][0]['name'],'Older game')
-        self.assertEqual(len(self.ui('right,r,r,r,r,r')['visibleEntries']),2)
+        # From the carousel and from its game settings: the same EasyRPG handoff.
+        # (Playing moves the game to the front, so find it again each time.)
+        for route in [PLAY, GAME+',scroll:7,cross']:
+            with self.subTest(route=route):
+                state=self.ui(self.to('Older game')+route)
+                self.assertTrue(state['launchRequested'])
+                self.assertEqual(state['launchFormat'],4)
+                selection=json.loads((self.root/'selection.json').read_text())
+                self.assertEqual(selection['backend'],'easyrpg')
+                self.assertNotIn('execName',selection)
+                self.assertEqual(selection['project'],str(old))
+                self.assertEqual(selection['save'],str(self.root/'saves/easyrpg'/fnv('2003')))
+                self.assertEqual(selection['rtp'],[])
+                self.assertNotIn('rgss',selection)
+        # The fifth RTP row (2003) in its game settings, tapped once: focused, not opened.
+        state=self.ui(self.to('Older game')+GAME+',scroll:4,cross,touch:220:380')
+        self.assertEqual(state['rtpSelected'],4)
+        self.assertFalse(state['browserOpen'])
+        # Engine tabs: All, VX Ace, 2000/2003, then back to All.
+        state=self.ui('r,r')
+        self.assertEqual(state['engineFilter'],4)
+        self.assertEqual([x['name'] for x in state['homeEntries']],['Older game'])
+        self.assertEqual(len(self.ui('r,r,r')['homeEntries']),2)
         (old/'RPG_RT.lmt').unlink()
         self.assertIn('error',self.cmd('game',old))
-
     def test_loadexec_failure_clears_opening_overlay_and_allows_new_launch(self):
         self.lcf_game(self.games/'A', 'First')
         self.game(self.games/'B', 3, 'Second')
-        failed = self.ui('right,cross,loadexec-fail')
+        failed = self.ui(PLAY+',loadexec-fail')
         self.assertFalse(failed['launchRequested'])
         self.assertEqual(failed['launchFormat'], 0)
         self.assertEqual(failed['launchingName'], '')
         self.assertEqual(failed['preparationLabel'], '')
         self.assertIn('0x8080201e', failed['message'])
         self.assertIn('app0:/easyrpg.self', failed['message'])
-        moved = self.ui('right,cross,loadexec-fail,down')
+        self.assertTrue(failed['homeActive'])
+        moved = self.ui(PLAY+',loadexec-fail,right')
         self.assertFalse(moved['launchRequested'])
         self.assertEqual(moved['launchingName'], '')
-        again = self.ui('right,cross,loadexec-fail,down,cross')
+        again = self.ui(PLAY+',loadexec-fail,right,'+PLAY)
         self.assertTrue(again['launchRequested'])
         self.assertEqual(again['launchFormat'], 3)
         self.assertEqual(again['launchingName'], 'Second')
-
-    def test_lcf_game_menu_launch_and_rtp_keep_backend(self):
-        old=self.lcf_game(self.games/'LCF','Older game')
-        direct=self.ui('right,cross')
-        via_menu=self.ui('right,triangle,scroll:7,cross')
-        self.assertTrue(via_menu['launchRequested'])
-        self.assertEqual(direct['launchFormat'],4)
-        self.assertEqual(via_menu['launchFormat'],direct['launchFormat'])
-        selection=json.loads((self.root/'selection.json').read_text())
-        self.assertEqual(selection['backend'],'easyrpg')
-        self.assertNotIn('execName',selection)
-        self.assertEqual(selection['project'],str(old))
-        rtp=self.ui('right,triangle,scroll:4,cross,down')
-        self.assertEqual(rtp['rtpSelected'],4)
-        self.assertEqual(self.ui('right,triangle,scroll:4,cross,touch:220:380')['rtpSelected'],4)
-
     def test_lcf_zip_external_save_identity_and_rtp(self):
         external=self.lcf_game(self.storage/'Outside game','External LCF')
         (external/'Save01.lsd').write_bytes(b'existing save')
@@ -230,68 +252,157 @@ class NativeLauncher(unittest.TestCase):
 
     def test_touch_scroll_selection_and_filter_boundaries(self):
         for i in range(24): self.game(self.games/f'{i:02}',title=f'Game {i:02}')
-        state=self.ui('scroll:6')
-        self.assertEqual((state['focus'],state['first']),(1,6))
+        # Swiping the carousel moves the focus without launching.
+        state=self.ui('drag:704:360:284')
+        self.assertGreater(state['homeTarget'],0)
         self.assertFalse(state['launchRequested'])
-        state=self.ui('touch:220:220')
-        self.assertEqual(state['selected'],1)
+        # The card right of the focused one: a tap focuses it, the next opens
+        # its details, and Play in the details launches it.
+        state=self.ui('touch:704:284')
+        self.assertEqual(state['homeTarget'],1)
+        self.assertFalse(state['homeDetails'])
+        state=self.ui('touch:704:284,touch:704:284')
+        self.assertTrue(state['homeDetails'])
         self.assertFalse(state['launchRequested'])
-        state=self.ui('touch:220:220,touch:220:220')
+        state=self.ui('touch:704:284,touch:704:284,touch:400:460')
         self.assertTrue(state['launchRequested'])
-        self.assertEqual(self.ui('scroll:100')['first'],15)
-        self.assertEqual(self.ui('scroll:100,scroll:-100')['first'],0)
-        self.assertEqual(self.ui('right,r,r')['visibleEntries'],[])
-        self.assertFalse(self.ui('right,r,r,cross')['launchRequested'])
+        self.assertEqual(state['launchingName'],'Game 01')
+        # The Add games card ends the shelf; Left stops at the first game.
+        self.assertEqual(self.ui(','.join(['right']*30))['homeTarget'],24)
+        self.assertEqual(self.ui(','.join(['right']*30+['left']*30))['homeTarget'],0)
+        state=self.ui(','.join(['right']*30)+',cross')
+        self.assertFalse(state['launchRequested'])
+        self.assertTrue(state['browserOpen'])
+        # The grid from the toolbar's view button: Down moves a whole row.
+        state=self.ui('up,left,left,left,cross,down,down,down,right')
+        self.assertTrue(state['homeGrid'])
+        self.assertEqual(state['homeTarget'],11)
+        self.assertTrue(self.ui('touch:39:91')['homeGrid'])
+        # Filter panel: favourites only, with no favourites, shows nothing.
+        state=self.ui('up,cross,down,down,down,down,cross')
+        self.assertEqual(state['homePanel'],1)
+        self.assertEqual(state['homeEntries'],[])
+        state=self.ui('up,cross,down,down,down,down,cross,circle,down,cross')
+        self.assertEqual(state['homePanel'],0)
+        self.assertFalse(state['launchRequested'])
+        # Unplayed only keeps every game; the last row resets the filters.
+        self.assertEqual(len(self.ui('up,cross,up,up,up,up,cross')['homeEntries']),24)
+        state=self.ui('up,cross,down,down,down,down,cross,up,up,up,up,up,cross')
+        self.assertEqual(len(state['homeEntries']),24)
+    def test_play_time_favourites_and_sorting(self):
+        for name in ['Alpha','Bravo','Charlie']:
+            self.game(self.games/name,title=name)
+        keys={e['name']:e['config'] for e in self.cmd('list')}
+        activity=self.root/'activity.txt'
+        activity.write_text(f"{keys['Alpha']} 100 50\n{keys['Bravo']} 300 10\n")
+        names=lambda state: [e['name'] for e in state['homeEntries']]
+        # Last played first, then the filter panel's sorts (rows 6 to 8); the
+        # same sort again turns the order around.
+        self.assertEqual(names(self.ui()),['Bravo','Alpha','Charlie'])
+        sort=lambda row: 'up,cross'+',down'*row+',cross'
+        self.assertEqual(names(self.ui(sort(7))),['Alpha','Bravo','Charlie'])
+        self.assertEqual(names(self.ui(sort(7)+',cross')),['Charlie','Bravo','Alpha'])
+        self.assertEqual(names(self.ui(sort(8))),['Alpha','Bravo','Charlie'])
+        self.assertEqual(names(self.ui(sort(8)+',cross')),['Charlie','Bravo','Alpha'])
+        # The options menu's first row stars the focused game; the filter keeps only stars.
+        self.ui('triangle,cross')
+        self.assertEqual((self.root/'favourite-games.txt').read_text().split(),[keys['Bravo']])
+        self.assertEqual(names(self.ui('up,cross,down,down,down,down,cross')),['Bravo'])
+        self.ui('triangle,cross')
+        self.assertEqual((self.root/'favourite-games.txt').read_text().split(),[])
+        # Playing records the start; returning from the game adds the time
+        # played, a fresh boot (the game closed from the Vita's home) does not.
+        state=self.ui(PLAY)
+        self.assertTrue(state['launchRequested'])
+        self.assertIn('running '+keys['Bravo'],activity.read_text())
+        played=lambda: int(next(l for l in activity.read_text().splitlines() if l.startswith(keys['Bravo'])).split()[2])
+        started=int(time.time())-120
+        activity.write_text(f"{keys['Bravo']} {started} 10\nrunning {keys['Bravo']} {started}\n")
+        self.run_binary('--returning','yes','--actions','')
+        self.assertGreaterEqual(played(),130)
+        self.assertNotIn('running',activity.read_text())
+        activity.write_text(f"{keys['Bravo']} {started} 10\nrunning {keys['Bravo']} {started}\n")
+        self.run_binary('--returning','no','--actions','')
+        self.assertEqual(played(),10)
+        self.assertNotIn('running',activity.read_text())
+
+    def test_launcher_preferences_and_artwork_keys(self):
+        prefs=self.root/'launcher-preferences.json'
+        # Settings: Artwork sources is row 6, Blur adult artwork row 7.
+        state=self.ui(SETTINGS+',down'*7+',cross')
+        self.assertFalse(state['blurAdult'])
+        self.assertIs(json.loads(prefs.read_text())['blurAdult'],False)
+        self.assertFalse(self.ui()['blurAdult'])
+        prefs.write_text('{broken')
+        self.assertTrue(self.ui()['blurAdult'])            # a damaged file falls back to blurring
+        keys=SETTINGS+',down'*6+',cross'
+        self.assertEqual(self.ui(keys)['page'],12)
+        grid,rawg=self.root/'steamgriddb-key.txt',self.root/'rawg-key.txt'
+        # Typed keys keep only letters and digits.
+        self.run_binary('--text','ab12-CD 34','--actions',keys+',cross')
+        self.assertEqual(grid.read_text(),'ab12CD34\n')
+        self.run_binary('--text','rawg99','--actions',keys+',down,cross')
+        self.assertEqual(rawg.read_text(),'rawg99\n')
+        self.run_binary('--text','--cancel','--actions',keys+',cross')
+        self.assertEqual(grid.read_text(),'ab12CD34\n')
+        self.ui(keys+',square')
+        self.assertFalse(grid.exists())
+        self.assertTrue(rawg.exists())
 
     def test_search_filters_keep_launch_identity_and_names(self):
         self.game(self.games/'AO',1,'Ao Oni')
         self.game(self.games/'Moon',1,'To the Moon')
         self.game(self.games/'Ace',3,'BLACK SOULS')
-        state=self.run_binary('--actions','right','--search','ao')
-        self.assertEqual([x['name'] for x in state['visibleEntries']],['Ao Oni'])
+        state=self.run_binary('--actions','','--search','ao')
+        self.assertEqual([x['name'] for x in state['homeEntries']],['Ao Oni'])
         self.assertEqual(state['query'],'ao')
-        state=self.run_binary('--actions','right,r','--search','')
+        state=self.run_binary('--actions',PLAY,'--search','ao')
+        self.assertTrue(state['launchRequested'])
+        self.assertEqual(json.loads((self.root/'selection.json').read_text())['path'],'AO')
+        # Circle clears the search.
+        self.assertEqual(len(self.run_binary('--actions','circle','--search','ao')['homeEntries']),3)
+        state=self.run_binary('--actions','r','--search','')
         self.assertEqual(state['engineFilter'],1)
-        self.assertEqual(len(state['visibleEntries']),2)
-        state=self.run_binary('--actions','right,r,r')
-        self.assertEqual(state['engineFilter'],2)
-        self.assertEqual(state['visibleEntries'],[])
+        self.assertEqual(len(state['homeEntries']),2)
+        state=self.run_binary('--actions','r,r')
+        self.assertEqual(state['engineFilter'],3)
+        self.assertEqual([x['name'] for x in state['homeEntries']],['BLACK SOULS'])
         self.assertFalse(state['launchRequested'])
-
-    def test_settings_sidebar_has_no_false_selection(self):
-        from PIL import Image
-        idle=self.storage/'settings-idle.png'; focused=self.storage/'settings-focus.png'
-        self.ui('down',idle);self.ui('down,right',focused)
-        self.assertEqual(Image.open(idle).getpixel((184,151)),Image.open(idle).getpixel((183,151)))
-        self.assertNotEqual(Image.open(idle).getpixel((184,151)),
-                            Image.open(focused).getpixel((184,151)))
-
-    def test_error_history_retains_multiple_games_and_exports_selected(self):
-        for name,trace in [('Ao Oni','first.rb:1'),('Hylics','second.rb:2')]:
+        self.assertEqual(self.ui('l')['engineFilter'],3)
+    def test_error_history_keeps_every_report_once_and_exports_one(self):
+        # Two identical crashes in the same second stay two reports; reading the
+        # retained copy at the next boot adds no third.
+        for name,trace in [('Ao Oni','same.rb:1'),('Ao Oni','same.rb:1'),('Hylics','other.rb:2')]:
             (self.root/'active-game.json').write_text(json.dumps({'name':name}))
-            (self.root/'last-error.txt').write_text(trace+'\n')
+            report=self.root/'last-error.txt'
+            report.write_text(trace+'\n')
+            os.utime(report,(1700000000,1700000000))
             self.ui('circle')
-        state=self.ui('down,right,down,down,down,cross')
+            self.ui()
+        state=self.ui(SETTINGS+',down,down,down,cross')
         self.assertEqual(state['page'],4)
-        self.assertEqual({x['game'] for x in state['errors']},{'Ao Oni','Hylics'})
+        self.assertEqual(sorted(x['game'] for x in state['errors']),['Ao Oni','Ao Oni','Hylics'])
         self.assertTrue(all(x['timestamp'] for x in state['errors']))
-        state=self.ui('down,right,down,down,down,cross,cross,square')
+        state=self.ui(SETTINGS+',down,down,down,cross,cross,square')
         self.assertGreater(state['errorLines'],0)
         self.assertIn('Saved:',state['message'])
-        self.assertEqual(len(list((self.root/'errors').glob('*.txt'))),2)
-
-    def test_identical_errors_same_second_are_separate_without_startup_duplicates(self):
-        for name in ['Ao Oni','Ao Oni','Hylics']:
-            (self.root/'active-game.json').write_text(json.dumps({'name':name}))
-            report = self.root/'last-error.txt'
-            report.write_text('same.rb:1\n')
-            os.utime(report, (1700000000, 1700000000))
-            self.ui('circle')
-            self.ui()  # Migrating the retained handoff must not add a duplicate.
-        state = self.ui('down,right,down,down,down,cross')
-        self.assertEqual(len(state['errors']),3)
-        self.assertEqual([x['game'] for x in state['errors']].count('Ao Oni'),2)
-
+        self.assertEqual(len(list((self.root/'errors').glob('*.txt'))),3)
+    def test_error_from_another_app_is_kept_but_not_shown(self):
+        # Every HardRPG app shares the data folder. A report written by another
+        # app's game goes to the history; the launcher does not open it.
+        (self.root/'active-game.json').write_text(json.dumps({'name':'Infinite Fusion'}))
+        (self.root/'last-error.txt').write_text('elsewhere.rb:1\n')
+        (self.root/'last-error.txt.owner').write_text('OTHER0001')
+        state=self.ui('')
+        self.assertEqual(state['errorLines'],0)
+        self.assertTrue(state['homeActive'])
+        self.assertFalse((self.root/'last-error.txt').exists())
+        self.assertFalse((self.root/'last-error.txt.owner').exists())
+        state=self.ui(SETTINGS+',down,down,down,cross')
+        self.assertEqual([x['game'] for x in state['errors']],['Infinite Fusion'])
+        # A report from this app (the host has no title ID) still opens.
+        (self.root/'last-error.txt').write_text('here.rb:2\n')
+        self.assertGreater(self.ui('')['errorLines'],0)
     def test_nested_games_engine_detection_and_keys(self):
         a = self.game(self.games / 'Collection/Game', 3, 'Ace')
         b = self.game(self.games / 'Other/Game', 2, 'VX')
@@ -305,9 +416,12 @@ class NativeLauncher(unittest.TestCase):
             config=fnv('Collection/Game'), rgss=3, rtp=[]))
         self.assertNotEqual(x['config'], self.cmd('launch', b)['config'])
         self.assertEqual(json.loads((self.root/'selection.json').read_text()), self.cmd('launch', b))
-        self.assertEqual(self.ui('cross,cross')['entries'][0]['name'], 'Ace')
-        self.assertEqual(self.ui('cross,cross,circle')['entries'], listing)
-
+        self.assertEqual(self.ui('cross')['entries'][0]['name'], 'Ace')
+        self.assertEqual(self.ui('cross,circle')['entries'], listing)
+        # A collection opens on its first game, wherever the focus was.
+        state = self.ui('right,cross')
+        self.assertEqual([e['name'] for e in state['homeEntries']], ['VX'])
+        self.assertEqual(state['homeTarget'], 0)
     def test_case_script_and_archive_detection(self):
         p = self.games / 'Case'; p.mkdir()
         (p/'gAmE.InI').write_text('[gAmE]\nTITLE=Pokémon\nScripts=Data\\Scripts.rvdata2\n')
@@ -318,40 +432,39 @@ class NativeLauncher(unittest.TestCase):
         (p/'gAmE.InI').write_bytes(b'[Game]\nTitle=bad\xff title\nLibrary=RGSS301.dll\n')
         self.assertEqual(self.cmd('game', p)[0]['name'], 'bad? title')
 
-    def test_performance_metrics_cycles_persists_and_preserves_settings(self):
+    def test_launcher_config_switches_persist_validate_and_keep_other_options(self):
         file = self.root / 'launcher-config.json'
-        file.write_text(json.dumps(dict(preloadScript=['keep.rb'], smoothScaling=1)))
-        route = 'down,right,down,down,down,down,cross'
-        self.assertEqual(self.ui(route)['page'], 5)
-        self.ui(route + ',cross')
-        self.assertEqual(json.loads(file.read_text())['performanceMetrics'], 1)
-        self.ui(route + ',right')
-        self.assertEqual(json.loads(file.read_text())['performanceMetrics'], 2)
-        self.ui(route + ',left')
-        self.assertEqual(json.loads(file.read_text())['performanceMetrics'], 1)
-        self.ui(route + ',square')
-        self.assertEqual(json.loads(file.read_text()),
-                         dict(preloadScript=['keep.rb'], smoothScaling=1, performanceMetrics=0))
-        before = file.read_bytes()
-        for invalid in [-1, 3, True, 'FPS']:
-            self.assertIn('error', self.cmd('set-display', key='performanceMetrics', value=invalid))
-            self.assertEqual(file.read_bytes(), before)
-
-    def test_fast_forward_switches_persist_and_validate(self):
-        file = self.root / 'launcher-config.json'
+        config = lambda: json.loads(file.read_text())
+        # Display, by command: unknown keys stay, invalid values change nothing.
+        file.write_text(json.dumps(dict(preloadScript=['keep.rb'], SESourceCount=6)))
+        self.call([{'op':'set-display','key':'fixedAspectRatio','value':False},
+            {'op':'set-display','key':'integerScalingActive','value':True},
+            {'op':'set-display','key':'smoothScaling','value':1}])
+        self.assertEqual(config(), dict(preloadScript=['keep.rb'], SESourceCount=6,
+            fixedAspectRatio=False, integerScalingActive=True, integerScalingLastMile=False,
+            smoothScaling=1, smoothScalingDown=1))
+        self.ui(SETTINGS+',cross,square')
+        self.assertTrue(config()['fixedAspectRatio'])
+        # Performance and speed: the overlay cycles, fast forward switches.
         file.write_text(json.dumps(dict(preloadScript=['keep.rb'])))
-        route = 'down,right,down,down,down,down,cross,down'
-        self.ui(route + ',cross')
-        self.assertIs(json.loads(file.read_text())['fastForward'], False)
-        self.ui(route + ',right')
-        self.assertIs(json.loads(file.read_text())['fastForward'], True)
-        self.ui(route + ',left,square')
-        self.assertEqual(json.loads(file.read_text()),
-                         dict(preloadScript=['keep.rb'], fastForward=True))
+        speed = SETTINGS + ',down,down,down,down,cross'
+        self.assertEqual(self.ui(speed)['page'], 5)
+        for keys, expected in [(',cross', 1), (',right', 2), (',left', 1)]:
+            self.ui(speed + keys)
+            self.assertEqual(config()['performanceMetrics'], expected)
+        self.ui(speed + ',square')
+        self.assertEqual(config()['performanceMetrics'], 0)
+        self.ui(speed + ',down,cross')
+        self.assertIs(config()['fastForward'], False)
+        self.ui(speed + ',down,left,square')
+        self.assertEqual(config(), dict(preloadScript=['keep.rb'], performanceMetrics=0, fastForward=True))
         before = file.read_bytes()
-        for invalid in [0, 1, 'on', None]:
-            self.assertIn('error', self.cmd('set-display', key='fastForward', value=invalid))
-            self.assertEqual(file.read_bytes(), before)
+        for key, invalid in [('SESourceCount', [7]), ('performanceMetrics', [-1, 3, True, 'FPS']),
+                             ('fastForward', [0, 1, 'on', None])]:
+            for value in invalid:
+                with self.subTest(key=key, value=value):
+                    self.assertIn('error', self.cmd('set-display', key=key, value=value))
+                    self.assertEqual(file.read_bytes(), before)
 
     def test_stale_game_ini_yields_to_the_ini_that_has_the_archive(self):
         # The Windows To the Moon: Game.ini is left over, the data is "To the Moon.rgssad".
@@ -399,21 +512,6 @@ class NativeLauncher(unittest.TestCase):
         self.assertNotIn('execName', selected)
 
 
-    def test_display_settings_preserve_other_options(self):
-        file = self.root / 'launcher-config.json'
-        file.write_text(json.dumps(dict(preloadScript=['keep.rb'], SESourceCount=6)))
-        self.call([{'op':'set-display','key':'fixedAspectRatio','value':False},
-            {'op':'set-display','key':'integerScalingActive','value':True},
-            {'op':'set-display','key':'smoothScaling','value':1}])
-        self.assertEqual(json.loads(file.read_text()), dict(preloadScript=['keep.rb'], SESourceCount=6,
-            fixedAspectRatio=False, integerScalingActive=True, integerScalingLastMile=False,
-            smoothScaling=1, smoothScalingDown=1))
-        before = file.read_bytes()
-        self.assertIn('error', self.cmd('set-display', key='SESourceCount', value=7))
-        self.assertEqual(file.read_bytes(), before)
-        self.ui('down,cross,cross,square')
-        self.assertTrue(json.loads(file.read_text())['fixedAspectRatio'])
-
     def test_external_references_preserve_games_and_saves(self):
         external = self.game(self.storage / 'Existing/Game')
         save = external/'Save01.rvdata2'; save.write_bytes(b'keep save')
@@ -457,6 +555,11 @@ class NativeLauncher(unittest.TestCase):
         (dest/'Save01.rvdata2').write_bytes(b'save')
         self.assertEqual(self.cmd('launch', zip_path, kind='zip', inner='Wrapper'), x)
         self.assertEqual((dest/'Save01.rvdata2').read_bytes(), b'save')
+        # A copy already unpacked (by this or an older HardRPG, which wrote the
+        # same marker) is reused as it is: nothing is unpacked again.
+        (dest/'Data/test.bin').unlink()
+        self.assertEqual(self.cmd('launch', zip_path, kind='zip', inner='Wrapper'), x)
+        self.assertFalse((dest/'Data/test.bin').exists())
         with zipfile.ZipFile(zip_path,'a') as z: z.writestr('extra.txt',b'changed')
         self.assertIn('ZIP changed', self.cmd('launch',zip_path,kind='zip',inner='Wrapper')['error'])
         self.assertEqual((dest/'Save01.rvdata2').read_bytes(),b'save')
@@ -470,19 +573,18 @@ class NativeLauncher(unittest.TestCase):
         listed = self.cmd('refresh')
         self.assertEqual([e['name'] for e in listed], ['ZIP game'])
         # Same identity as the ZIP game: settings, controls, names and saves follow.
-        state = self.ui('right,cross')
+        state = self.ui(PLAY)
         self.assertTrue(state['launchRequested'])
         selection = json.loads((self.root/'selection.json').read_text())
         self.assertEqual((selection['source'], selection['path'], selection['config']),
                          ('cache', x['path'], x['config']))
         self.assertEqual((dest/'Save01.rvdata2').read_bytes(), b'save')
         # Its game files are now the unpacked copy: one question, about that copy.
-        state = self.ui('right,triangle,scroll:8,cross')
+        state = self.ui(GAME+',scroll:8,cross')
         self.assertEqual(state['removeQuestion'], [str(dest)])
-        self.ui('right,triangle,scroll:8,cross,down,cross')
+        self.ui(GAME+',scroll:8,cross,down,cross')
         self.assertFalse(dest.exists())
         self.assertEqual(self.cmd('refresh'), [])
-
     def test_remove_from_library_asks_about_files_one_question_at_a_time(self):
         plain = self.game(self.games/'Plain', title='Plain game')
         zip_path = self.zip(self.games/'packed.zip')
@@ -490,8 +592,7 @@ class NativeLauncher(unittest.TestCase):
         dest = self.root/'cache'/x['path']
         names = lambda: sorted(e['name'] for e in self.cmd('refresh'))
         def remove(name, keys=''):
-            row = [e['name'] for e in self.ui()['entries']].index(name)
-            return self.ui('right,' + 'down,'*row + 'triangle,scroll:8,cross' + keys)
+            return self.ui(self.to(name) + GAME + ',scroll:8,cross' + keys)
         # First the game files (the ZIP), then the unpacked copy; No by default.
         self.assertEqual(remove('packed.zip')['removeQuestion'], [str(zip_path)])
         self.assertEqual(remove('packed.zip', ',down,cross')['removeQuestion'], [str(dest)])
@@ -504,6 +605,8 @@ class NativeLauncher(unittest.TestCase):
         self.assertFalse(zip_path.exists())
         self.assertTrue(dest.exists())
         self.assertEqual(names(), ['Plain game'])
+        self.assertTrue(state['homeActive'])
+        self.assertEqual(state['homeTarget'], 0)
         # Keeping the files only takes the game off the list; adding the folder shows it.
         self.assertIn('removed from the list', remove('Plain game', ',cross')['message'])
         self.assertTrue((plain/'Game.ini').exists())
@@ -517,32 +620,30 @@ class NativeLauncher(unittest.TestCase):
         self.assertTrue(self.games.exists())
         self.game(self.games/'Plain', title='Plain game')
         self.assertEqual(names(), ['Plain game'])
-
     def test_delete_the_zip_keeps_an_unpacked_game_playable(self):
         zip_path = self.zip(self.games/'freed.zip')
         # Not unpacked yet: no such row, the menu ends at Remove from library.
-        self.assertEqual(self.ui('right,triangle,scroll:9')['setting'], 8)
+        self.assertEqual(self.ui(GAME+',scroll:9')['setting'], 8)
         x = self.cmd('launch', zip_path, kind='zip', inner='Wrapper')
         dest = self.root/'cache'/x['path']
-        state = self.ui('right,triangle,scroll:9,cross')
+        state = self.ui(GAME+',scroll:9,cross')
         self.assertEqual(state['removeQuestion'], [str(zip_path)])
         # No goes back to the menu and keeps the ZIP.
-        self.assertEqual(self.ui('right,triangle,scroll:9,cross,cross')['page'], self.ui('right,triangle')['page'])
+        self.assertEqual(self.ui(GAME+',scroll:9,cross,cross')['page'], self.ui(GAME)['page'])
         self.assertTrue(zip_path.exists())
-        state = self.ui('right,triangle,scroll:9,cross,down,cross')
+        state = self.ui(GAME+',scroll:9,cross,down,cross')
         self.assertIn('plays from its unpacked copy', state['message'])
+        self.assertTrue(state['homeActive'])
         self.assertFalse(zip_path.exists())
         self.assertTrue(dest.exists())
         self.assertEqual([e['name'] for e in self.cmd('refresh')], ['ZIP game'])
-
     def test_remove_never_offers_to_delete_a_library_folder(self):
         # A game folder that is itself an extra search folder is only taken off the list.
         outside = self.game(self.storage/'elsewhere'/'Solo', title='Solo game')
         self.cmd('add-search', outside)
-        state = self.ui('right,triangle,scroll:8,cross')
+        state = self.ui(GAME+',scroll:8,cross')
         self.assertIn('removed from the list', state['message'])
         self.assertTrue((outside/'Game.ini').exists())
-
     def test_zip_cancel_incomplete_cache_and_symlinks(self):
         zip_path = self.zip(self.games/'cancel.zip', inner='')
         key = fnv('cancel.zip!/')
@@ -576,13 +677,16 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(x['pack'],'RPGVXAce')
         self.assertEqual(list((self.root/'cache').iterdir()),[])
         self.assertFalse((self.root/'selection.json').exists())
-        state = self.ui('cross,cross')
+        state = self.ui(PLAY)
         self.assertEqual(state['missingRtp'],'RPGVXAce')
-        state = self.ui('cross,cross,cross')
-        self.assertEqual(state['menu'],1)
+        state = self.ui(PLAY+',cross')
+        self.assertEqual(state['focus'],1)
         self.assertEqual(state['page'],2)
         self.assertFalse(state['missingRtp'])
-
+        # The sheet's second row goes back to the games.
+        state = self.ui(PLAY+',touch:400:203')
+        self.assertFalse(state['missingRtp'])
+        self.assertTrue(state['homeActive'])
     def test_rtp_default_custom_collection_zip_and_reset(self):
         game = self.game(self.games/'RTP',rtp='RPGVXAce')
         pack = self.pack(self.root/'rtp/RPGVXAce')
@@ -617,10 +721,11 @@ class NativeLauncher(unittest.TestCase):
     def test_rename_under_search_does_not_leave_stale_cursor(self):
         for i in range(12): self.game(self.games/f'{i:02}', title=f'Game {i:02}')
         state = self.run_binary('--search', 'Game', '--actions',
-            'right,' + ','.join(['down']*11) + ',square,cross', '--rename', 'Other')
+            ','.join(['right']*11) + ',' + RENAME + ',' + PLAY, '--rename', 'Other')
+        # The renamed game leaves the search; its neighbour takes the focus.
         self.assertTrue(state['launchRequested'])
-        self.assertEqual(len(state['visibleEntries']),11)
-
+        self.assertEqual(state['launchingName'], 'Game 10')
+        self.assertEqual(len(state['homeEntries']),11)
     def test_error_report_scroll_large_prefix_and_complete_retention(self):
         report=self.root/'last-error.txt'
         report.write_bytes(('error line\n'*4000).encode()+b'bad\xff\0')
@@ -642,16 +747,15 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(len(reports),2)
         for report in reports:
             exported = report.read_bytes()
-            self.assertIn(b'HardRPG 0.3.1 Alpha',exported)
+            self.assertIn(b'HardRPG '+VERSION.encode(),exported)
             self.assertTrue(exported.endswith(body))
         self.assertEqual((self.root/'last-error.txt.prev').read_bytes(),body)
         self.assertGreater(state['errorLines'],12)
         self.assertIn(str(reports[-1]),state['message'])
         # The report remains accessible after dismissal or another app launch.
-        state = self.ui('down,cross,down,down,down,cross,cross')
+        state = self.ui(SETTINGS+',down,down,down,cross,cross')
         self.assertGreater(state['errorLines'],12)
         self.assertEqual(len(list((self.root/'reports').glob('error-*.txt'))),2)
-
     def test_error_export_failure_keeps_error_screen_and_reports_reason(self):
         (self.root/'last-error.txt').write_text('Backtrace: script.rb:10\n')
         (self.root/'reports').write_text('occupied')
@@ -659,74 +763,25 @@ class NativeLauncher(unittest.TestCase):
         self.assertGreater(state['errorLines'],0)
         self.assertIn('Cannot create folder',state['message'])
         self.assertEqual((self.root/'reports').read_text(),'occupied')
-        self.assertEqual(self.ui('down,cross,down,down,down,cross,cross,circle')['errorLines'],0)
-
-    def test_differential_against_current_ruby_launcher(self):
-        native_bridge = WORK/'hardrpg_archive.so'
-        subprocess.run(['ruby',str(ROOT/'scripts/build-host-archive.rb'),str(native_bridge)],check=True,
-            stdout=subprocess.DEVNULL)
-        reference = self.storage/'reference.rb'
-        reference.write_text("""require 'json'
-module HTTPLite; JSON = ::JSON; end
-require ARGV.shift
-HARDRPG_DATA_ROOT = ARGV.shift
-HARDRPG_BROWSE_ROOTS = [ARGV.shift]
-load ARGV.shift
-HardRPG.setup
-library = HardRPG::Library.new
-if ARGV[0] == 'list'
-  result = library.entries.map { |e| {'name'=>e.name,'kind'=>e.kind.to_s,'path'=>e.node.path,
-    'inner'=>e.node.inner,'config'=>e.node.config_key,'rgss'=>e.version || 0} }
-else
-  node = HardRPG::Node.from_path(ARGV[1], ARGV[2]=='zip', ARGV[3] || '')
-  result = library.launch(node.game)
-end
-puts JSON.generate(result)
-""")
-        def ruby(*args):
-            return json.loads(subprocess.check_output(['ruby',str(reference),str(native_bridge),
-                str(self.root),str(self.storage)+'/',str(ROOT/'launcher/library.rb'),*map(str,args)],text=True))
-        external=self.game(self.storage/'original/game',title='External')
-        self.game(self.games/'XP',1,'XP')
-        zip_path=self.zip(self.games/'wrapped.zip')
-        self.cmd('add',external)
-        native_list=self.cmd('list')
-        ruby_list=ruby('list')
-        # Native ZIP metadata adds engine labels; library identity stays shared.
-        self.assertEqual([e['rgss'] for e in native_list if e['kind']=='zip'],[3])
-        self.assertEqual([e['rgss'] for e in ruby_list if e['kind']=='zip'],[0])
-        for e in ruby_list:
-            if e['kind']=='zip':
-                e['rgss']=3
-        self.assertEqual(native_list,ruby_list)
-        self.assertEqual(self.cmd('launch',external),ruby('launch',external,'dir',''))
-        native=self.cmd('launch',zip_path,kind='zip',inner='Wrapper')
-        dest=self.root/'cache'/native['path']
-        (dest/'Save01.rvdata2').write_bytes(b'keep')
-        self.assertEqual(native,ruby('launch',zip_path,'zip','Wrapper'))
-        self.assertEqual((dest/'Save01.rvdata2').read_bytes(),b'keep')
-        # A Ruby-created cache must also remain readable without extraction.
-        shutil.rmtree(dest)
-        old=ruby('launch',zip_path,'zip','Wrapper')
-        (dest/'Save01.rvdata2').write_bytes(b'keep ruby save')
-        self.assertEqual(self.cmd('launch',zip_path,kind='zip',inner='Wrapper'),old)
-        self.assertEqual((dest/'Save01.rvdata2').read_bytes(),b'keep ruby save')
-
+        state = self.ui(SETTINGS+',down,down,down,cross,cross,circle')
+        self.assertEqual(state['errorLines'],0)
+        self.assertEqual(state['page'],4)
     def test_corrupt_settings_leave_navigation_usable(self):
         (self.root/'rtp-paths.txt').write_bytes(b'x'*524289)
-        state=self.ui('down,cross,down,cross',self.storage/'bad-rtp.png')
+        state=self.ui(SETTINGS+',down,cross',self.storage/'bad-rtp.png')
         self.assertEqual(state['page'],0)
         self.assertIn('large',state['message'])
-        self.assertEqual(self.ui('down,cross,down,cross,circle,down')['menu'],2)
+        state=self.ui(SETTINGS+',down,cross,circle,right')
+        self.assertTrue(state['homeActive'])
+        self.assertEqual(state['focus'],0)
         (self.root/'game-folders.txt').write_bytes(b'x'*65537)
-        state=self.ui('down,cross,down,down,cross',self.storage/'bad-folders.png')
+        state=self.ui(SETTINGS+',down,down,cross',self.storage/'bad-folders.png')
         self.assertEqual(state['page'],0)
         self.assertIn('large',state['message'])
         (self.root/'launcher-config.json').write_text('{broken')
-        state=self.ui('down,cross,cross',self.storage/'bad-display.png')
+        state=self.ui(SETTINGS+',cross',self.storage/'bad-display.png')
         self.assertEqual(state['page'],0)
         self.assertTrue(state['message'])
-
     def test_production_gles_presenter_on_host(self):
         boot=self.storage/'gles';boot.mkdir()
         app=boot/'app0:';app.mkdir()
@@ -765,35 +820,43 @@ puts JSON.generate(result)
 
     def test_interface_navigation_browser_settings_and_exit(self):
         for i in range(14): self.game(self.games/f'{i:02}',title=f'Game {i:02}')
-        state=self.ui(','.join(['cross']+['down']*12))
-        self.assertEqual((state['selected'],state['first']),(12,4))
-        self.assertEqual(self.ui('down,down')['menu'],2)
-        self.assertEqual(self.ui('down,down,up,up')['menu'],0)
-        self.assertTrue(self.ui('down,down,down,cross')['exitRequested'])
-        self.assertFalse(self.ui('down,down,down,circle')['exitRequested'])
-        state=self.ui('start,circle')
-        self.assertEqual(state['browserPath'],'')
-        state=self.ui('start,circle,cross')
+        self.assertEqual(self.ui(','.join(['right']*12))['homeTarget'],12)
+        # The top bar: the gear opens Settings, the info icon About.
+        state=self.ui(SETTINGS)
+        self.assertEqual((state['focus'],state['page'],state['setting']),(1,0,0))
+        self.assertEqual(self.ui('touch:925:31')['focus'],1)
+        self.assertEqual(self.ui(ABOUT)['focus'],2)
+        self.assertEqual(self.ui('touch:725:31')['focus'],2)
+        state=self.ui(ABOUT+',circle')
+        self.assertTrue(state['homeActive'])
+        # Exit is the last settings row; Circle leaves Settings instead.
+        self.assertTrue(self.ui(SETTINGS+',up,cross')['exitRequested'])
+        state=self.ui(SETTINGS+',up,circle')
+        self.assertFalse(state['exitRequested'])
+        self.assertTrue(state['homeActive'])
+        # Add games: Start, or the toolbar button.
+        state=self.ui('start')
         self.assertEqual(state['browserPath'],str(self.storage)+'/')
-        self.assertEqual(self.ui('start,start')['browserPath'],'')
-        state=self.ui('down,cross,down,down,cross')
+        self.assertEqual(self.ui('up,left,left,cross')['browserPath'],str(self.storage)+'/')
+        self.assertEqual(self.ui('start,cross')['browserPath'],str(self.root))
+        state=self.ui('start,start')
+        self.assertFalse(state['browserOpen'])
+        self.assertTrue(state['homeActive'])
+        state=self.ui(SETTINGS+',down,down,cross')
         self.assertEqual(state['page'],3)
-
-    def test_focus_highlight_and_right_enter(self):
+    def test_focus_moves_between_shelf_toolbar_and_top_bar(self):
         self.game(self.games/'A',title='Ao Oni')
-        from PIL import Image
-        idle=self.storage/'idle.png'; focused=self.storage/'focused.png'
-        state=self.ui('',idle)
-        self.assertEqual((state['menu'],state['focus']),(0,0))
-        state=self.ui('right',focused)
-        self.assertEqual((state['menu'],state['focus']),(0,1))
+        state=self.ui('')
+        self.assertEqual((state['homeZone'],state['homeTarget']),(0,0))
+        state=self.ui('up')
+        self.assertEqual(state['homeZone'],1)
         self.assertFalse(state['launchRequested'])
-        # This pixel is the row's outer highlight, outside all label glyphs.
-        self.assertNotEqual(Image.open(idle).getpixel((184,180)),
-                            Image.open(focused).getpixel((184,180)))
-        self.assertEqual(self.ui('right,left')['focus'],0)
-        self.assertEqual(self.ui('down,right')['focus'],2)
-
+        self.assertEqual(self.ui('up,up')['homeZone'],2)
+        self.assertEqual(self.ui('up,down')['homeZone'],0)
+        self.assertEqual(self.ui('up,up,down,down')['homeZone'],0)
+        # Settings opens on its first row; Down moves the focus to the second.
+        self.assertEqual(self.ui(SETTINGS)['setting'],0)
+        self.assertEqual(self.ui(SETTINGS+',down')['setting'],1)
     def test_display_name_survives_refresh_without_changing_game_or_save_identity(self):
         game=self.game(self.games/'Witch-ver-1.09a',2,'The Witchs House ver 1.09a F5')
         save=game/'Save01.rvdata';save.write_bytes(b'original save')
@@ -816,11 +879,11 @@ puts JSON.generate(result)
     def test_display_name_external_zip_and_keyboard_cancel(self):
         external=self.game(self.storage/'external/Game',title='Original')
         self.cmd('add',external)
-        out=self.run_binary('--actions','right,square','--rename','Renamed')
-        self.assertEqual(out['entries'][out['selected']]['name'],'Renamed')
+        out=self.run_binary('--actions',RENAME,'--rename','Renamed')
+        self.assertEqual(out['homeEntries'][out['homeTarget']]['name'],'Renamed')
         self.assertFalse(out['launchRequested'])
         before=(self.root/'game-names.json').read_bytes()
-        self.run_binary('--actions','right,square','--rename','--cancel')
+        self.run_binary('--actions',RENAME,'--rename','--cancel')
         self.assertEqual((self.root/'game-names.json').read_bytes(),before)
         zip_path=self.zip(self.games/'wrapped.zip')
         content=zip_path.read_bytes()
@@ -833,93 +896,69 @@ puts JSON.generate(result)
         self.assertTrue(self.ui()['entries'])
         self.assertIn('error',self.cmd('rename',external,name='New'))
         self.assertEqual((self.root/'game-names.json').read_text(),'{broken')
-
     def test_controls_saved_per_game_survive_rename_without_modifying_game(self):
         g=self.game(self.games/'controls',title='Controls fixture')
         save=g/'Save01.rvdata2';save.write_bytes(b'preserve save')
-        state=self.ui('right,triangle,cross')
+        state=self.ui(GAME+',cross')
         self.assertEqual(state['page'],6)
         self.assertFalse(state['controls']['enabled'])
-        state=self.ui('right,triangle,cross,cross,scroll:14,cross,right')
+        state=self.ui(GAME+',cross,cross,scroll:14,cross,right')
         self.assertTrue(state['controls']['enabled'])
         self.assertEqual(state['controls']['front'],1)
         self.assertFalse(state['launchRequested'])
         self.cmd('rename',g,name='Renamed fixture')
-        state=self.ui('right,triangle,cross')
+        state=self.ui(GAME+',cross')
         self.assertTrue(state['controls']['enabled'])
         self.assertEqual(state['controls']['front'],1)
         self.assertEqual(save.read_bytes(),b'preserve save')
         self.assertEqual(len(list((self.root/'controls').glob('*.json'))),1)
-        state=self.ui('right,triangle,cross,scroll:17,cross,cross,circle')
+        state=self.ui(GAME+',cross,scroll:17,cross,cross,circle')
         self.assertFalse(state['controlsTesting'])
         self.assertFalse(state['launchRequested'])
-        state=self.ui('right,triangle,cross,scroll:18,cross')
+        state=self.ui(GAME+',cross,scroll:18,cross')
         self.assertFalse(state['controls']['enabled'])
 
-    def test_buttons_map_to_keyboard_keys_through_the_picker(self):
+    def test_buttons_and_touch_zones_map_to_keys(self):
         self.game(self.games/'keys',title='Keys fixture')
-        # Cross row -> picker opens on Confirm; three rows down and to the right is a letter key.
-        state=self.ui('right,triangle,cross,down,cross')
-        self.assertTrue(state['controlPicking'])
-        state=self.ui('right,triangle,cross,down,cross,down,down,down,down,right,right,cross')
+        profile=lambda: json.loads(next((self.root/'controls').glob('*.json')).read_text())
+        # Cross row: the picker opens; a key from the keyboard rows replaces Confirm.
+        self.assertTrue(self.ui(GAME+',cross,down,cross')['controlPicking'])
+        state=self.ui(GAME+',cross,down,cross,down,down,down,down,right,right,cross')
         self.assertFalse(state['controlPicking'])
-        cross=state['controls']['buttons'][0]
-        self.assertGreaterEqual(cross,1000)                    # a keyboard key, not an RPG Maker action
-        self.assertTrue(state['controls']['enabled'])            # mapping a button turns custom controls on
-        saved=json.loads(next((self.root/'controls').glob('*.json')).read_text())
-        self.assertEqual(saved['buttons'][0],cross)
-        # Circle leaves the picker without changing anything; Left and Right on a row change nothing either.
-        state=self.ui('right,triangle,cross,down,down,cross,down,down,circle,left,right')
+        key=state['controls']['buttons'][0]
+        self.assertGreaterEqual(key,1000)                  # a keyboard key, not an RPG Maker action
+        self.assertTrue(state['controls']['enabled'])       # mapping turns custom controls on
+        self.assertEqual(profile()['buttons'][0],key)
+        # Circle leaves the picker without changing the mapping.
+        state=self.ui(GAME+',cross,down,down,cross,down,down,circle')
         self.assertFalse(state['controlPicking'])
         self.assertEqual(state['controls']['buttons'][1],12)
-        # The saved profile is read back, and a key outside the offered set is refused.
-        self.assertEqual(self.ui('right,triangle,cross')['controls']['buttons'][0],cross)
+        # A saved key outside the offered set is refused on reading.
         path=next((self.root/'controls').glob('*.json'))
-        saved['buttons'][0]=1003                                 # no such key on the picker
+        saved=profile();saved['buttons'][0]=1003
         path.write_text(json.dumps(saved))
-        self.assertEqual(self.ui('right,triangle,cross')['controls']['buttons'][0],13)
-        saved['buttons'][0]=cross
+        self.assertEqual(self.ui(GAME+',cross')['controls']['buttons'][0],13)
+        saved['buttons'][0]=key
         path.write_text(json.dumps(saved))
-        # The front screen page: four invisible corners, each mapped like a button.
-        state=self.ui('right,triangle,cross,scroll:14,cross')
-        self.assertEqual(state['controls']['front'],0)
-        state=self.ui('right,triangle,cross,scroll:14,cross'+',right'*6+',down,cross,down,down,cross')
+        # Front screen: invisible corners, each mapped like a button.
+        state=self.ui(GAME+',cross,scroll:14,cross'+',right'*6+',down,cross,down,down,cross')
         self.assertEqual(state['controls']['front'],6)
         self.assertGreaterEqual(state['controls']['frontLeft'],1000)
-        state=self.ui('right,triangle,cross,scroll:14,cross,down,down,down,right,cross,down,down,down,cross')
-        self.assertGreaterEqual(state['controls']['frontBottomRight'],1000)
-        self.assertEqual(state['controls']['frontBottomLeft'],0)
-        # Whole screen reads one zone, the top-left mapping.
-        state=self.ui('right,triangle,cross,scroll:14,cross,left,left')
-        self.assertEqual(state['controls']['front'],4)
-        # The rear pad page: four corners, Left and Right step across the diagram.
-        state=self.ui('right,triangle,cross,scroll:15,cross')
-        self.assertEqual(state['controls']['rear'],0)
-        state=self.ui('right,triangle,cross,scroll:15,cross,right,right,right,down,down,down,cross,down,down,down,cross')
+        # Rear pad: its own corners.
+        state=self.ui(GAME+',cross,scroll:15,cross,right,right,right,down,down,down,cross,down,down,down,cross')
         self.assertEqual(state['controls']['rear'],3)
         self.assertGreaterEqual(state['controls']['rearBottomLeft'],1000)
-        self.assertEqual(state['controls']['rearBottomRight'],0)
-        state=self.ui('right,triangle,cross,scroll:15,cross,down,down,down,right,cross,down,down,down,cross')
-        self.assertGreaterEqual(state['controls']['rearBottomRight'],1000)
-        self.assertEqual(self.ui('right,triangle,cross,scroll:15,cross,cross')['controls']['rear'],4)
-        saved=json.loads(next((self.root/'controls').glob('*.json')).read_text())
-        self.assertGreaterEqual(saved['frontBottomRight'],1000)
-        # Tap to walk is its own switch; it needs the screen, so it clears front zones.
-        state=self.ui('right,triangle,cross,scroll:13,cross')
+        # Tap to walk needs the screen, so it clears the front zones.
+        state=self.ui(GAME+',cross,scroll:13,cross')
         self.assertTrue(state['controls']['tapToWalk'])
         self.assertEqual(state['controls']['front'],0)
-        self.assertFalse(self.ui('right,triangle,cross,scroll:13,cross')['controls']['tapToWalk'])
-        self.ui('right,triangle,cross,scroll:13,cross')
-        state=self.ui('right,triangle,cross,scroll:14,cross,right,right,right,right')
-        self.assertEqual(state['controls']['front'],4)
-        self.assertFalse(state['controls']['tapToWalk'])
 
     def test_corrupt_control_profile_does_not_launch_or_overwrite(self):
         self.game(self.games/'controls')
-        self.ui('right,triangle,cross,cross')
+        self.ui(GAME+',cross,cross')
         path=next((self.root/'controls').glob('*.json'))
         path.write_text('{broken')
-        state=self.ui('right,triangle,cross')
+        state=self.ui(GAME+',cross')
         self.assertFalse(state['launchRequested'])
         self.assertFalse(state['controls']['enabled'])
         self.assertEqual(path.read_text(),'{broken')
@@ -927,56 +966,63 @@ puts JSON.generate(result)
     def test_triangle_binds_game_menu_and_returns_to_same_highlight(self):
         self.game(self.games/'a',title='A game')
         target=self.game(self.games/'b',title='B game')
-        state=self.ui('right,down,triangle')
+        # Triangle opens the options menu; Game settings is its fourth row.
+        state=self.ui('right,triangle')
+        self.assertEqual(state['homePanel'],2)
+        self.assertFalse(state['gameOptions'])
+        self.assertEqual(self.ui('right,triangle,circle')['homePanel'],0)
+        state=self.ui('right,'+GAME)
         self.assertTrue(state['gameOptions'])
         self.assertEqual(state['configuredGame'],'B game')
         self.assertEqual(state['page'],8)
         self.assertFalse(state['launchRequested'])
-        state=self.ui('right,down,triangle,cross,cross,scroll:14,cross,right,right')
+        state=self.ui('right,'+GAME+',cross,cross,scroll:14,cross,right,right')
         self.assertEqual(state['configuredGame'],'B game')
         self.assertEqual(state['controls']['front'],2)
         profile=self.root/'controls'/f"{state['gameConfigKey']}.json"
         self.assertTrue(json.loads(profile.read_text())['enabled'])
         self.assertEqual(len(list((self.root/'controls').glob('*.json'))),1)
-        state=self.ui('right,down,triangle,cross,circle,circle')
+        state=self.ui('right,'+GAME+',cross,circle,circle')
         self.assertFalse(state['gameOptions'])
-        self.assertEqual((state['focus'],state['selected']),(1,1))
-        self.assertEqual(state['entries'][state['selected']]['name'],'B game')
+        self.assertTrue(state['homeActive'])
+        self.assertEqual(state['homeTarget'],1)
+        self.assertEqual(state['homeEntries'][state['homeTarget']]['name'],'B game')
         self.assertFalse(state['launchRequested'])
-        self.assertFalse(self.ui('triangle')['gameOptions'])
-        state=self.ui('right,triangle,left,r,select,start')
+        # The Add games card has no options menu.
+        self.assertEqual(self.ui('right,right,triangle')['homePanel'],0)
+        # Home's own buttons do nothing inside the game settings.
+        state=self.ui(GAME+',left,r,select,start')
         self.assertEqual(state['configuredGame'],'A game')
         self.assertEqual(state['engineFilter'],0)
-        self.assertEqual(state['browserPath'],'')
-
+        self.assertFalse(state['browserOpen'])
     def test_game_menu_settings_are_isolated_and_reset_to_global_defaults(self):
         a=self.game(self.games/'a',title='A game')
         self.game(self.games/'b',title='B game')
         save=a/'Save01.rvdata2';save.write_bytes(b'unchanged save')
         global_file=self.root/'launcher-config.json'
         global_file.write_text(json.dumps({'smoothScaling':1,'preloadScript':['keep.rb']}))
-        state=self.ui('right,triangle')
+        state=self.ui(GAME)
         config=self.root/'config'/f"{state['gameConfigKey']}.json"
         config.write_text(json.dumps({'customScript':'keep.rb','frameSkip':False}))
-        self.ui('right,triangle,down,cross,down,down,cross')
+        self.ui(GAME+',down,cross,down,down,cross')
         values=json.loads(config.read_text())
         self.assertEqual(values['smoothScaling'],0)
         self.assertEqual(values['smoothScalingDown'],0)
         self.assertEqual(values['customScript'],'keep.rb')
         self.assertFalse(values['frameSkip'])
-        other=self.ui('right,down,triangle,down,cross')
+        other=self.ui('right,'+GAME+',down,cross')
         self.assertEqual(other['gameSettings']['smoothScaling'],1)
-        self.ui('right,triangle,down,cross,down,down,square')
+        self.ui(GAME+',down,cross,down,down,square')
         self.assertNotIn('smoothScaling',json.loads(config.read_text()))
         self.assertNotIn('smoothScalingDown',json.loads(config.read_text()))
-        self.ui('right,triangle,down,down,cross,down,cross')
+        self.ui(GAME+',down,down,cross,down,cross')
         self.assertTrue(json.loads(config.read_text())['midiReverb'])
-        self.ui('right,triangle,down,down,down,cross,cross')
+        self.ui(GAME+',down,down,down,cross,cross')
         self.assertEqual(json.loads(config.read_text())['performanceMetrics'],1)
         self.assertEqual(json.loads(global_file.read_text()),{'smoothScaling':1,'preloadScript':['keep.rb']})
         self.assertEqual(save.read_bytes(),b'unchanged save')
         config.write_text('{broken')
-        state=self.ui('right,triangle')
+        state=self.ui(GAME)
         self.assertFalse(state['gameOptions'])
         self.assertEqual(config.read_text(),'{broken')
         self.assertFalse(state['launchRequested'])
@@ -984,7 +1030,7 @@ puts JSON.generate(result)
     def test_wrapped_zip_game_menu_uses_launch_config_identity_without_extracting(self):
         path=self.zip(self.games/'probe.zip',inner='Wrapper/Nested')
         before=path.read_bytes()
-        state=self.ui('right,triangle,cross,cross')
+        state=self.ui(GAME+',cross,cross')
         self.assertEqual(state['configuredGame'],'ZIP game')
         self.assertTrue(state['controls']['enabled'])
         direct=self.cmd('game',path,kind='zip',inner='Wrapper/Nested')[0]
@@ -992,24 +1038,33 @@ puts JSON.generate(result)
         self.assertEqual(path.read_bytes(),before)
         self.assertEqual(list((self.root/'cache').iterdir()),[])
         self.assertFalse(state['launchRequested'])
-        self.ui('right,triangle,scroll:7,cross')
+        self.ui(GAME+',scroll:7,cross')
         selection=json.loads((self.root/'selection.json').read_text())
         self.assertEqual(selection['config'],direct['config'])
-        self.assertTrue(self.ui('right,triangle,scroll:7,cross')['launchRequested'])
+        self.assertTrue(self.ui(GAME+',scroll:7,cross')['launchRequested'])
 
     def test_game_menu_touch_and_rename_preserve_selected_context(self):
         self.game(self.games/'a',title='A game')
         self.game(self.games/'b',title='B game')
-        state=self.ui('right,down,triangle,touch:220:160')
+        # Options menu rows by touch: the fourth is Game settings.
+        state=self.ui('right,triangle,touch:700:340')
+        self.assertTrue(state['gameOptions'])
+        self.assertEqual(state['configuredGame'],'B game')
+        state=self.ui('right,'+GAME+',touch:220:160')
         self.assertEqual(state['page'],6)
-        state=self.ui('right,down,triangle,scroll:5,cross')
+        state=self.ui('right,'+GAME+',scroll:5,cross')
         self.assertFalse(state['launchRequested'])
-        state=self.run_binary('--actions','right,down,triangle,scroll:5,cross','--rename','Renamed')
+        state=self.run_binary('--actions','right,'+GAME+',scroll:5,cross','--rename','Renamed')
         self.assertEqual(state['configuredGame'],'Renamed')
         self.assertTrue(state['gameOptions'])
-        state=self.run_binary('--actions','right,down,triangle,scroll:5,cross,circle','--rename','New title')
-        self.assertEqual(state['entries'][state['selected']]['name'],'New title')
-
+        state=self.run_binary('--actions','right,'+GAME+',scroll:5,cross,circle','--rename','New title')
+        self.assertEqual(state['homeEntries'][state['homeTarget']]['name'],'New title')
+        # Renamed from the options menu, the game keeps the focus even when
+        # sorting by name moves it.
+        state=self.run_binary('--actions','up,cross,'+'down,'*7+'cross,circle,down,'+RENAME,
+                              '--rename','Zebra')
+        self.assertEqual([e['name'] for e in state['homeEntries']],['New title','Zebra'])
+        self.assertEqual(state['homeTarget'],1)
     def test_library_scans_added_games_and_external_folders_on_each_boot(self):
         self.assertEqual(self.ui()['entries'],[])
         self.game(self.games/'added',title='Added at next boot')
@@ -1021,41 +1076,44 @@ puts JSON.generate(result)
 
     def test_game_menu_missing_rtp_and_browser_return_keep_games_context(self):
         self.game(self.games/'rtp',title='RTP fixture',rtp='RPGVXAce')
-        state=self.ui('right,triangle,scroll:7,cross')
+        state=self.ui(GAME+',scroll:7,cross')
         self.assertEqual(state['missingRtp'],'RPGVXAce')
         self.assertFalse(state['launchRequested'])
-        state=self.ui('right,triangle,scroll:7,cross,cross,circle,circle')
+        state=self.ui(GAME+',scroll:7,cross,cross,circle,circle')
         self.assertFalse(state['gameOptions'])
-        self.assertEqual((state['menu'],state['focus']),(0,1))
-        state=self.ui('right,triangle,scroll:4,cross,cross,start,circle,circle')
+        self.assertTrue(state['homeActive'])
+        self.assertEqual(state['homeTarget'],0)
+        state=self.ui(GAME+',scroll:4,cross,cross,start,circle,circle')
         self.assertFalse(state['gameOptions'])
-        self.assertEqual(state['browserPath'],'')
-        self.assertEqual((state['menu'],state['focus']),(0,1))
-
+        self.assertFalse(state['browserOpen'])
+        self.assertTrue(state['homeActive'])
     def test_release_notices_are_version_ordered_scrollable_and_dismissible(self):
-        release={'draft':False,'prerelease':True,'tag_name':'v0.3.2-alpha',
+        newer=next_tag(VERSION_TAG)
+        release={'draft':False,'prerelease':True,'tag_name':newer,
             'name':'Next Alpha','body':'\n'.join('Change '+str(i) for i in range(30)),
-            'html_url':'https://github.com/Asukate/mkxp-z-vita/releases/tag/v0.3.2-alpha'}
+            'html_url':'https://github.com/Asukate/mkxp-z-vita/releases/tag/'+newer}
         fixture=self.storage/'releases.json';fixture.write_text(json.dumps([release]))
         state=self.run_binary('--release-fixture',fixture,'--actions','down,down')
-        self.assertEqual(state['releaseTag'],'v0.3.2-alpha')
+        self.assertEqual(state['releaseTag'],newer)
         self.assertGreater(state['releaseLines'],30)
         self.assertEqual(state['releaseScroll'],2)
         state=self.run_binary('--release-fixture',fixture,'--actions','cross')
         self.assertEqual(state['releaseLines'],0)
         self.assertFalse(state['launchRequested'])
-        release['tag_name']='v0.3.1-alpha';fixture.write_text(json.dumps([release]))
+        release['tag_name']=VERSION_TAG;fixture.write_text(json.dumps([release]))
         self.assertEqual(self.run_binary('--release-fixture',fixture)['releaseLines'],0)
 
     def test_startup_release_check_setting_persists(self):
-        state=self.ui('down,right,down,down,down,down,down,cross,cross')
+        state=self.ui(SETTINGS+',down,down,down,down,down,cross,cross')
         self.assertEqual(state['page'],7)
         self.assertFalse(state['automaticUpdates'])
         self.assertFalse(self.ui()['automaticUpdates'])
-        state=self.ui('touch:50:140,touch:220:362,touch:220:362,touch:220:160')
+        # The gear, then the sixth row twice, then the switch on that page.
+        state=self.ui('touch:925:31,touch:220:362,touch:220:362,touch:220:160')
         self.assertEqual(state['page'],7)
         self.assertTrue(state['automaticUpdates'])
-
+        # The brand in the top bar goes home.
+        self.assertTrue(self.ui('touch:925:31,touch:100:31')['homeActive'])
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

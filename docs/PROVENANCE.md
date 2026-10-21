@@ -5,7 +5,7 @@ mkxp. Original copyright headers and component licenses are retained.
 The public repository starts with one source snapshot; this does not change
 the authorship or licensing of its upstream code.
 
-The native launcher and alternative RGSS picker use the same game runtime.
+The C++ launcher hands every game to the same RGSS (or EasyRPG) runtime.
 [VALIDATION.md](VALIDATION.md) describes build and hardware checks, while
 [COMPATIBILITY.md](COMPATIBILITY.md) lists observed game routes.
 

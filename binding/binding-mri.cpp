@@ -81,9 +81,6 @@ extern const char module_rpg1[];
 extern const char module_rpg2[];
 extern const char module_rpg3[];
 
-#ifdef MKXPZ_PROTO_LAUNCHER
-void launcherFilesystemBindingInit();
-#endif
 
 static VALUE topSelf;
 
@@ -366,9 +363,6 @@ static void mriBindingInit() {
 #endif
     
     VALUE mod = rb_define_module("System");
-#ifdef MKXPZ_PROTO_LAUNCHER
-    launcherFilesystemBindingInit();
-#endif
     _rb_define_module_function(mod, "delta", mkxpDelta);
     _rb_define_module_function(mod, "uptime", mkxpDelta);
     _rb_define_module_function(mod, "data_directory", mkxpDataDirectory);

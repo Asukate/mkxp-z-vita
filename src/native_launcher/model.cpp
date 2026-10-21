@@ -1,6 +1,7 @@
 #include "model.h"
 #include "release.h"
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -13,6 +14,7 @@
 #include <memory>
 #include <atomic>
 #ifdef __vita__
+#include <psp2/appmgr.h>
 #include <psp2/kernel/threadmgr.h>
 #else
 #include <thread>
@@ -1757,10 +1759,32 @@ std::vector<std::string> Model::readError(const std::string &path) const {
     return {};
   }
 }
+// This app's title ID ("HARDRPG01", or a test build's); empty off the Vita.
+static std::string ownTitle() {
+#ifdef __vita__
+  char title[16] = {};
+  if (sceAppMgrAppParamGetString(0, 12, title, sizeof(title)) >= 0)
+    return title;
+#endif
+  return "";
+}
 std::vector<std::string> Model::takeError(bool retained) {
   auto path = paths.at(retained ? "last-error.txt.prev" : "last-error.txt");
   if (!regular(path))
     return {};
+  // Which app's game failed (see vitaErrorReportSave). A report from another
+  // HardRPG app, or one too old to say, goes to the history without being
+  // shown: it is not about anything played here.
+  std::string owner;
+  if (!retained) {
+    try {
+      owner = readFile(path + ".owner", 64);
+    } catch (const std::exception &) {
+    }
+    while (!owner.empty() && std::isspace(static_cast<unsigned char>(owner.back())))
+      owner.pop_back();
+  }
+  bool foreign = !retained && owner != ownTitle();
   activeErrorPath = path;
   auto lines = readError(path);
   if (lines.empty())
@@ -1813,6 +1837,8 @@ std::vector<std::string> Model::takeError(bool retained) {
         v.as_object()["game"] = title;
         v.as_object()["timestamp"] = std::string(stamp);
         v.as_object()["summary"] = lines.front();
+        if (!owner.empty())
+          v.as_object()["app"] = owner;
         v.as_object()["release"] =
             retained ? "Unknown (older report)" : HARDRPG_VERSION;
 #ifdef MKXPZ_GIT_HASH
@@ -1832,13 +1858,14 @@ std::vector<std::string> Model::takeError(bool retained) {
     error = std::string("Error history could not be saved: ") + e.what();
   }
   if (!retained) {
+    unlink((path + ".owner").c_str());
     auto previous = path + ".prev";
     if (regular(previous) && unlink(previous.c_str()))
-      return lines;
+      return foreign ? std::vector<std::string>{} : lines;
     if (rename(path.c_str(), previous.c_str()))
-      return lines;
+      return foreign ? std::vector<std::string>{} : lines;
   }
-  return lines;
+  return foreign ? std::vector<std::string>{} : lines;
 }
 std::vector<ErrorRecord> Model::errorHistory() const {
   std::vector<ErrorRecord> out;
@@ -2007,5 +2034,89 @@ bool Browser::back() {
   }
   refresh();
   return true;
+}
+// activity.txt: one "key last seconds" line per game, plus "running key start"
+// while a game is out. Times are Unix seconds.
+namespace {
+struct ActivityFile {
+  std::map<std::string, Activity> games;
+  std::string running;
+  int64_t started = 0;
+};
+ActivityFile readActivity(const Paths &paths) {
+  ActivityFile out;
+  auto file = paths.at("activity.txt");
+  if (!regular(file))
+    return out;
+  std::istringstream s(readFile(file, 524288));
+  std::string line;
+  for (size_t count = 0; count < 8192 && std::getline(s, line); ++count) {
+    std::istringstream row(line);
+    std::string first, second;
+    long long a = 0, b = 0;
+    if (!(row >> first))
+      continue;
+    if (first == "running") {
+      if (row >> second >> a) {
+        out.running = second;
+        out.started = a;
+      }
+    } else if (row >> a >> b)
+      out.games[first] = {a, std::max(0LL, b)};
+  }
+  return out;
+}
+void writeActivity(const Paths &paths, const ActivityFile &a) {
+  std::string text;
+  for (auto &g : a.games)
+    text += g.first + " " + std::to_string(g.second.last) + " " + std::to_string(g.second.seconds) + "\n";
+  if (!a.running.empty())
+    text += "running " + a.running + " " + std::to_string(a.started) + "\n";
+  atomicWrite(paths.at("activity.txt"), text);
+}
+} // namespace
+std::map<std::string, Activity> Model::activity() const { return readActivity(paths).games; }
+void Model::recordLaunch(const std::string &id) {
+  auto a = readActivity(paths);
+  int64_t now = std::time(nullptr);
+  a.games[id].last = now;
+  a.running = id;
+  a.started = now;
+  writeActivity(paths, a);
+}
+void Model::settleActivity(bool returning) {
+  auto a = readActivity(paths);
+  if (a.running.empty())
+    return;
+  // Returning from a game counts the session. A fresh boot means the game
+  // was closed from the home screen, so its length is unknown and dropped.
+  int64_t now = std::time(nullptr), spent = now - a.started;
+  if (returning && spent > 0 && spent < 24 * 3600)
+    a.games[a.running].seconds += spent;
+  a.running.clear();
+  writeActivity(paths, a);
+}
+std::set<std::string> Model::favourites() const {
+  std::set<std::string> out;
+  auto file = paths.at("favourite-games.txt");
+  if (!regular(file))
+    return out;
+  std::istringstream s(readFile(file, 262144));
+  std::string line;
+  for (size_t count = 0; count < 4096 && std::getline(s, line); ++count)
+    if (!line.empty())
+      out.insert(line);
+  return out;
+}
+void Model::setFavourite(const std::string &id, bool on) {
+  auto keys = favourites();
+  if (on)
+    keys.insert(id);
+  else
+    keys.erase(id);
+  std::string text;
+  for (auto &k : keys)
+    text += k + "\n";
+  atomicWrite(paths.at("favourite-games.txt"), text);
 }
 } // namespace hardrpg

@@ -21,9 +21,8 @@ int main(int argc, char **argv) {
                     hardrpg::Kind::Game,
                     {},
                     2}};
-  ui.focus = hardrpg::Focus::Games;
   for (int frame = 0; frame < 20; ++frame) {
-    ui.selected = frame % 2;
+    ui.home.target = frame % 2;
     actual.draw(ui);
     reference.draw(ui);
     assert(actual.pixels == reference.pixels);

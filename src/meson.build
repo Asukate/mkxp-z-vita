@@ -75,9 +75,9 @@ if host_system == 'vita'
     vita_threadmgr = compilers['cpp'].find_library('SceKernelThreadMgr_stub', dirs: vita_libdir, static: true, required: true)
     global_dependencies += [vita_gl, vita_mathneon, vita_appmgr, vita_apputil, vita_ctrl, vita_common_dialog, vita_dmac, vita_modulemgr, vita_shacc, vita_shark, vita_threadmgr]
     global_dependencies += compilers['cpp'].find_library('SceTouch_stub', dirs: vita_libdir, static: true, required: true)
-    if get_option('native_launcher')
+    if get_option('proto_launcher')
         global_dependencies += compilers['cpp'].find_library('curl', dirs: get_option('vita_network_libdir'), static: true, required: true)
-        foreach lib : ['mbedtls', 'mbedx509', 'mbedcrypto', 'SceNet_stub', 'SceNetCtl_stub', 'SceRtc_stub']
+        foreach lib : ['turbojpeg', 'webp', 'sharpyuv', 'mbedtls', 'mbedx509', 'mbedcrypto', 'SceNet_stub', 'SceNetCtl_stub', 'SceRtc_stub', 'ScePower_stub']
             global_dependencies += compilers['cpp'].find_library(lib, dirs: vita_libdir, static: true, required: true)
         endforeach
         global_link_args += '-Wl,--wrap=sceCommonDialogUpdate'
@@ -171,16 +171,11 @@ main_source = files(
 if host_system == 'vita'
     main_source += files('vita_stubs.cpp', 'vita_posix_compat.c', 'vita_pthread_once.c', 'vita_livearea.cpp', 'input/vita_input.cpp', 'vita_error_report.cpp', 'vita_resume.cpp', 'vita_runtime_log.c')
     global_link_args += '-Wl,--wrap=_write_r'
-    if get_option('native_launcher') and not get_option('proto_launcher')
-        error('native_launcher requires proto_launcher')
-    endif
     if get_option('proto_launcher')
         main_source += files('vita_proto_launcher.cpp')
         global_args += '-DMKXPZ_PROTO_LAUNCHER'
-        if get_option('native_launcher')
-            main_source += files('native_launcher/model.cpp', 'native_launcher/ui.cpp', 'native_launcher/view.cpp', 'native_launcher/runtime.cpp', 'native_launcher/text_input.cpp', 'native_launcher/update_check.cpp')
-            global_args += '-DMKXPZ_NATIVE_LAUNCHER'
-        endif
+        main_source += files('native_launcher/model.cpp', 'native_launcher/ui.cpp', 'native_launcher/view.cpp', 'native_launcher/home.cpp', 'native_launcher/home_view.cpp', 'native_launcher/image.cpp', 'native_launcher/art_loader.cpp', 'native_launcher/art_fetch.cpp', 'native_launcher/sheet_view.cpp', 'native_launcher/runtime.cpp', 'native_launcher/text_input.cpp', 'native_launcher/update_check.cpp')
+        global_args += '-DMKXPZ_NATIVE_LAUNCHER'
     endif
     if get_option('vita_diagnostics')
         main_source += files('vita_diagnostic.cpp', 'vita_uid_auditor_bridge.c')

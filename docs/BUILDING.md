@@ -62,10 +62,8 @@ The default workspace is `build/<profile>/`. Pass the same absolute `--ws DIR`
 to all three scripts to build elsewhere; packaging also accepts `--out DIR`
 and `--title-id ID`. The default Title ID is `HARDRPG01`.
 
-The native launcher is the default for local and CI builds. For the alternative
-Ruby/RGSS picker, pass `--rgss-launcher` to `build-vita.sh`; packaging selects
-the backend recorded in the engine receipt. Games use the same RGSS runtime
-with either launcher. See [native launcher details](NATIVE-LAUNCHER.md).
+Every build includes the C++ HardRPG launcher; packaging refuses an engine
+built without it. See [native launcher details](NATIVE-LAUNCHER.md).
 
 A workspace records its dependency recipes and SDK. If those change or a
 profile differs, choose a new workspace rather than reusing old archives.
@@ -84,8 +82,7 @@ with read-only repository permissions and seven-day artifact retention.
 It does not publish a release or install anything on a device.
 
 Packaging verifies the static payload SHA-256 manifest, launcher backend,
-the HardRPG SFO title, app version and requested Title ID. Alternative RGSS
-packages also verify the picker source round-trip through Ruby Marshal/zlib.
+the HardRPG SFO title, app version and requested Title ID.
 The VPK contains the engine, launcher backend, Ruby preloads (listed in
 launcher/mkxp.json), font,
 LiveArea assets, and license notices. Games, RTP, saves,

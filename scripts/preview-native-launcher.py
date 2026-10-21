@@ -18,7 +18,7 @@ work = args.work.resolve()
 work.mkdir(parents=True, exist_ok=True)
 binary = work / 'hardrpg-native'
 sources = [*ROOT.glob('src/native_launcher/*'), ROOT/'src/vita_proto_launcher.cpp',
-           ROOT/'src/vita_proto_launcher.h', ROOT/'src/util/json5pp.hpp', ROOT/'scripts/build-native-launcher.sh']
+           ROOT/'src/vita_proto_launcher.h', ROOT/'src/util/json5pp.hpp', ROOT/'scripts/build-native-launcher.sh', *ROOT.glob('launcher/ui/*')]
 if not binary.exists() or any(p.stat().st_mtime > binary.stat().st_mtime for p in sources if p.is_file()):
     subprocess.run([str(ROOT/'scripts/build-native-launcher.sh'), str(binary)], check=True)
 data = args.data_root.resolve() if args.data_root else work/'hardrpg'

@@ -72,6 +72,10 @@ std::vector<Entry> entries(const Node &);
 struct ErrorRecord {
   std::string path, game, timestamp, summary;
 };
+// When a game was last started and how long it has been played, in seconds.
+struct Activity {
+  int64_t last = 0, seconds = 0;
+};
 struct Mount {
   std::string path, root;
 };
@@ -129,6 +133,14 @@ public:
   std::vector<std::string> libraryRoots() const;
   std::string activeErrorPath;
   std::string exportError() const;
+  // Play history and favourites, keyed by key(node.identity(paths)).
+  std::map<std::string, Activity> activity() const;
+  // Marks a game as started now; the time counts once the launcher returns.
+  void recordLaunch(const std::string &id);
+  // On a launcher boot after a game, adds the elapsed time to that game.
+  void settleActivity(bool returning);
+  std::set<std::string> favourites() const;
+  void setFavourite(const std::string &id, bool on);
 
 private:
   struct CachedRtp {

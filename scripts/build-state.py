@@ -42,7 +42,8 @@ def state(kind, ws, profile):
     else:
         options = json.loads((ws / f'build/mkxp-z-parity-{profile}/meson-info/intro-buildoptions.json').read_text())
         result['midi_synth_sha256'] = hashlib.sha256((sdk / 'arm-vita-eabi/lib/libfluidlite.a').read_bytes()).hexdigest()
-        result['native_launcher'] = next(o['value'] for o in options if o['name'] == 'native_launcher')
+        # The HardRPG launcher is built whenever the game handoff is.
+        result['native_launcher'] = next(o['value'] for o in options if o['name'] == 'proto_launcher')
         result['vita_diagnostics'] = next(o['value'] for o in options if o['name'] == 'vita_diagnostics')
         if result['native_launcher']:
             network = ws / 'release-network/prefix/lib/libcurl.a'
