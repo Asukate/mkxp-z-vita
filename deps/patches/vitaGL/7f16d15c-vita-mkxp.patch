@@ -75,7 +75,7 @@ diff -ruN --no-dereference a/source/buffers.c b/source/buffers.c
  	if (n < 0) {
 diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
 --- a/source/custom_shaders.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/custom_shaders.c	2026-10-20 14:25:08.731203784 -0300
++++ b/source/custom_shaders.c	2026-10-20 17:25:37.986723079 -0300
 @@ -616,7 +616,11 @@
  #define vgl_compile_shader(shd, sv) compile_shader(shd, sv)
  static inline __attribute__((always_inline)) void compile_shader(shader *s, GLboolean save_bindings) {
@@ -333,7 +333,7 @@ diff -ruN --no-dereference a/source/framebuffers.c b/source/framebuffers.c
  			fb->is_depth_hidden = GL_FALSE;
 diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
 --- a/source/gxm.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/gxm.c	2026-10-20 14:25:08.716911304 -0300
++++ b/source/gxm.c	2026-10-20 17:25:37.971948561 -0300
 @@ -23,6 +23,20 @@
  
  #include "shared.h"
@@ -1186,8 +1186,203 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.h b/source/utils/gpu_utils.h
  	return gpu_alloc_mapped_aligned(MEM_ALIGNMENT, size, type);
 diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
 --- a/source/utils/mem_utils.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/utils/mem_utils.c	2026-10-20 14:24:59.157941738 -0300
-@@ -496,6 +496,8 @@
++++ b/source/utils/mem_utils.c	2026-10-20 17:25:38.015347860 -0300
+@@ -24,7 +24,6 @@
+ #include "../shared.h"
+ 
+ #define HEAP_COOKIE 0x13371337
+-
+ GLboolean has_cached_mem = GL_FALSE; // Flag for whether to use cached memory for mempools or not
+ 
+ #ifndef HAVE_CUSTOM_HEAP
+@@ -36,6 +35,82 @@
+ 
+ static int mempool_initialized = GL_FALSE;
+ 
++#ifndef HAVE_CUSTOM_HEAP
++/* Deferred tail of the main-memory pool (vglSetRamPoolDeferral). Allocating
++ * uncached main memory costs about 13 ms per MiB in the kernel, so a large
++ * pool made vglInit take over a second and a half. Only the first part is
++ * allocated in vglInit; a background thread allocates the rest, and the GL
++ * thread adopts it as a second region of VGL_MEM_RAM: on the first allocation
++ * after it is ready, or, when the first part is full, by waiting for it. */
++static size_t ram_eager_size = 0; // 0: the whole pool in vglInit
++static SceUID ram_ext_thread = -1;
++static SceUID ram_ext_block = -1;
++static SceKernelMemBlockType ram_ext_type;
++static size_t ram_ext_size = 0;
++static void *ram_ext_addr = NULL;
++static void *ram_ext_mspace = NULL;
++enum { RAM_EXT_NONE, RAM_EXT_PENDING, RAM_EXT_READY, RAM_EXT_ADOPTED, RAM_EXT_FAILED };
++static volatile int ram_ext_state = RAM_EXT_NONE;
++
++static int ram_ext_alloc_thread(SceSize args, void *argp) {
++	SceUID block = sceKernelAllocMemBlock("ram_mempool_ext", ram_ext_type, ram_ext_size, NULL);
++	ram_ext_block = block;
++	__sync_synchronize();
++	ram_ext_state = block >= 0 ? RAM_EXT_READY : RAM_EXT_FAILED;
++	return sceKernelExitThread(0);
++}
++
++// GL thread only. With wait, blocks until the background allocation is done.
++static GLboolean ram_ext_adopt(GLboolean wait) {
++	int state = ram_ext_state;
++	if (state == RAM_EXT_ADOPTED)
++		return GL_TRUE;
++	if (state == RAM_EXT_NONE || (state == RAM_EXT_PENDING && !wait))
++		return GL_FALSE;
++	if (ram_ext_thread >= 0) {
++		sceKernelWaitThreadEnd(ram_ext_thread, NULL, NULL);
++		sceKernelDeleteThread(ram_ext_thread);
++		ram_ext_thread = -1;
++	}
++	if (ram_ext_state != RAM_EXT_READY) {
++		ram_ext_state = RAM_EXT_FAILED;
++		return GL_FALSE;
++	}
++	void *addr = NULL;
++	sceKernelGetMemBlockBase(ram_ext_block, &addr);
++	sceGxmMapMemory(addr, ram_ext_size, SCE_GXM_MEMORY_ATTRIB_RW);
++	ram_ext_mspace = sceClibMspaceCreate(addr, ram_ext_size);
++	ram_ext_addr = addr;
++	__sync_synchronize();
++	ram_ext_state = RAM_EXT_ADOPTED;
++	return GL_TRUE;
++}
++
++static inline __attribute__((always_inline)) GLboolean ram_ext_contains(void *addr) {
++	return ram_ext_state == RAM_EXT_ADOPTED && addr >= ram_ext_addr && addr < (void *)((uint8_t *)ram_ext_addr + ram_ext_size);
++}
++
++// VGL_MEM_RAM allocation: the eager region first, then the deferred tail.
++static void *ram_alloc(size_t alignment, size_t size, GLboolean zero) {
++	if (ram_ext_state == RAM_EXT_READY)
++		ram_ext_adopt(GL_FALSE);
++	void *res = NULL;
++	if (mempool_mspace[VGL_MEM_RAM])
++		res = alignment ? sceClibMspaceMemalign(mempool_mspace[VGL_MEM_RAM], alignment, size) :
++			zero ? sceClibMspaceCalloc(mempool_mspace[VGL_MEM_RAM], 1, size) : sceClibMspaceMalloc(mempool_mspace[VGL_MEM_RAM], size);
++	if (!res && ram_ext_state != RAM_EXT_NONE && ram_ext_adopt(GL_TRUE))
++		res = alignment ? sceClibMspaceMemalign(ram_ext_mspace, alignment, size) :
++			zero ? sceClibMspaceCalloc(ram_ext_mspace, 1, size) : sceClibMspaceMalloc(ram_ext_mspace, size);
++	return res;
++}
++#endif
++
++void vglSetRamPoolDeferral(uint32_t eager_size) {
++#ifndef HAVE_CUSTOM_HEAP
++	ram_eager_size = VGL_ALIGN(eager_size, 1024 * 1024);
++#endif
++}
++
+ #ifdef HAVE_WRAPPED_ALLOCATORS
+ void *__real_calloc(uint32_t nmember, uint32_t size);
+ void __real_free(void *addr);
+@@ -304,6 +379,20 @@
+ 	heap_destroy();
+ #endif
+ 
++#ifndef HAVE_CUSTOM_HEAP
++	if (ram_ext_state != RAM_EXT_NONE) {
++		ram_ext_adopt(GL_TRUE);
++		if (ram_ext_state == RAM_EXT_ADOPTED) {
++			sceClibMspaceDestroy(ram_ext_mspace);
++			sceGxmUnmapMemory(ram_ext_addr);
++			sceKernelFreeMemBlock(ram_ext_block);
++		}
++		ram_ext_mspace = ram_ext_addr = NULL;
++		ram_ext_block = -1;
++		ram_ext_size = 0;
++		ram_ext_state = RAM_EXT_NONE;
++	}
++#endif
+ 	for (int i = 0; i < VGL_MEM_EXTERNAL; i++) {
+ #ifndef HAVE_CUSTOM_HEAP
+ 		sceClibMspaceDestroy(mempool_mspace[i]);
+@@ -333,6 +422,14 @@
+ 	mempool_size[VGL_MEM_SLOW] = VGL_ALIGN(size_phycont, 1024 * 1024);
+ #endif
+ 	mempool_size[VGL_MEM_BUDGET] = VGL_ALIGN(size_cdlg, 4 * 1024);
++#ifndef HAVE_CUSTOM_HEAP
++	if (ram_eager_size && mempool_size[VGL_MEM_RAM] >= ram_eager_size + 1024 * 1024) {
++		ram_ext_size = mempool_size[VGL_MEM_RAM] - ram_eager_size;
++		mempool_size[VGL_MEM_RAM] = ram_eager_size;
++		ram_ext_type = has_cached_mem ? SCE_KERNEL_MEMBLOCK_TYPE_USER_RW : SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE;
++		ram_ext_state = RAM_EXT_PENDING;
++	}
++#endif
+ 
+ #ifdef HAVE_CUSTOM_HEAP
+ 	// Initialize heap
+@@ -401,6 +498,22 @@
+ 	mempool_size[VGL_MEM_EXTERNAL] = info.mappedSize;
+ 	mempool_addr[VGL_MEM_EXTERNAL] = info.mappedBase;
+ 
++#ifndef HAVE_CUSTOM_HEAP
++	// The deferred tail starts after the pools above: the kernel serializes
++	// allocations, so starting earlier only slows the eager part down.
++	if (ram_ext_state == RAM_EXT_PENDING) {
++		ram_ext_thread = sceKernelCreateThread("vgl_ram_pool", ram_ext_alloc_thread, 0x10000100, 0x4000, 0, 0, NULL);
++		if (ram_ext_thread < 0 || sceKernelStartThread(ram_ext_thread, 0, NULL) < 0) {
++			// No thread: allocate the tail now, as without deferral.
++			if (ram_ext_thread >= 0)
++				sceKernelDeleteThread(ram_ext_thread);
++			ram_ext_thread = -1;
++			ram_ext_block = sceKernelAllocMemBlock("ram_mempool_ext", ram_ext_type, ram_ext_size, NULL);
++			ram_ext_state = ram_ext_block >= 0 ? RAM_EXT_READY : RAM_EXT_FAILED;
++		}
++	}
++#endif
++
+ 	mempool_initialized = 1;
+ }
+ 
+@@ -414,6 +527,10 @@
+ 		return VGL_MEM_VRAM;
+ 	else if (addr >= mempool_addr[VGL_MEM_RAM] && (addr < (void *)((uint8_t *)mempool_addr[VGL_MEM_RAM] + mempool_size[VGL_MEM_RAM])))
+ 		return VGL_MEM_RAM;
++#ifndef HAVE_CUSTOM_HEAP
++	else if (ram_ext_contains(addr))
++		return VGL_MEM_RAM;
++#endif
+ #ifndef PHYCONT_ON_DEMAND
+ 	else if (addr >= mempool_addr[VGL_MEM_SLOW] && (addr < (void *)((uint8_t *)mempool_addr[VGL_MEM_SLOW] + mempool_size[VGL_MEM_SLOW])))
+ 		return VGL_MEM_SLOW;
+@@ -461,7 +578,17 @@
+ 	} else if (mempool_size[type]) {
+ 		SceClibMspaceStats stats;
+ 		sceClibMspaceMallocStats(mempool_mspace[type], &stats);
+-		return stats.capacity - stats.current_in_use;
++		size_t res = stats.capacity - stats.current_in_use;
++		if (type == VGL_MEM_RAM) {
++			// A pending deferred tail counts as free: allocations wait for it.
++			int state = ram_ext_state;
++			if (state == RAM_EXT_ADOPTED) {
++				sceClibMspaceMallocStats(ram_ext_mspace, &stats);
++				res += stats.capacity - stats.current_in_use;
++			} else if (state == RAM_EXT_PENDING || state == RAM_EXT_READY)
++				res += ram_ext_size;
++		}
++		return res;
+ 	} else
+ 		return 0;
+ #endif
+@@ -474,9 +601,12 @@
+ 			size += vgl_mem_get_total_space(i);
+ 		}
+ 		return size;
+-	} else {
+-		return mempool_size[type];
+ 	}
++#ifndef HAVE_CUSTOM_HEAP
++	if (type == VGL_MEM_RAM && ram_ext_state != RAM_EXT_NONE && ram_ext_state != RAM_EXT_FAILED)
++		return mempool_size[type] + ram_ext_size;
++#endif
++	return mempool_size[type];
+ }
+ 
+ size_t vgl_malloc_usable_size(void *ptr) {
+@@ -496,6 +626,8 @@
  }
  
  void vgl_free(void *ptr) {
@@ -1196,7 +1391,34 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  	vglMemType type = vgl_mem_get_type_by_addr(ptr);
  	if (type == VGL_MEM_EXTERNAL)
  #ifdef HAVE_WRAPPED_ALLOCATORS
-@@ -575,8 +577,17 @@
+@@ -513,6 +645,8 @@
+ 	else
+ 		heap_blk_free(ptr);
+ #else
++	else if (type == VGL_MEM_RAM && ram_ext_contains(ptr))
++		sceClibMspaceFree(ram_ext_mspace, ptr);
+ 	else if (mempool_mspace[type])
+ 		sceClibMspaceFree(mempool_mspace[type], ptr);
+ #endif
+@@ -533,6 +667,8 @@
+ 	else if (size <= tm_free[type])
+ 		return heap_alloc(type, size, MEM_ALIGNMENT);
+ #else
++	else if (type == VGL_MEM_RAM)
++		return ram_alloc(0, size, GL_FALSE);
+ 	else if (mempool_mspace[type])
+ 		return sceClibMspaceMalloc(mempool_mspace[type], size);
+ #endif
+@@ -554,6 +690,8 @@
+ 	else if (num * size <= tm_free[type])
+ 		return heap_alloc(type, num * size, MEM_ALIGNMENT);
+ #else
++	else if (type == VGL_MEM_RAM)
++		return ram_alloc(0, num * size, GL_TRUE);
+ 	else if (mempool_mspace[type])
+ 		return sceClibMspaceCalloc(mempool_mspace[type], num, size);
+ #endif
+@@ -575,8 +713,19 @@
  	else if (size <= tm_free[type])
  		return heap_alloc(type, size, alignment);
  #else
@@ -1211,14 +1433,25 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
 +		size_t phys_size = size;
 +		if (type == VGL_MEM_VRAM && phys_size < 32)
 +			phys_size = 32;
++		if (type == VGL_MEM_RAM)
++			return ram_alloc(alignment, phys_size, GL_FALSE);
 +		return sceClibMspaceMemalign(mempool_mspace[type], alignment, phys_size);
 +	}
  #endif
  	return NULL;
  }
+@@ -603,6 +752,8 @@
+ 	}
+ #endif
+ #ifndef HAVE_CUSTOM_HEAP
++	else if (type == VGL_MEM_RAM && ram_ext_contains(ptr))
++		return sceClibMspaceRealloc(ram_ext_mspace, ptr, size);
+ 	else if (mempool_mspace[type])
+ 		return sceClibMspaceRealloc(mempool_mspace[type], ptr, size);
+ #endif
 diff -ruN --no-dereference a/source/vitaGL.h b/source/vitaGL.h
 --- a/source/vitaGL.h	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/vitaGL.h	2026-10-20 14:24:59.158011298 -0300
++++ b/source/vitaGL.h	2026-10-20 17:25:38.029698186 -0300
 @@ -1078,6 +1078,22 @@
  // Get the internal texture data pointer of a GL texture.
  void *vglGetTexDataPointer(GLenum target);
@@ -1241,4 +1474,14 @@ diff -ruN --no-dereference a/source/vitaGL.h b/source/vitaGL.h
 +
  // Simple vitaGL init function. Legacy pool size is the amount of memory to reserve to handle immediate mode usage.
  GLboolean vglInit(int legacy_pool_size);
+ 
+@@ -1123,6 +1139,9 @@
+ // Change the total memory to use for internal circular pools to use in vitaGL. Disabled with NO_CIRCULAR_POOL. Default value: 32 * 1024 * 1024.
+ void vglSetCircularPoolSize(uint32_t size);
+ 
++// Allocate only eager_size bytes of the main-memory (VGL_MEM_RAM) pool in vglInit and the rest on a background thread. Default: 0 (the whole pool in vglInit).
++void vglSetRamPoolDeferral(uint32_t eager_size);
++
+ // Sets the number of buffers to use for the display swapchain. Default value: 3.
+ void vglSetDisplayBufferCount(int count);
  

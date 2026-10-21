@@ -67,6 +67,7 @@
 #ifdef __vita__
 extern "C" void glFinish(void);
 extern "C" void vglSetVertexAttribPoolSize(uint32_t main_size, uint32_t aux_size);
+extern "C" void vglSetRamPoolDeferral(uint32_t eager_size);
 extern "C" int vglInitWithCustomThreshold(int pool_size, int width, int height,
                                           int ram_threshold,
                                           int cdram_threshold,
@@ -794,6 +795,11 @@ static SDL_GLContext initGL(SDL_Window *win, Config &conf,
      * covers the 16 four-float defaults vitaGL writes when it creates one.
      * The default object keeps its 256 KiB. */
     vglSetVertexAttribPoolSize(256 * 1024, 1024);
+    /* Allocating the uncached main-memory pool costs about 13 ms per MiB
+     * (1.6 s for this pool). vglInit takes what its circular and uniform
+     * pools need at once and a background thread allocates the rest, which
+     * joins the same pool; an allocation that needs it before then waits. */
+    vglSetRamPoolDeferral(40 * 1024 * 1024);
     vglInitWithCustomThreshold(0, 960, 544,
                                76 * 1024 * 1024, 0, 25 * 1024 * 1024,
                                0x8C6000, 0);
