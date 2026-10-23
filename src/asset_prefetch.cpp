@@ -29,8 +29,11 @@ namespace {
 constexpr size_t imageBudget = 24u << 20, soundBudget = 16u << 20;
 // Decoded copies of expensive images the game already loaded: games (and
 // their cache scripts) often dispose an image and load it again later.
+// RPG Maker VX Ace's own Window_Base#draw_face disposes the face sheet after
+// every draw, so status windows decode faces (about 20 ms each on the Vita)
+// on every redraw; those must be kept too.
 constexpr size_t keepBudget = 24u << 20;
-constexpr double keepMs = 40.0;
+constexpr double keepMs = 8.0;
 constexpr size_t historyMax = 400;
 
 struct Entry {
