@@ -3,15 +3,19 @@
 #define HARDRPG_VERSION "0.4.0 Alpha"
 #define HARDRPG_VERSION_TAG "v0.4.0-alpha"
 #define HARDRPG_APP_VER "00.40"
-#define HARDRPG_RELEASE_UTC "2026-10-20"
+#define HARDRPG_RELEASE_UTC "2026-10-23"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
     "0.4.0 Alpha - " HARDRPG_RELEASE_UTC,
-    "- New home screen: covers, artwork, search and filters",
-    "- Faster app start and game launch",
-    "- Games start faster after their first boot",
+    "- New library: covers, details, screenshots, search",
+    "- Game info downloaded automatically",
+    "- Each game's title music in the library",
+    "- In-game menu: hold L+R+Start",
     "- Fast forward with L+R",
+    "- Full CPU and GPU speed without a plugin",
+    "- Faster app start and game launch",
     "- Faster character sprites in games with default scripts",
+    "- Espa\xc3\xb1ol and Portugu\xc3\xaas (Brasil)",
     "- Quitting a 2000/2003 game returns to the library",
     "",
     "0.3.1 Alpha - 2026-10-19",

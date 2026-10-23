@@ -1,17 +1,18 @@
 # HardRPG launcher
 
-The red Games/Settings/About/Exit menu fills 960×544. **HardRPG 0.3.1 Alpha**
-uses a C++ launcher (`src/native_launcher/`); games run in the RGSS engine.
-Selecting a game restarts the engine into its folder.
-About displays the version, author, repository and dated one-line release notes.
+The home screen is a carousel of the library's games. **HardRPG 0.4.0 Alpha**
+uses a C++ launcher (`src/native_launcher/`); XP, VX and VX Ace games run in
+the RGSS engine and 2000/2003 games in EasyRPG. Starting a game restarts the
+engine into its folder. About (the i icon) shows the version, author,
+repository and dated one-line release notes; the gear opens Settings.
 
 ## Library
 
 Put user-owned game folders or ZIP files in `ux0:/data/hardrpg/games/`.
-Cross opens a folder/ZIP or launches a recognized XP, VX, or VX Ace game.
-Circle goes up one level, returning to the left menu at the library root.
-Triangle opens the highlighted game's settings; the library is scanned when
-the app starts. ZIPs may contain a game directly,
+Cross shows a game's details and plays it on the second press; it opens a
+collection folder or ZIP at once. Circle goes back. Triangle opens the
+highlighted game's options (favourite, artwork, game settings, rename); the
+library is scanned when the app starts. ZIPs may contain a game directly,
 a wrapper folder, or multiple game folders. Archives inside archives are
 not supported. No games or RTP are included in the package.
 

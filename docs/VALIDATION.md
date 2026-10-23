@@ -41,8 +41,8 @@ Testing through October 6, 2026 confirmed:
 
 The suite test preceded the final launcher presentation refinements and ZIP
 engine labels. The public package retains those tested runtime fixes and uses
-Title ID `HARDRPG01` to update the existing app. The test bubble used a separate
-Title ID but shared the same external data layout.
+Title ID `HARDRPG01` to update the existing app. Test builds used a separate
+Title ID with the same data folders.
 
 These checks do not establish full-game completion, an exact FPS guarantee,
 or every Settings/RTP combination. Long-session stability and game-specific

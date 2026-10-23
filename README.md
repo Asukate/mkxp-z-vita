@@ -12,7 +12,7 @@
   <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/RPG%20Maker-XP%20%2F%20VX%20%2F%20Ace%20%2F%202000%20%2F%202003-5865f2?style=for-the-badge" alt="RPG Maker: XP, VX, VX Ace, 2000, 2003"></a>
 </p>
 
-<p align="center"><a href="#install">Install</a> · <a href="#add-your-games">Add games</a> · <a href="#using-hardrpg">Use</a> · <a href="#per-game-settings-and-controls">Controls</a> · <a href="#compatibility">Compatibility</a> · <a href="#something-went-wrong">Help</a> · <a href="#building">Build</a></p>
+<p align="center"><a href="#install">Install</a> · <a href="#add-your-games">Add games</a> · <a href="#using-hardrpg">Use</a> · <a href="#per-game-settings-and-controls">Controls</a> · <a href="#artwork-game-info-and-title-music">Artwork</a> · <a href="#compatibility">Compatibility</a> · <a href="#something-went-wrong">Help</a> · <a href="#building">Build</a></p>
 
 
 **HardRPG** is an RPG Maker game launcher for the PS Vita. Copy your games to
@@ -65,9 +65,9 @@ folder browser, go to the folder, and press **Square** to add the games in it.
 They stay where they are.
 
 **ZIP games** are unpacked into `ux0:/data/hardrpg/cache/` the first time you
-play them. After that you can free the ZIP's space with **Triangle → Delete
-the ZIP, keep the game**: the game stays in the list and plays from the
-unpacked copy, with its saves and settings.
+play them. After that you can free the ZIP's space with **Triangle → Game
+settings → Delete the ZIP, keep the game**: the game stays in the list and
+plays from the unpacked copy, with its saves and settings.
 
 More detail: [library, ZIP games and settings](launcher/README.md).
 
@@ -130,47 +130,56 @@ download first if it is a `.zip`, then:
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.3.1 Alpha** is the current release, a pre-release that fixes five crashes
-reported in [issue #3](https://github.com/Asukate/mkxp-z-vita/issues/3): The
-Endless Empty and VorlorN now start, and PALETTA, Little Braver and Flash
-Cycling should no longer crash where they did. See the
-[0.3.1 release notes](docs/RELEASE-NOTES-0.3.1.md).
+**0.4.0 Alpha** is the current release. New in 0.4:
 
-New in 0.3.0:
+- **A new library:** a carousel of your games with covers, backgrounds,
+  details and screenshots, downloaded automatically in the background.
+- **Title music:** each game's own title theme plays while it is highlighted.
+- **In-game menu:** hold **L + R + Start** (or tap the icon in the screen's
+  empty border) to change controls, display and speed without leaving the game.
+- **Fast forward:** **L + R** runs a game at up to twice its speed.
+- **Faster:** quicker starts, smoother maps and sprites, and a Sharp screen
+  filter by default.
+- **Español and Português (Brasil)**, and a welcome guide on the first start.
 
-- **Faster games:** smoother maps, quicker menus and battles.
-- **More games run:** To the Moon and LISA now work.
-- **RPG Maker 2000/2003** games, through EasyRPG.
-- **Your controls, your way:** map any Vita button to any keyboard key, turn
-  the touch screen or rear pad into buttons, or tap the map to walk there.
-- **Per-game settings:** display, audio and controls for each game.
-
-Full list: [0.3.0 release notes](docs/RELEASE-NOTES-0.3.0.md).
+Full list: [0.4.0 release notes](docs/RELEASE-NOTES-0.4.0.md).
 
 ## Using HardRPG
 
 | Button | In the library |
 | --- | --- |
-| Cross | Play a game, or open a folder or ZIP |
+| Left / Right | Move between games |
+| Cross | Show the game's details; press again to play |
 | Circle | Go back |
-| Triangle | Settings for the highlighted game |
-| Select | Search by name |
+| Triangle | Options: favourite, artwork, game settings, rename |
+| Square | Show or hide the details |
+| Down (in details) | Screenshots; Cross shows one full screen |
+| Up | Toolbar: grid view, engine tabs, search, sort and filter |
 | L / R | Show only one engine (XP, VX, Ace, 2000/2003) |
-| Square | Rename a game in the list (its files are not touched) |
+| Select | Search by name |
 | Start | Open the folder browser |
 | Touch | Drag to scroll, tap to select, tap again to play |
 
-**To leave a game and go back to the library, hold L + R + Select.** Unsaved
-progress is lost.
+| Buttons | In a game |
+| --- | --- |
+| **L + R + Start** (hold) | In-game menu: controls, display, speed, back to library |
+| **L + R** | Fast forward on and off |
+| **L + R + Select** (hold) | Back to the library (unsaved progress is lost) |
+
+The in-game menu also opens from the small icon in the screen's empty border.
+It pauses the game, and changes apply at once. For RPG Maker 2000/2003
+games (EasyRPG), L + R + Select returns to the library; EasyRPG's own menu
+is on Start.
 
 ## Per-game settings and controls
 
-Highlight a game and press **Triangle**:
+Highlight a game, press **Triangle**, then **Game settings**:
 
-- **Controls:** remap the game's controls (below).
+- **Controls:** remap the game's controls on a picture of the Vita (below).
 - **Display:** aspect ratio, scaling and filtering.
-- **Audio / MIDI:** sound, MIDI reverb and chorus.
-- **Performance metrics:** an optional FPS overlay.
+- **Audio and MIDI:** sound, MIDI reverb and chorus.
+- **Performance and speed:** an in-game overlay (FPS, frame timing, or full
+  stats with CPU, memory and battery) and fast forward.
 - **Rename**, **Game information** and **Play**.
 - **Remove from library:** takes the game off the list, then asks whether to
   delete its files too (and, for a ZIP game, its unpacked copy). The answer
@@ -182,16 +191,49 @@ In **Controls**, every Vita button, and parts of the touch screen and rear pad,
 can be set to an RPG Maker button or **any keyboard key**. That makes games
 playable that were made for a PC keyboard.
 
-- **Buttons:** pick a button, press Cross, and choose from an on-screen keyboard.
+- **Buttons:** pick a button on the picture, press Cross, and choose an RPG
+  Maker button or a key from the on-screen keyboard.
 - **Touch screen and rear pad:** use the whole surface as one button, split it
-  into left and right halves, or into four corners. Nothing is drawn on screen.
+  into halves or four corners, shown on the Vita's front and back. Nothing is
+  drawn over the game.
 - **Tap to walk:** tap a spot on the map and your character walks there.
 - **Test inputs** shows what each button and touch does before you play.
+
+The same controls, display and speed settings are in the in-game menu
+(**L + R + Start**), where they apply while you play.
 
 *Example: LISA uses W, A, S and D for combo attacks. Set the rear pad to Four
 corners and give each corner one of those keys.*
 
 Details: [controls guide](docs/vita-controls.md).
+
+## Artwork, game info and title music
+
+HardRPG looks up covers, backgrounds, logos, screenshots and details (year,
+developer, description) for each new game by itself, in the background, while
+it is open and online. Sources: Steam, DLsite, VNDB and itch.io work as they
+are; SteamGridDB, IGDB and RAWG need a free key, added in **Settings → Game
+info and artwork**, where automatic lookups can also be turned off. When no
+source knows a game, its own title screen is used.
+
+**Triangle → Change artwork and info** looks a game up again and lets you pick
+the cover, background and logo from what each source found.
+
+**Your own pictures and music:** put them in
+`ux0:/data/hardrpg/art/<game name>/` (the game's name, or its folder's or ZIP's
+name). They are used instead of downloaded ones:
+
+| File | What it is |
+| --- | --- |
+| `cover.png` or `.jpg` | The cover in the library |
+| `hero.png` or `.jpg` | The background behind it |
+| `logo.png` | The title logo on the details page |
+| `shot1.png` … `shot4.png` | Screenshots |
+| `theme.ogg`, `.mp3` or `.wav` | Title music |
+
+The title music otherwise comes from the game itself: the track its title
+screen plays. It is not downloaded. Volume and on/off are in **Settings →
+Sound**.
 
 ## Compatibility
 
@@ -236,10 +278,38 @@ in the report.
 ### Known issues
 
 - Large games can take a while to start the first time.
+- The first time a new HardRPG version starts a game, it prepares its graphics
+  for a few seconds ("only once").
+- Games whose title music is MIDI have no music in the library.
 
 ## Screenshots
 
-Captured on a PS Vita running HardRPG 0.3.0.
+The launcher, on a PS Vita running HardRPG 0.4.0:
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="docs/images/screenshots/launcher-home.png"><img src="docs/images/screenshots/launcher-home.png" width="420" alt="The HardRPG library on PS Vita"></a><br>
+      <sub>The library</sub>
+    </td>
+    <td align="center">
+      <a href="docs/images/screenshots/launcher-details.png"><img src="docs/images/screenshots/launcher-details.png" width="420" alt="A game's details page in HardRPG"></a><br>
+      <sub>A game's details</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="docs/images/screenshots/launcher-game-settings.png"><img src="docs/images/screenshots/launcher-game-settings.png" width="420" alt="Per-game settings in HardRPG"></a><br>
+      <sub>Settings for each game</sub>
+    </td>
+    <td align="center">
+      <a href="docs/images/screenshots/launcher-controls.png"><img src="docs/images/screenshots/launcher-controls.png" width="420" alt="The controls map in HardRPG"></a><br>
+      <sub>Controls on a picture of the Vita</sub>
+    </td>
+  </tr>
+</table>
+
+Games, captured on a PS Vita running HardRPG 0.3.0:
 
 <table>
   <tr>
