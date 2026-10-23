@@ -152,6 +152,34 @@ int main() try {
     expect(cpuPack(Vec4(1, 0, 0.5f, 1)) == 0xFF8000FFu, "colour packing order or rounding changed");
     release(s);
 
+    // The row-copy gradient is pixel-identical to packing every pixel (the previous code).
+    for (int round = 0; round < 300; ++round) {
+        const int w = 1 + rnd() % 70, h = 1 + rnd() % 30;
+        SDL_Surface *fast = surface(w, h), *slow = surface(w, h);
+        std::memset(fast->pixels, 0x5A, size_t(w) * h * 4);
+        std::memset(slow->pixels, 0x5A, size_t(w) * h * 4);
+        const IntRect whole(int(rnd() % 20) - 10, int(rnd() % 10) - 5, 1 + rnd() % 90, 1 + rnd() % 40);
+        IntRect clip(std::max(0, whole.x), std::max(0, whole.y), 0, 0);
+        clip.w = std::min(w, whole.x + whole.w) - clip.x;
+        clip.h = std::min(h, whole.y + whole.h) - clip.y;
+        const Vec4 a(rnd() % 256 / 255.f, rnd() % 256 / 255.f, rnd() % 256 / 255.f, rnd() % 256 / 255.f);
+        const Vec4 b(rnd() % 256 / 255.f, rnd() % 256 / 255.f, rnd() % 256 / 255.f, rnd() % 256 / 255.f);
+        const bool vertical = round & 1;
+        cpuGradient(fast, whole, clip, a, b, vertical);
+        if (clip.w > 0 && clip.h > 0) {
+            const int extent = vertical ? whole.h : whole.w;
+            for (int y = clip.y; y < clip.y + clip.h; ++y)
+                for (int x = clip.x; x < clip.x + clip.w; ++x) {
+                    const float t = ((vertical ? y - whole.y : x - whole.x) + 0.5f) / extent;
+                    ((uint32_t *)((uint8_t *)slow->pixels + size_t(y) * slow->pitch))[x] =
+                        cpuPack(Vec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+                                     a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t));
+                }
+        }
+        expect(std::memcmp(fast->pixels, slow->pixels, size_t(w) * h * 4) == 0, "gradient differs from the per-pixel ramp");
+        release(fast); release(slow);
+    }
+
     std::puts("PASS: blend matches the blit shader formula; unscaled and scaled blits, fills and gradients stay in bounds");
     return 0;
 } catch (const std::exception &e) { std::fprintf(stderr, "FAIL: %s\n", e.what()); return 1; }
@@ -160,7 +188,7 @@ int main() try {
 with tempfile.TemporaryDirectory(prefix='hardrpg-cpu-compose-') as directory:
     source = Path(directory) / 'compose.cpp'
     helpers = ''.join(function(name) for name in
-                      ('cpuPack', 'cpuFill', 'cpuGradient', 'cpuReciprocals', 'cpuOver', 'cpuLerp', 'cpuBlit'))
+                      ('cpuPack', 'cpuFill', 'cpuGradientAt', 'cpuGradient', 'cpuReciprocals', 'cpuOver', 'cpuLerp', 'cpuBlit'))
     source.write_text(PREAMBLE + helpers + CHECKS)
     binary = Path(directory) / 'compose'
     subprocess.run(['c++', '-std=c++17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
