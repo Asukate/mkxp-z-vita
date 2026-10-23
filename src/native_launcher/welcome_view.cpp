@@ -159,11 +159,13 @@ const Image &View::welcomeSlide(const UI &u, int slide) {
   }
   default:
     heading("Game info", "Covers and game details");
-    paragraph(tr("HardRPG can download covers, backgrounds, logos and details such as the year and developer. Press <triangle> Triangle on a "
-                 "game and choose Download game info."));
+    paragraph(tr("HardRPG downloads covers, backgrounds, logos and details such as the year and developer by itself while it is "
+                 "open and online, one game at a time. Press <triangle> Triangle on a game and choose Change artwork and info to look "
+                 "again and pick the pictures."));
     paragraph(tr("Some sources work right away. Others need a free API key, which you can add in Settings, Game info and artwork. "
                  "Each source there says where to get its key."));
-    paragraph(tr("You can always keep the pictures you have: the artwork chooser shows what each source found first."), 16, muted);
+    paragraph(tr("Your own pictures and music: put cover, hero (the background), logo (PNG or JPG) or theme.ogg in "
+                 "ux0:/data/hardrpg/art/<game name>/. They are used instead of downloaded ones."), 16, muted);
     break;
   }
   endLayer();
@@ -285,7 +287,7 @@ void View::buildWelcome(const UI &u) {
   using namespace homeLayout;
   scene.clear();
   ensureStrips();
-  pendingLoads = false;
+  pendingLoads = coversToMake = false;
   auto quad = [&](const Image *img, double x, double y, double w, double h, double alpha = 1, double radius = 0) {
     Quad q;
     q.image = img;

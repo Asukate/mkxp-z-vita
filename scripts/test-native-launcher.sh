@@ -14,7 +14,7 @@ LIBS="$(pkg-config --cflags --libs libpng libturbojpeg libwebp)"
 "${CXX:-c++}" -std=c++14 -O2 -I"$ROOT/src" "$ROOT/tests/art-loader.cpp" "$ROOT/src/native_launcher/art_loader.cpp" \
     "$ROOT/src/native_launcher/image.cpp" $LIBS -pthread -o "$WORK/art-loader-tests"
 "${CXX:-c++}" -std=c++14 -O2 -I"$ROOT/src" "$ROOT/tests/theme.cpp" "$ROOT/src/native_launcher/theme.cpp" \
-    -o "$WORK/theme-tests"
+    $(pkg-config --cflags --libs physfs) -o "$WORK/theme-tests"
 for suite in art-fetch art-loader theme; do
     rm -rf "$WORK/$suite" && mkdir -p "$WORK/$suite"
     "$WORK/$suite-tests" "$WORK/$suite"

@@ -25,6 +25,7 @@ public:
     std::string key;
     bool hero = false;
     bool shots = false;             // the screenshots instead (width x height each)
+    int shot = 0;                   // with shots: only this one (1-4), fitted inside width x height
     std::string root;               // the art folder, ending in '/'
     std::vector<std::string> names; // folders under root to try, in order
     int width = 0, height = 0;      // cover or background size
@@ -36,11 +37,13 @@ public:
   struct Result {
     std::string key;
     bool hero = false, cancelled = false, shots = false;
+    int shot = 0;
     Image cover, logo, background;
     std::vector<Image> pictures; // screenshots, when asked for
     // No cover art: draw one and give it to store() under this path.
     std::string generatedPath;
     std::string info; // the game's info.json, if it has one
+    std::string theme; // the player's own title music: art/<folder>/theme.ogg, .mp3 or .wav
   };
   ArtLoader();
   ~ArtLoader();
@@ -58,6 +61,8 @@ public:
   void rescan(const std::string &key);
   // Anything still queued, decoding or not yet taken.
   bool busy();
+  // Finished pictures are waiting to be taken: the screen has something new.
+  bool ready();
 
 private:
   struct Pending {

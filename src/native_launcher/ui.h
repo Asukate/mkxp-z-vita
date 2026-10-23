@@ -58,6 +58,9 @@ struct Home {
   int target = 0;             // the card the carousel settles on
   bool details = false;
   double detailsAmount = 0;   // 0 shelf centred, 1 details open
+  // In the details panel: the focused screenshot (-1 none), and the one
+  // shown full screen (-1 none).
+  int shotFocus = -1, viewing = -1;
   double sideAmount = 0;      // 1 while the filter panel holds the right half
   Panel panel = NoPanel;
   int panelFocus = 0;
@@ -135,13 +138,20 @@ public:
   std::vector<std::string> artFolders(const Entry &) const;
   void fetchArt(bool all);
   bool pollArt();
+  // Game info for every game not looked up before, in the background and
+  // without messages. A download the player asks for stops it.
+  bool autoGameInfo = true;
+  void fetchArtAutomatically();
+  bool artQuiet = false;
+  std::vector<std::string> artQuietKeys;
   // The artwork chooser: what the sources offered, and the picks so far.
   ArtFetch::Choices artChoices;
   int artPick[3] = {-1, -1, -1}, artRow = 0;
   void finishChoosing(bool save);
+  bool lastArtRow() const; // Cross saves here instead of going to the next row
   // Launcher preferences, kept in launcher-preferences.json: the adult
   // artwork blur, the language and whether the welcome guide was seen.
-  bool blurAdult = true;
+  bool blurAdult = false; // off unless chosen in Settings
   bool welcomeSeen = false;
   // Sound: interface sounds and each game's title music while it is
   // highlighted, with their levels (0-100).
@@ -151,8 +161,23 @@ public:
   // Plays interface sounds; the front end sets it. Unset plays nothing.
   std::function<void(Sound)> sound;
   void emit(Sound) const;
-  // The folder of the game whose title music should play now, or "".
+  // Where the title music of the game to play now comes from (its folder,
+  // unpacked copy or ZIP), or "".
   std::string themeFolder() const;
+  // The same for one game, then for every game listed and for the games on
+  // either side of the highlighted one (made ready in the background).
+  std::string themeSource(const Entry &) const;
+  // Where each ZIP game's music is read from, found once per library load:
+  // the home loop asks every 100 ms, and a memory card check can wait
+  // behind the artwork loader for a long time.
+  mutable std::map<std::string, std::string> themeSourceCache;
+  // Title music the player put beside a game's pictures (art/<folder>/theme.*),
+  // by entry key, as the picture loader finds it.
+  mutable std::map<std::string, std::string> customThemes;
+  std::vector<std::string> themeSources() const;
+  std::vector<std::string> themeNearby() const;
+  // RTP folders set in Settings, where a game's title track may be.
+  std::vector<std::string> rtpFolders() const;
   // Nesting of input handlers, so one input makes one sound.
   int feedbackDepth = 0;
   void changeLanguage(int step);
@@ -173,6 +198,9 @@ public:
     Button button;
   };
   mutable std::vector<HintHit> hintHit;
+  // Screenshots in the details panel as last drawn: how many, and where.
+  mutable int shotsShown = 0;
+  mutable int shotHit[4][4] = {};
   mutable int gridScroll = 0;
   // Engine tab boxes, left edge and width, as last drawn.
   // Drawn engine tabs: left edge, width and engine, for touch.
@@ -210,7 +238,16 @@ public:
   int gameSetting = 0;
   // The last row, deleting the ZIP of an unpacked ZIP game, shows only then.
   bool canFreeZip = false;
-  int gameOptionsCount() const { return canFreeZip ? 10 : 9; }
+  int gameOptionsCount() const { return inGame ? 5 : canFreeZip ? 10 : 9; }
+  // The menu opened over a running game (L+R+Start or the corner icon): the
+  // game's page with Resume, Controls, Display, Performance and speed and
+  // Back to library. Its changes apply at once (see inGameChanged).
+  bool inGame = false;
+  enum InGameExit { Staying, Resume, BackToLibrary };
+  InGameExit inGameExit = Staying;
+  void openInGame(const Entry &);
+  // Set when a setting changed, so the game applies it; the host clears it.
+  bool inGameChanged = false;
   // Opens the game settings of model.list[index].
   void openGameMenu(size_t index);
   // "Remove from library" takes the game off the list, then asks about its
@@ -253,28 +290,88 @@ public:
         return zone;
     return -1;
   }
+  // The pad page draws the console (front, or its back for the rear pad)
+  // and each zone where it really is on the surface. These are the surface
+  // (the screen in the picture, or the rear pad), and the example game
+  // picture the drawn buttons sit in (4:3, centred; it varies by game).
+  static constexpr int padArtX = 200, padArtY = 210, padArtW = 540;
+  static void padSurface(int &x, int &y, int &w, int &h, bool rear = false) {
+    if (rear) {
+      // The patterned touch area of ui/vita-rear-640.png (640x270).
+      const double k = padArtW / 640.0;
+      x = padArtX + int(131 * k + .5);
+      y = padArtY + int(41 * k + .5);
+      w = int((509 - 131) * k + .5);
+      h = int((192 - 41) * k + .5);
+      return;
+    }
+    const double k = padArtW / 1800.0;
+    x = padArtX + int(356 * k + .5);
+    y = padArtY + int(66 * k + .5);
+    w = int((1443 - 356) * k + .5);
+    h = int((673 - 66) * k + .5);
+  }
+  static void padGamePicture(int &x, int &y, int &w, int &h) {
+    padSurface(x, y, w, h);
+    int gw = h * 4 / 3;
+    x += (w - gw) / 2;
+    w = gw;
+  }
   // Where each row of the pad page is drawn and touched: the mode bar, then
-  // the zones laid out as the surface is, left and right as seen when
+  // each zone at its place on the surface, left and right as seen when
   // holding the console.
   void padRowRect(int row, int &x, int &y, int &w, int &h) const {
     if (row == 0) {
       x = 184; y = 151; w = 744; h = 35;
       return;
     }
+    bool rear = controlsPad == 2;
+    int mode = rear ? controls.rear : controls.front;
     int zone = padZone(row);
     unsigned mask = padMask();
-    x = 228; y = 222; w = 640; h = 204;
-    if (zone < 0)
+    padSurface(x, y, w, h, rear);
+    if (zone < 0 || mask == 1)
       return;
-    if (mask == 1 || mask == 2)
+    auto part = [&](double fx, double fy, double fw, double fh) {
+      int sx = x, sy = y, sw = w, sh = h;
+      x = sx + int(sw * fx + .5);
+      y = sy + int(sh * fy + .5);
+      w = int(sw * fw + .5);
+      h = int(sh * fh + .5);
+    };
+    if (!rear && (mode == 1 || mode == 3)) {
+      // Drawn buttons: the bottom corners of the game picture.
+      padGamePicture(x, y, w, h);
+      part(zone % 2 ? .75 : 0, .8, .25, .2);
       return;
-    w = 314;
-    x += zone % 2 ? 326 : 0;
-    if (mask == 15) {
-      h = 96;
-      y += zone >= 2 ? 108 : 0;
     }
+    if (rear && mode == 1) {
+      // Two zones along the top edge of the rear pad.
+      part(zone % 2 ? .65 : 0, 0, .35, .35);
+      return;
+    }
+    if (mask == 15) {
+      part(zone % 2 ? .5 : 0, zone >= 2 ? .5 : 0, .5, .5);
+      return;
+    }
+    part(zone % 2 ? .5 : 0, 0, .5, 1);
   }
+  // The controls page's main view is a drawing of the Vita: each button's
+  // mapping in a label beside it, with a line to the button; the screen in
+  // the drawing opens the screen's touch zones; the other rows are pills
+  // along the bottom. Rows keep their numbers (0 custom controls, 1-12 the
+  // buttons in controlSources order, 13 tap to walk, 14 front screen, 15
+  // rear pad, 16 sticks, 17 test, 18 reset); only where they are changes.
+  bool controlsMap() const {
+    return page == Page::Controls && !controlsAdvanced && !controlsPad && !controlPicking && !controlsTesting;
+  }
+  static constexpr int mapArtX = 225, mapArtY = 176, mapArtW = 510;
+  // Where row is drawn and touched.
+  static bool controlsRect(int row, int &x, int &y, int &w, int &h);
+  // The button a row's label points at, on the drawing.
+  static bool controlsAnchor(int row, int &x, int &y);
+  // The row the D-pad goes to from row: the nearest one that way.
+  static int controlsNeighbor(int row, Button);
   // The mapping the selected controls row edits, or null for other rows.
   int *controlTarget(int row);
   void pickControlKey(Button);
@@ -318,7 +415,7 @@ public:
   // The game info page (Page::Keys): the adult artwork blur, then the source
   // keys, typed on the Vita keyboard.
   static constexpr int keyCount = 4;
-  static constexpr int keysRows = 1 + keyCount;
+  static constexpr int keysRows = 2 + keyCount;
   std::string keyFile(int index) const;
   std::string readKey(int index) const;
   void editKey(int index);

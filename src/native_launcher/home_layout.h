@@ -20,9 +20,11 @@ constexpr int captionY = 457;
 // Grid.
 constexpr int gridCols = 5, gridGapX = 22, gridGapY = 16, gridTop = 132, gridLabel = 22;
 constexpr int gridX = (960 - (gridCols * cardW + (gridCols - 1) * gridGapX)) / 2;
-// Details panel and its buttons.
-constexpr int detailsX = 344, detailsY = 70;
-constexpr int playX = 344, playY = 440, playW = 112, optionsX = 464, optionsW = 140, buttonH = 44;
+// Details panel; its Play and Options buttons sit under the cover.
+constexpr int detailsX = 344, detailsY = 70, detailsBottom = 494;
+constexpr int playX = 33, playY = 434, playW = 129, optionsX = 170, optionsW = 161, buttonH = 51;
+// Its screenshots, four across along the bottom of the panel.
+constexpr int shotW = 135, shotH = 76, shotGap = 12, shotY = detailsBottom - shotH;
 // Side panel (filter) and options menu.
 constexpr int panelX = 490, panelY = 120, panelW = 470, panelRowH = 33;
 constexpr int menuX = 612, menuY = 150, menuW = 290, menuRowH = 44;

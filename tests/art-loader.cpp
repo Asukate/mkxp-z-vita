@@ -113,5 +113,15 @@ int main(int argc, char **argv) {
     auto r = load(loader, "plain");
     assert(r.cover.width == 40 && r.generatedPath.empty());
   }
+  // The player's own title music beside the pictures is reported with the cover.
+  {
+    ArtLoader loader;
+    assert(load(loader, "game").theme.empty());
+  }
+  std::ofstream(root + "/art/game/theme.ogg") << "OggS mine";
+  {
+    ArtLoader loader;
+    assert(load(loader, "game").theme == root + "/art/game/theme.ogg");
+  }
   std::cout << "art-loader: all checks passed\n";
 }

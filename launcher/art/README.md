@@ -16,6 +16,10 @@ identical images.
 `launcher/ui/vita-640.png` is not made here: it is Tokyoship's illustration
 from Wikimedia Commons (CC BY 3.0), see `LICENSES/Vita-illustration.txt`.
 
+`launcher/ui/vita-rear-640.png` (the rear touch pad page) is the project's
+own picture of the console's back, `vita-rear-master.png` here scaled to 640
+pixels wide; no attribution is needed.
+
 ## Sounds
 
 `launcher/sfx/*.ogg` are the launcher's UI sounds (move, select, back, open,

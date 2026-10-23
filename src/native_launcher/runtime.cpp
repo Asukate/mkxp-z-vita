@@ -787,10 +787,13 @@ int runNativeLauncher(bool returning) {
           }
         };
 #endif
+        // An unchanged GPU scene is not drawn again: the screen keeps the
+        // last frame, and the GPU rests while nothing moves.
         auto present = [&](bool changed) {
-          if (view.gpu)
-            presenter.showScene(view);
-          else
+          if (view.gpu) {
+            if (changed)
+              presenter.showScene(view);
+          } else
             presenter.show(view, changed);
         };
         ui.beginLaunch = [&] {
@@ -828,10 +831,14 @@ int runNativeLauncher(bool returning) {
           std::fprintf(stderr, "Launcher audio unavailable\n");
 #endif
         audio.setLevels(ui.effectsVolume, ui.musicVolume);
+        // Found title tracks are kept in cache/themes; every listed game's is
+        // found in the background, so it is ready before it is highlighted.
+        audio.search(ui.model.paths.at("cache/themes"), ui.rtpFolders());
+        audio.prepare(ui.themeSources());
         // The title music follows the highlighted game once it has stayed
         // there a moment, so scrolling past games does not start each one.
         std::string themeWanted, themeAsked;
-        uint32_t themeSince = 0, themeCheckedAt = 0;
+        uint32_t themeSince = 0, themeCheckedAt = 0, themeListedAt = 0;
         launchSoundAt = 0;
         view.draw(ui);
         present(true);
@@ -857,7 +864,7 @@ int runNativeLauncher(bool returning) {
         uint64_t frameStamp = SDL_GetPerformanceCounter();
         uint32_t statsAt = 0;
         int frames = 0;
-        double frameSum = 0, frameWorst = 0, drawSum = 0;
+        double frameSum = 0, frameWorst = 0, drawSum = 0, buildWorst = 0;
         std::string lastClock;
         auto status = [&] {
           // The clock and battery in the home screen's top bar.
@@ -878,10 +885,20 @@ int runNativeLauncher(bool returning) {
 #endif
         };
         status();
+        uint32_t lastInputAt = SDL_GetTicks();
+        bool gameInfoStarted = false;
         while (!quit && !ui.exitRequested && !ui.launchRequested) {
           auto button = input.poll(quit);
           bool touched = input.touch(ui);
           bool serviced = false;
+          if (button != Button::None || touched)
+            lastInputAt = SDL_GetTicks();
+          // New games' game info, once the player has settled on the home
+          // screen: a quiet lookup on another core (see UI::fetchArtAutomatically).
+          if (!gameInfoStarted && ui.homeActive() && !ui.welcome.active && SDL_GetTicks() - lastInputAt > 2000) {
+            gameInfoStarted = true;
+            ui.fetchArtAutomatically();
+          }
           if(ui.checkReleaseRequested) {update.start();ui.checkReleaseRequested=false;}
           ReleaseNotice notice;
           bool retrieved = false;
@@ -908,7 +925,7 @@ int runNativeLauncher(bool returning) {
           if (ui.message != shownMessage) {
             shownMessage = ui.message;
             messageAt = now;
-          } else if (!shownMessage.empty() && now - messageAt > 4500 && !(ui.artFetch && ui.artFetch->running()) &&
+          } else if (!shownMessage.empty() && now - messageAt > 4500 && !(ui.artFetch && ui.artFetch->running() && !ui.artQuiet) &&
                      ui.launchingName.empty()) {
             ui.message.clear();
             shownMessage.clear();
@@ -923,13 +940,21 @@ int runNativeLauncher(bool returning) {
             if (folder != themeWanted) {
               themeWanted = folder;
               themeSince = now;
+              // Moved away: the music stops now, not when the next is read.
+              if (!themeAsked.empty() && themeAsked != folder) {
+                audio.theme("");
+                themeAsked.clear();
+              }
             }
-            if (themeWanted.empty() && !themeAsked.empty()) {
-              audio.theme("");
-              themeAsked.clear();
-            } else if (themeWanted != themeAsked && now - themeSince >= 700 && !moving) {
+            // Once the highlight has settled; pictures still loading do not hold it up.
+            if (themeWanted != themeAsked && !themeWanted.empty() && now - themeSince >= 150 && !ui.animating()) {
               audio.theme(themeWanted);
               themeAsked = themeWanted;
+            }
+            audio.nearby(ui.themeNearby());
+            if (now - themeListedAt >= 2000) {
+              themeListedAt = now;
+              audio.prepare(ui.themeSources());
             }
           }
           // Refresh the top bar clock once a minute.
@@ -943,27 +968,30 @@ int runNativeLauncher(bool returning) {
               ui.action(button);
             auto drawStart = SDL_GetPerformanceCounter();
             view.draw(ui);
+            auto built = SDL_GetPerformanceCounter();
             present(true);
             if (ui.showFrameTime) {
-              // Whole frames (input to vsync) and the part spent building them.
+              // Whole frames (input to vsync) and the part the CPU spent
+              // building them; the rest is the GPU and the wait for vsync.
               auto ticks = SDL_GetPerformanceCounter();
               double frameMs = double(ticks - frameStamp) * 1000 / SDL_GetPerformanceFrequency();
-              double drawMs = double(ticks - drawStart) * 1000 / SDL_GetPerformanceFrequency();
+              double drawMs = double(built - drawStart) * 1000 / SDL_GetPerformanceFrequency();
               frameStamp = ticks;
               if (frameMs < 250) {
                 ++frames;
                 frameSum += frameMs;
                 frameWorst = std::max(frameWorst, frameMs);
                 drawSum += drawMs;
+                buildWorst = std::max(buildWorst, drawMs);
               }
               if (now - statsAt >= 500 && frames) {
                 char text[96];
-                std::snprintf(text, sizeof text, "%.0f fps  %.1f ms  worst %.0f ms  draw %.1f ms", 1000 * frames / frameSum,
-                              frameSum / frames, frameWorst, drawSum / frames);
+                std::snprintf(text, sizeof text, "%.0f fps  %.1f ms  worst %.0f  build %.1f ms, worst %.0f", 1000 * frames / frameSum,
+                              frameSum / frames, frameWorst, drawSum / frames, buildWorst);
                 ui.frameText = text;
                 statsAt = now;
                 frames = 0;
-                frameSum = frameWorst = drawSum = 0;
+                frameSum = frameWorst = drawSum = buildWorst = 0;
               }
             }
           } else {

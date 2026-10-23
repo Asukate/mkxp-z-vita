@@ -76,8 +76,11 @@ void View::draw(const UI &u) {
     buildHome(u);
   else
     buildSheet(u);
-  if (!gpu)
+  if (!gpu) {
+    if (overlay)
+      std::fill(pixels.begin(), pixels.end(), 0);
     composite();
+  }
 }
 void View::splash(const std::string &path) {
   png_image image{};
@@ -104,5 +107,28 @@ void View::save(const std::string &path) const {
   if (!png_image_write_to_file(&image, path.c_str(), 0, pixels.data(), 0,
                                nullptr))
     throw std::runtime_error("Cannot write launcher preview");
+}
+const Image &View::statsPanel(const std::string &headline, int tone, const std::vector<StatRow> &rows, int width) {
+  std::string key = headline + "|" + std::to_string(tone) + "|" + std::to_string(width);
+  for (auto &r : rows)
+    key += "|" + r.name + "=" + r.value + "/" + std::to_string(r.tone);
+  const int rowH = 17, top = 34;
+  int height = top + int(rows.size()) * rowH + (rows.empty() ? 0 : 8);
+  if (beginLayer(statsLayer, key, width, height)) {
+    const Color tones[] = {{236, 236, 238}, {92, 214, 140}, {244, 190, 72}, {232, 68, 90}};
+    rect(0, 0, width, height, {10, 10, 12}, 196, 10);
+    rect(0, 0, width, height, {255, 255, 255}, 16, 10);
+    rect(1, 1, width - 2, height - 2, {10, 10, 12}, 150, 9);
+    label(10, 5, headline, 22, tones[std::max(0, std::min(3, tone))], 255, true, -1, width - 20);
+    int y = top;
+    for (auto &r : rows) {
+      int nameW = std::min(measure(r.name, 11), width / 3);
+      label(10, y + 2, r.name, 11, {150, 150, 158}, 255, false, -1, width / 3);
+      label(width - 10, y, r.value, 13, tones[std::max(0, std::min(3, r.tone))], 255, false, 1, width - 26 - nameW);
+      y += rowH;
+    }
+    endLayer();
+  }
+  return statsLayer.image;
 }
 } // namespace hardrpg

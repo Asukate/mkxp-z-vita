@@ -100,8 +100,12 @@ Image strip(int w, int h, const std::function<std::array<int, 4>(double)> &at) {
 }
 } // namespace
 
+// Whether the next frame would look different. A busy loader alone is not
+// a reason: the screen is drawn again when a picture is ready, so it does
+// not redraw every frame while covers and backgrounds load.
 bool View::animating() const {
-  return pendingLoads || (fading && std::chrono::steady_clock::now() - fadeStart < std::chrono::milliseconds(320));
+  return coversToMake || (loader && loader->ready()) ||
+         (fading && std::chrono::steady_clock::now() - fadeStart < std::chrono::milliseconds(320));
 }
 
 const Image &View::icon(const std::string &name) {
@@ -127,7 +131,7 @@ View::Art &View::artFor(const UI &u, const Entry &e, double distance, bool needH
   if (a.generate) {
     // A generated cover: dark card, large initials, a ruby rule and the name.
     if (loadBudget <= 0) {
-      pendingLoads = true;
+      pendingLoads = coversToMake = true;
       return a;
     }
     --loadBudget;
@@ -173,13 +177,20 @@ View::Art &View::artFor(const UI &u, const Entry &e, double distance, bool needH
 }
 
 // Takes what the loader finished since the last frame.
-void View::receiveArt() {
+void View::receiveArt(const UI &u) {
   ArtLoader::Result r;
   while (loader->take(r)) {
     auto found = art.find(r.key);
     if (found == art.end() || r.cancelled)
       continue;
     Art &a = found->second;
+    if (r.shots && r.shot) {
+      if (!r.pictures.empty()) {
+        a.viewed = std::move(r.pictures[0]);
+        a.viewedShot = r.shot;
+      }
+      continue;
+    }
     if (r.shots) {
       a.shotsLoaded = true;
       a.shots = std::move(r.pictures);
@@ -190,6 +201,10 @@ void View::receiveArt() {
       a.generate = r.cover.empty();
       a.generatedPath = r.generatedPath;
       a.info = std::move(r.info);
+      if (r.theme.empty())
+        u.customThemes.erase(r.key);
+      else
+        u.customThemes[r.key] = r.theme;
       a.cover = std::move(r.cover);
       a.logo = std::move(r.logo);
       continue;
@@ -472,7 +487,7 @@ void View::buildHome(const UI &u) {
     loader.reset(new ArtLoader);
   ++frameNumber;
   loader->beginFrame();
-  receiveArt();
+  receiveArt(u);
   // The blur preference changed: load every picture again.
   if (blurShown != u.blurAdult) {
     blurShown = u.blurAdult;
@@ -494,7 +509,7 @@ void View::buildHome(const UI &u) {
   }
   u.artUpdated.clear();
   loadBudget = 1;
-  pendingLoads = false;
+  pendingLoads = coversToMake = false;
   auto list = u.homeList();
   int count = int(list.size());
   int target = std::min(u.home.target, count);
@@ -522,6 +537,9 @@ void View::buildHome(const UI &u) {
   ensureStrips();
 
   // Background: the focused game's art, swapped only once the carousel settles.
+  // The plain colour under it is added below, once it is known whether the
+  // art covers the whole screen.
+  size_t inkAt = scene.size();
   solid(ink, 0, 0, width, height, 1);
   std::string wantHero = u.home.grid || !current ? "" : u.entryKey(*current);
   if (settled && wantHero != heroKey) {
@@ -548,6 +566,9 @@ void View::buildHome(const UI &u) {
     heroFading = nullptr;
     fade = 1;
   }
+  // Under an opaque background shown in full the plain colour is never seen.
+  if (!heroFading && heroShown && fade >= 1 && opaque(heroShown))
+    scene[inkAt].alpha = 0;
   if (heroFading)
     quad(heroFading, 0, 0, width, height, 1);
   else if (!heroShown || fade < 1)
@@ -560,7 +581,8 @@ void View::buildHome(const UI &u) {
     quad(&scrimV, 0, 0, width, height, 1 - details);
     quad(&scrimH, 0, 0, width, height, details);
   }
-  quad(&tint, 0, 0, width, height, 1);
+  quad(&tintTop, 0, 0, width, 70, 1);
+  quad(&tintBottom, 0, height - 56, width, 56, 1);
 
   if (!u.home.grid) {
     // Carousel: farther cards first so nearer ones overlap them.
@@ -688,8 +710,7 @@ void View::buildHome(const UI &u) {
   // Details panel, sliding in from the right over the darkened art.
   if (details > 0.01 && current) {
     auto &a = artFor(u, *current, 0);
-    // Screenshots, four across above the folder line.
-    const int shotW = 135, shotH = 76, shotGap = 12;
+    // Screenshots, four across along the bottom of the panel.
     if (!a.shotsLoaded) {
       ArtLoader::Request r;
       r.key = u.entryKey(*current);
@@ -708,7 +729,7 @@ void View::buildHome(const UI &u) {
     std::string key = u.entryKey(*current) + "|" + std::to_string(fav) + "|" + std::to_string(stat.seconds) + "|" +
                       std::to_string(stat.last) + "|" + std::to_string(a.logo.id) + "|" + a.info + "|" +
                       std::to_string(a.shots.size()) + "|" + languageCode(language());
-    if (beginLayer(detailsLayer, key, width - detailsX - 16, playY - detailsY + buttonH)) {
+    if (beginLayer(detailsLayer, key, width - detailsX - 16, detailsBottom - detailsY)) {
       int w = width - detailsX - 40;
       // Facts downloaded with the artwork, blended from several sources.
       std::string released, developer, publisher, genres, description, sources;
@@ -769,11 +790,11 @@ void View::buildHome(const UI &u) {
         fx += std::max(110, measure(f.value, 23, true) + 34);
       }
       y += 58;
-      int by = playY - detailsY;
-      int shotsH = a.shots.empty() ? 0 : shotH + 14;
+      // The folder line sits above the screenshots, or at the bottom.
+      int by = (a.shots.empty() ? detailsBottom : shotY - 12) - detailsY;
       if (!description.empty()) {
         auto lines = wrap(description, 15, w);
-        int room = std::max(0, (by - 40 - shotsH - y) / 20);
+        int room = std::max(0, (by - 28 - y) / 20);
         for (int i = 0; i < int(lines.size()) && i < room; ++i) {
           auto text = lines[i];
           if (i == room - 1 && i + 1 < int(lines.size()))
@@ -781,26 +802,39 @@ void View::buildHome(const UI &u) {
           label(0, y + i * 20, text, 15, {208, 208, 212}, 255, false, -1, w);
         }
       }
-      label(0, by - 24, sources.empty() ? current->node.path() : current->node.path() + "  \xc2\xb7  " + trf("details from {}", {sources}), 12, faint,
+      label(0, by - 20, sources.empty() ? current->node.path() : current->node.path() + "  \xc2\xb7  " + trf("details from {}", {sources}), 12, faint,
             255, false, -1, w);
-      rect(0, by, playW, buttonH, ruby, 255, 6);
-      blit(icon("btn-cross-26"), 11, by + 9);
-      label(44, by + 12, tr("Play"), 17, white, 255, false, -1, playW - 50);
-      rect(optionsX - detailsX, by, optionsW, buttonH, white, 31, 6);
-      blit(icon("btn-triangle-26"), optionsX - detailsX + 11, by + 9);
-      label(optionsX - detailsX + 44, by + 12, tr("Options"), 17, white, 255, false, -1, optionsW - 50);
       endLayer();
     }
     layerQuad(detailsLayer, detailsX + (1 - details) * 24, detailsY, details);
-    for (size_t i = 0; i < a.shots.size() && i < 4; ++i) {
+    // Play and Options, under the cover.
+    if (beginLayer(buttonsLayer, std::string("buttons|") + languageCode(language()), optionsX + optionsW - playX, buttonH)) {
+      int ox = optionsX - playX, iy = (buttonH - 30) / 2;
+      rect(0, 0, playW, buttonH, ruby, 255, 7);
+      blitScaled(icon("btn-cross-26"), 12, iy, 30, 30);
+      label(50, (buttonH - 22) / 2, tr("Play"), 20, white, 255, false, -1, playW - 56);
+      rect(ox, 0, optionsW, buttonH, white, 31, 7);
+      blitScaled(icon("btn-triangle-26"), ox + 12, iy, 30, 30);
+      label(ox + 50, (buttonH - 22) / 2, tr("Options"), 20, white, 255, false, -1, optionsW - 56);
+      endLayer();
+    }
+    layerQuad(buttonsLayer, playX, playY + (1 - details) * 16, details);
+    // The screenshots; the focused one is ringed. Each opens full screen.
+    u.shotsShown = int(std::min<size_t>(4, a.shots.size()));
+    for (int i = 0; i < u.shotsShown; ++i) {
+      int sx = detailsX + int((1 - details) * 24) + i * (shotW + shotGap);
+      u.shotHit[i][0] = sx, u.shotHit[i][1] = shotY, u.shotHit[i][2] = shotW, u.shotHit[i][3] = shotH;
+      if (u.home.shotFocus == i)
+        solid(ruby, sx - 3, shotY - 3, shotW + 6, shotH + 6, details, 6);
       Quad q;
-      q.image = &a.shots[i];
-      q.x = float(detailsX + (1 - details) * 24 + int(i) * (shotW + shotGap));
-      q.y = float(playY - 24 - 10 - shotH);
+      q.image = &a.shots[size_t(i)];
+      q.x = float(sx);
+      q.y = float(shotY);
       q.w = float(shotW), q.h = float(shotH), q.alpha = float(details), q.radius = 4;
       scene.push_back(q);
     }
-  }
+  } else
+    u.shotsShown = 0;
 
   // Top bar: brand on the left; About, clock, battery and settings on the right.
   topBar(u, u.home.zone == Home::Top ? u.home.topFocus : -1);
@@ -894,6 +928,38 @@ void View::buildHome(const UI &u) {
     layerQuad(frameLayer, 270, 20);
   }
   homePanels(u, list);
+  // A screenshot full screen over everything but the hints.
+  if (u.home.viewing >= 0 && current) {
+    auto &a = artFor(u, *current, 0);
+    int n = u.home.viewing + 1;
+    if (a.viewedShot != n) {
+      ArtLoader::Request r;
+      r.key = u.entryKey(*current);
+      r.shots = true;
+      r.shot = n;
+      r.root = u.model.paths.at("art/");
+      r.names = u.artFolders(*current);
+      r.cache = u.model.paths.at("cache/art/");
+      r.width = width - 40;
+      r.height = hintsY - 24;
+      r.blurAdult = u.blurAdult;
+      loader->want(r, -2);
+    }
+    solid({0, 0, 0}, 0, 0, width, height, 0.97);
+    if (a.viewedShot == n && !a.viewed.empty()) {
+      double w = a.viewed.width, h = a.viewed.height;
+      quad(&a.viewed, (width - w) / 2, (hintsY - h) / 2, w, h, 1, 1, 6);
+    }
+    // Arrows at the sides when there is more than one.
+    if (u.shotsShown > 1) {
+      if (beginLayer(viewerLayer, "viewer-arrows", width, 60)) {
+        label(30, 10, "<", 40, white, 200, true, 0);
+        label(width - 30, 10, ">", 40, white, 200, true, 0);
+        endLayer();
+      }
+      layerQuad(viewerLayer, 0, hintsY / 2 - 30);
+    }
+  }
   quad(&band, 0, hintsY - 4, width, height - (hintsY - 4), 1);
   homeHints(u, list);
 
@@ -999,7 +1065,7 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
     if (beginLayer(panelLayer, key, menuW, 30 + 5 * menuRowH + 8)) {
       rect(0, 0, menuW, 30 + 5 * menuRowH + 8, {22, 22, 24}, 248, 12);
       label(14, 9, e->name, 12, faint, 255, false, -1, menuW - 28);
-      const char *rows[] = {fav ? "Remove from favourites" : "Add to favourites", "Download game info", "Game info for all games",
+      const char *rows[] = {fav ? "Remove from favourites" : "Add to favourites", "Change artwork and info", "Game info for all games",
                             "Game settings", "Rename"};
       for (int i = 0; i < 5; ++i) {
         int y = 30 + i * menuRowH;
@@ -1114,13 +1180,26 @@ void View::homeHints(const UI &u, const std::vector<size_t> &list) {
   std::vector<Hint> left, right;
   bool add = u.home.target >= int(list.size());
   if (u.home.panel == Home::Artwork) {
-    left = {{"btn-cross-26", tr("Save"), Button::Cross}, {"btn-circle-26", tr("Keep current"), Button::Circle}};
+    if (u.lastArtRow())
+      left = {{"btn-cross-26", tr("Save"), Button::Cross}, {"btn-circle-26", tr("Keep current"), Button::Circle}};
+    else
+      left = {{"btn-cross-26", tr("Next"), Button::Cross}, {"btn-triangle-26", tr("Save"), Button::Triangle},
+              {"btn-circle-26", tr("Keep current"), Button::Circle}};
     right = {{nullptr, tr("Pick with the D-pad or a tap"), Button::None}};
   } else if (u.home.panel != Home::NoPanel) {
     left = {{"btn-cross-26", tr("Select"), Button::Cross}, {"btn-circle-26", tr("Close"), Button::Circle}};
+  } else if (u.home.viewing >= 0) {
+    left = {{"btn-circle-26", tr("Close"), Button::Circle}};
+    if (u.shotsShown > 1)
+      right = {{nullptr, tr("Left and Right: more screenshots"), Button::None}};
+    hintBar(u, left, right, std::to_string(u.home.viewing + 1) + "|" + std::to_string(std::max(1, u.shotsShown)));
+    return;
+  } else if (u.home.details && u.home.shotFocus >= 0) {
+    left = {{"btn-cross-26", tr("View"), Button::Cross}, {"btn-circle-26", tr("Back"), Button::Circle}};
+    right = {{nullptr, tr("Up: game details"), Button::None}};
   } else if (u.home.details) {
     left = {{"btn-cross-26", tr("Play"), Button::Cross}, {"btn-circle-26", tr("Back"), Button::Circle}, {"btn-triangle-26", tr("Options"), Button::Triangle}};
-    right = {{nullptr, tr("Other games"), Button::None}};
+    right = {{nullptr, tr(u.shotsShown ? "Down: screenshots" : "Other games"), Button::None}};
   } else {
     left = {{"btn-cross-26", tr(add ? "Add games" : u.home.grid ? "Play" : "Details"), Button::Cross}};
     if (!add)
@@ -1132,6 +1211,19 @@ void View::homeHints(const UI &u, const std::vector<size_t> &list) {
 }
 
 // Strip gradients shared by every screen, built once and stretched by quads.
+bool View::opaque(const Image *img) {
+  auto found = opaqueHeroes.find(img->id);
+  if (found != opaqueHeroes.end())
+    return found->second;
+  bool solidAll = !img->empty();
+  for (size_t i = 3; solidAll && i < img->rgba.size(); i += 4 * 7)
+    solidAll = img->rgba[i] == 255;
+  if (opaqueHeroes.size() > 32)
+    opaqueHeroes.clear();
+  opaqueHeroes[img->id] = solidAll;
+  return solidAll;
+}
+
 void View::ensureStrips() {
   if (!scrimV.empty())
     return;
@@ -1150,6 +1242,8 @@ void View::ensureStrips() {
       int a = y < 70 ? int((70 - y) * 82 / 70) : y >= height - 56 ? int((y - (height - 56)) * 72 / 56) : 0;
       return std::array<int, 4>{{150, 14, 38, a}};
     });
+    tintTop = strip(1, 70, [](double t) { return std::array<int, 4>{{150, 14, 38, int((1 - t) * 82)}}; });
+    tintBottom = strip(1, 56, [](double t) { return std::array<int, 4>{{150, 14, 38, int(t * 72)}}; });
     band = strip(1, 64, [](double t) { return std::array<int, 4>{{7, 7, 7, int(std::min(1.0, t * 1.6) * 205)}}; });
     glow = Image::blank(64, 36);
     for (int y = 0; y < 36; ++y)
@@ -1168,14 +1262,17 @@ void View::ensureStrips() {
 void View::topBar(const UI &u, int focus) {
   {
     bool topFocus = focus >= 0;
-    std::string key = u.clockText + "|" + std::to_string(u.batteryPercent) + "|" + std::to_string(focus);
+    std::string key = u.clockText + "|" + std::to_string(u.batteryPercent) + "|" + std::to_string(focus) + "|" +
+                      std::to_string(overlay);
     if (beginLayer(topLayer, key, width, topHeight)) {
       blit(icon("emblem-40"), 16, 11);
       blit(icon("wordmark-25"), 64, 19);
       label(64 + icon("wordmark-25").width + 7, 29, homeVersion, 12, faint);
       if (topFocus)
         rect(focus ? gearX : aboutX, topIconY, topIcon, topIcon, white, 36, 27);
-      blit(icon("info-35"), aboutX + 12, topIconY + 12);
+      // Over a running game the About and settings buttons do nothing.
+      if (!overlay)
+        blit(icon("info-35"), aboutX + 12, topIconY + 12);
       int right = gearX - 8;
       if (u.batteryPercent >= 0) {
         int bx = right - 52, by = 18;
@@ -1188,7 +1285,8 @@ void View::topBar(const UI &u, int focus) {
       }
       if (!u.clockText.empty())
         label(right, 16, u.clockText, 24, {232, 232, 234}, 255, false, 1);
-      blit(icon("gear-35"), gearX + 12, topIconY + 12);
+      if (!overlay)
+        blit(icon("gear-35"), gearX + 12, topIconY + 12);
       endLayer();
     }
     Quad q;

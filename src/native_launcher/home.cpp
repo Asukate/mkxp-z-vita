@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 namespace hardrpg {
@@ -40,9 +41,15 @@ std::vector<std::string> UI::artFolders(const Entry &e) const {
 
 void UI::fetchArt(bool all) {
   if (artFetch && artFetch->running()) {
-    message = tr("Game info is already downloading.");
-    return;
+    if (!artQuiet) {
+      message = tr("Game info is already downloading.");
+      return;
+    }
+    // The background lookup gives way; its games are tried again next time.
+    artFetch.reset();
   }
+  artQuiet = false;
+  artQuietKeys.clear();
   std::vector<ArtFetch::Job> jobs;
   auto add = [&](const Entry &e) {
     if (e.kind == Kind::Folder)
@@ -67,6 +74,39 @@ void UI::fetchArt(bool all) {
   message = all ? std::string(tr("Looking for game info...")) : trf("Looking for game info for {}...", {homeEntry()->name});
 }
 
+namespace {
+std::set<std::string> readLines(const std::string &path) {
+  std::set<std::string> out;
+  std::ifstream in(path);
+  for (std::string line; std::getline(in, line);)
+    if (!line.empty())
+      out.insert(line);
+  return out;
+}
+} // namespace
+
+void UI::fetchArtAutomatically() {
+  if (!autoGameInfo || (artFetch && artFetch->running()))
+    return;
+  auto tried = readLines(model.paths.at("cache/game-info-tried.txt"));
+  std::vector<ArtFetch::Job> jobs;
+  std::vector<std::string> keys;
+  for (auto &e : model.list) {
+    if (e.kind == Kind::Folder || tried.count(entryKey(e)))
+      continue;
+    auto folders = artFolders(e);
+    std::string gameDir = e.node.archive ? model.paths.at("cache/zip-" + key(e.node.identity(model.paths))) : e.node.path();
+    jobs.push_back({entryKey(e), e.name, folders[4].empty() ? folders[0] : folders[4], folders, gameDir});
+    keys.push_back(entryKey(e));
+  }
+  if (jobs.empty())
+    return;
+  artFetch.reset(new ArtFetch);
+  artFetch->start(std::move(jobs), model.paths.at("art/"), model.paths.at(""), true);
+  artQuiet = true;
+  artQuietKeys = std::move(keys);
+}
+
 bool UI::pollArt() {
   if (!artFetch)
     return false;
@@ -74,6 +114,27 @@ bool UI::pollArt() {
   auto p = artFetch->poll();
   for (auto &k : p.updated)
     artUpdated.push_back(k);
+  if (artQuiet) {
+    // Each game is looked up once; offline, they are all tried next time.
+    if (finished && p.note.empty()) {
+      auto path = model.paths.at("cache/game-info-tried.txt");
+      auto tried = readLines(path);
+      tried.insert(artQuietKeys.begin(), artQuietKeys.end());
+      std::string text;
+      for (auto &k : tried)
+        text += k + "\n";
+      try {
+        atomicWrite(path, text);
+      } catch (const std::exception &) {
+      }
+    }
+    if (finished) {
+      artFetch.reset();
+      artQuiet = false;
+      artQuietKeys.clear();
+    }
+    return !p.updated.empty();
+  }
   ArtFetch::Choices offer;
   if (p.choosing && artFetch->takeChoices(offer)) {
     // Open the chooser on the current pictures (or the first offered).
@@ -113,6 +174,7 @@ bool UI::pollArt() {
 }
 
 void UI::loadHome() {
+  themeSourceCache.clear();
   activity = model.activity();
   favourites = model.favourites();
   int lang = -1;
@@ -124,12 +186,16 @@ void UI::loadHome() {
     if (!text.str().empty()) {
       auto prefs = json5pp::parse(text.str());
       auto &o = prefs.as_object();
-      if (o.count("blurAdult") && o.at("blurAdult").is_boolean())
-        blurAdult = o.at("blurAdult").as_boolean();
+      // "blurAdult" (on by default before 0.4) is not read: the blur is now
+      // off until chosen, saved as "blurAdultArtwork".
+      if (o.count("blurAdultArtwork") && o.at("blurAdultArtwork").is_boolean())
+        blurAdult = o.at("blurAdultArtwork").as_boolean();
       if (o.count("language") && o.at("language").is_string())
         lang = languageFromCode(o.at("language").as_string());
       if (o.count("welcomeSeen") && o.at("welcomeSeen").is_boolean())
         welcomeSeen = o.at("welcomeSeen").as_boolean();
+      if (o.count("autoGameInfo") && o.at("autoGameInfo").is_boolean())
+        autoGameInfo = o.at("autoGameInfo").as_boolean();
       if (o.count("homeGrid") && o.at("homeGrid").is_boolean())
         home.grid = o.at("homeGrid").as_boolean();
       if (o.count("menuSounds") && o.at("menuSounds").is_boolean())
@@ -153,10 +219,11 @@ void UI::loadHome() {
 void UI::savePreferences() {
   Json prefs(std::initializer_list<Json::pair_type>{});
   auto &o = prefs.as_object();
-  o["blurAdult"] = blurAdult;
+  o["blurAdultArtwork"] = blurAdult;
   o["language"] = std::string(languageCode(language()));
   o["welcomeSeen"] = welcomeSeen;
   o["homeGrid"] = home.grid;
+  o["autoGameInfo"] = autoGameInfo;
   o["menuSounds"] = menuSounds;
   o["menuSoundVolume"] = Json::integer_type(effectsVolume);
   o["themeMusic"] = themeMusic;
@@ -177,6 +244,12 @@ void UI::changeLanguage(int step) {
   selectLanguage((language() + step + languageCount) % languageCount);
 }
 
+bool UI::lastArtRow() const {
+  for (int k = artRow + 1; k < 3; ++k)
+    if (!artChoices.options[k].empty())
+      return false;
+  return true;
+}
 void UI::finishChoosing(bool save) {
   int keep[3] = {-1, -1, -1};
   if (artFetch)
@@ -347,7 +420,14 @@ void UI::homeAction(Button b) {
       artRow = rows(artRow, 1);
     else if ((b == Button::Left || b == Button::Right) && n)
       artPick[artRow] = (artPick[artRow] + (b == Button::Left ? n - 1 : 1)) % n;
-    else if (b == Button::Cross)
+    else if (b == Button::Cross) {
+      // Cross takes this row's pick and goes on; on the last row it saves.
+      int next = rows(artRow, 1);
+      if (next != artRow)
+        artRow = next;
+      else
+        finishChoosing(true);
+    } else if (b == Button::Triangle)
       finishChoosing(true);
     else if (b == Button::Circle)
       finishChoosing(false);
@@ -396,6 +476,38 @@ void UI::homeAction(Button b) {
       }
     }
     return;
+  }
+  // A screenshot full screen: Left and Right page, anything else closes it.
+  if (home.viewing >= 0) {
+    if (b == Button::Left || b == Button::Right) {
+      int n = std::max(1, shotsShown);
+      home.viewing = (home.viewing + (b == Button::Left ? n - 1 : 1)) % n;
+      home.shotFocus = home.viewing;
+    } else if (b == Button::Circle || b == Button::Cross || b == Button::Square)
+      home.viewing = -1;
+    return;
+  }
+  // The details panel's screenshot row: Down goes to it, Up leaves it.
+  if (home.details && home.zone == Home::Shelf && !home.grid) {
+    if (home.shotFocus >= 0) {
+      int n = shotsShown;
+      if (n <= 0)
+        home.shotFocus = -1;
+      else if (b == Button::Left || b == Button::Right) {
+        home.shotFocus = std::max(0, std::min(n - 1, home.shotFocus + (b == Button::Left ? -1 : 1)));
+        return;
+      } else if (b == Button::Up || b == Button::Circle) {
+        home.shotFocus = -1;
+        return;
+      } else if (b == Button::Cross) {
+        home.viewing = home.shotFocus;
+        return;
+      } else if (b == Button::Down)
+        return;
+    } else if (b == Button::Down && shotsShown > 0) {
+      home.shotFocus = 0;
+      return;
+    }
   }
   if (home.zone == Home::Top) {
     if (b == Button::Left)
@@ -510,11 +622,26 @@ void UI::homeAction(Button b) {
   if (home.target >= count)
     home.details = false;
   clampTarget(home, count);
+  if (!home.details)
+    home.shotFocus = home.viewing = -1;
   if (home.grid)
     home.position = home.target;
 }
 
 void UI::homeTap(int x, int y) {
+  if (home.viewing >= 0) {
+    if (y < hintsY && x < 160)
+      homeAction(Button::Left);
+    else if (y < hintsY && x >= 800)
+      homeAction(Button::Right);
+    else if (y < hintsY)
+      homeAction(Button::Circle);
+    else
+      for (auto &h : hintHit)
+        if (inside(x, y, h.x, hintsY, h.w, 544 - hintsY))
+          homeAction(h.button);
+    return;
+  }
   auto list = homeList();
   int count = int(list.size());
   if (home.panel == Home::Artwork) {
@@ -615,6 +742,11 @@ void UI::homeTap(int x, int y) {
     return;
   }
   if (home.details) {
+    for (int i = 0; i < shotsShown && i < 4; ++i)
+      if (inside(x, y, shotHit[i][0], shotHit[i][1], shotHit[i][2], shotHit[i][3])) {
+        home.shotFocus = home.viewing = i;
+        return;
+      }
     if (inside(x, y, playX, playY, playW, buttonH)) {
       homeAction(Button::Cross);
       return;
@@ -662,7 +794,7 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
   }
   if (!home.pressed)
     return false;
-  bool shelfDrag = home.panel == Home::NoPanel && home.pressY >= barY + barH && home.pressY < hintsY;
+  bool shelfDrag = home.panel == Home::NoPanel && home.viewing < 0 && home.pressY >= barY + barH && home.pressY < hintsY;
   if (state == 1) {
     if (!home.dragging && shelfDrag && std::abs(x - home.pressX) > 10 && !home.grid)
       home.dragging = true;

@@ -33,8 +33,20 @@ public:
     int clipTop = 0, clipBottom = height; // rows outside are not drawn
   };
   std::vector<Quad> scene;
+  // The in-game performance overlay: a small rounded panel with a headline
+  // (the frame rate) and rows of name and value. tone: 0 plain, 1 good, 2
+  // warning, 3 bad. Drawn again only when its text changes.
+  struct StatRow {
+    std::string name, value;
+    int tone = 0;
+  };
+  const Image &statsPanel(const std::string &headline, int tone, const std::vector<StatRow> &rows, int width);
   bool gpu = false;      // the presenter draws scene; pixels hold nothing
-  bool pendingLoads = false; // art still decoding; draw again next frame
+  // Drawn over a running game: sheets keep a see-through background and
+  // pixels start transparent (premultiplied alpha).
+  bool overlay = false;
+  bool pendingLoads = false; // art still decoding (the splash waits for it)
+  bool coversToMake = false; // generated covers still to draw, one a frame
   // Ends a running crossfade at once (snapshots and tests).
   void settle() { fading = false; }
 
@@ -55,6 +67,8 @@ private:
     // Loaded means looked for: the image stays empty when there is no art.
     bool coverLoaded = false, heroLoaded = false, shotsLoaded = false;
     std::vector<Image> shots; // screenshot thumbnails, for the details panel
+    Image viewed;             // one screenshot, large, for the viewer
+    int viewedShot = 0;       // which one (1-4), 0 none
     bool generate = false; // no cover art: draw one here (FreeType is not thread-safe)
     std::string generatedPath; // where the loader caches it
     std::string info;          // downloaded facts (info.json), parsed by facts()
@@ -64,14 +78,22 @@ private:
   std::unique_ptr<ArtLoader> loader;
   uint64_t frameNumber = 0;
   std::vector<std::string> heroOrder; // decoded backgrounds, oldest first
-  bool blurShown = true;              // the blur preference the art was loaded with
+  bool blurShown = false;             // the blur preference the art was loaded with
   // Text and icons, drawn on the CPU only when their content changes.
   struct Layer {
     Image image;
     std::string key;
   };
-  Layer topLayer, toolbarLayer, captionLayer, detailsLayer, hintsLayer, panelLayer, messageLayer, addLayer, frameLayer;
+  Layer topLayer, toolbarLayer, captionLayer, detailsLayer, buttonsLayer, viewerLayer, hintsLayer, panelLayer, messageLayer, addLayer, frameLayer;
   Image scrimV, scrimH, tint, band, glow;
+  // The tint's two visible ends (top 70 px, bottom 56 px): drawn as strips,
+  // the GPU does not shade the clear middle of the screen.
+  Image tintTop, tintBottom;
+  // Backgrounds with no transparent pixels need nothing drawn under them.
+  std::map<uint64_t, bool> opaqueHeroes; // by Image::id
+  bool opaque(const Image *img);
+  Image vitaBack; // the console's outline, for the rear pad page
+  Layer statsLayer;
   const Image *heroShown = nullptr, *heroFading = nullptr;
   std::string heroKey;
   int loadBudget = 0;
@@ -86,7 +108,7 @@ private:
   const Image &icon(const std::string &name);
   // distance: how far from the selection; nearer art loads first.
   Art &artFor(const UI &, const Entry &, double distance, bool needHero = false);
-  void receiveArt();
+  void receiveArt(const UI &u);
   void trimArt();
   void blit(const Image &, int x, int y, int alpha = 255);
   void blitScaled(const Image &, double x, double y, double w, double h, int alpha = 255, int brightness = 256, int radius = 0);

@@ -96,7 +96,7 @@ void View::buildSheet(const UI &u) {
   int bodyFirst = 0, bodyLines = 12;
   std::vector<Hint> left, right;
   int topFocus = -1;
-  enum Special { NoSpecial, About, ControlsTest, ControlsPick, ControlsPad } special = NoSpecial;
+  enum Special { NoSpecial, About, ControlsTest, ControlsPick, ControlsPad, ControlsMap } special = NoSpecial;
   // Labels and values are given in English and shown translated.
   auto row = [&](Row::Kind kind, const std::string &label, const std::string &value = "", bool on = false) {
     Row r;
@@ -148,20 +148,26 @@ void View::buildSheet(const UI &u) {
     subtitle = u.gameOptions ? u.gameEntry.name : tr("Default for every game");
     int mode = 0;
     auto i = values().find("performanceMetrics");
-    if (i != values().end() && i->second.is_integer() && i->second.as_integer() >= 0 && i->second.as_integer() <= 2)
+    if (i != values().end() && i->second.is_integer() && i->second.as_integer() >= 0 && i->second.as_integer() <= 3)
       mode = i->second.as_integer();
-    const char *modes[] = {"Off", "FPS", "FPS and frame timing"};
+    const char *modes[] = {"Off", "FPS", "FPS and frame timing", "Full stats"};
     row(Row::Choice, "Overlay in game", modes[mode]);
     row(Row::Toggle, "Fast forward with <l>+<r>", "", boolean("fastForward", true));
     focusRow = u.setting;
     if (u.setting == 1)
       notes = {tr("<l>+<r> switches up to twice the speed; »» shows in the corner while it is on. Busy maps run as fast "
                   "as they can."),
-               tr("Any button can also be mapped to Fast forward in Controls. Applies the next time a game starts.")};
+               tr(u.inGame ? "Any button can also be mapped to Fast forward in Controls."
+                           : "Any button can also be mapped to Fast forward in Controls. Applies the next time a game starts.")};
+    else if (mode == 3)
+      notes = {tr("Full stats add how busy the game's main thread is, the CPU and GPU speeds, memory and video memory, "
+                  "and the battery: charge, time left, temperature and an estimate of the power drawn."),
+               tr("The power estimate shows after about a minute away from the charger.")};
     else
       notes = {tr("FPS: frames shown each second. MS: average time between frames, waits included. Peak: the longest frame "
                   "in about the last five seconds."),
-               tr("Drawn in an empty border when there is one, otherwise in a corner. Applies the next time a game starts.")};
+               tr(u.inGame ? "Drawn in an empty border when there is one, otherwise in a corner."
+                           : "Drawn in an empty border when there is one, otherwise in a corner. Applies the next time a game starts.")};
     left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", u.gameOptions ? "Use default" : "Off", Button::Square), back};
   };
   auto rtpPage = [&] {
@@ -223,6 +229,11 @@ void View::buildSheet(const UI &u) {
                                 : "Whole screen, halves and corners are invisible touch zones.")};
       left = {hint("btn-cross-26", "Map zone", Button::Cross), back};
       right = {{nullptr, tr("Left and right: mode or zone"), Button::None}};
+    } else if (u.controlsMap()) {
+      special = ControlsMap;
+      title = tr("Controls");
+      left = {hint("btn-cross-26", "Change", Button::Cross), back};
+      right = {{nullptr, tr("D-pad: move around the picture"), Button::None}};
     } else {
       title = tr(u.controlsAdvanced ? "Sticks and pointer" : "Controls");
       for (int i = 0; i < u.controlsCount(); ++i)
@@ -283,11 +294,20 @@ void View::buildSheet(const UI &u) {
       const char *names[] = {"Controls", "Display", "Audio and MIDI", "Performance and speed", "RTP locations",
                              "Rename", "Game information", "Play", "Remove from library", "Delete the ZIP, keep the game"};
       Row::Kind kinds[] = {Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Action, Row::Nav, Row::Primary, Row::Danger, Row::Danger};
+      // Over a running game: resume, the settings that apply at once, leave.
+      const char *playing[] = {"Resume", "Controls", "Display", "Performance and speed", "Back to library"};
+      Row::Kind playingKinds[] = {Row::Primary, Row::Nav, Row::Nav, Row::Nav, Row::Plain};
       for (int i = 0; i < u.gameOptionsCount(); ++i)
-        row(kinds[i], names[i]);
+        row(u.inGame ? playingKinds[i] : kinds[i], u.inGame ? playing[i] : names[i]);
       focusRow = u.setting;
       first = u.settingFirst;
-      left = {hint("btn-cross-26", "Open", Button::Cross), back};
+      if (u.inGame) {
+        section = tr("Paused");
+        notes = {tr("Changes apply as soon as you make them and are saved for this game."),
+                 tr("Open this menu again: hold <l>+<r>+<start>, or tap the icon in the screen's empty border.")};
+        left = {hint("btn-cross-26", "Open", Button::Cross), hint("btn-circle-26", "Resume", Button::Circle)};
+      } else
+        left = {hint("btn-cross-26", "Open", Button::Cross), back};
     } else if (u.page == Page::Audio) {
       title = tr("Audio and MIDI");
       subtitle = u.gameEntry.name;
@@ -409,6 +429,7 @@ void View::buildSheet(const UI &u) {
       auto masked = [](const std::string &key) {
         return key.empty() ? std::string("Add a key") : key.size() <= 8 ? std::string("Saved") : key.substr(0, 4) + "\xe2\x80\xa6" + key.substr(key.size() - 4);
       };
+      row(Row::Toggle, "Download game info automatically", "", u.autoGameInfo);
       row(Row::Toggle, "Blur adult artwork", "", u.blurAdult);
       row(Row::Nav, "SteamGridDB", masked(u.readKey(0)));
       row(Row::Nav, "IGDB client ID", masked(u.readKey(1)));
@@ -417,8 +438,13 @@ void View::buildSheet(const UI &u) {
       row(Row::Info, "Steam, DLsite, VNDB, itch.io", "No key needed");
       focusRow = u.setting;
       if (u.setting == 0)
+        notes = {tr("Each new game is looked up once, in the background, while HardRPG is open and online. "
+                    "Triangle on a game looks it up again and lets you pick the pictures."),
+                 tr("Your own pictures and music: put cover, hero (the background), logo (PNG or JPG) or theme.ogg in "
+                    "ux0:/data/hardrpg/art/<game name>/. They are used instead of downloaded ones.")};
+      else if (u.setting == 1)
         notes = {tr("Covers and backgrounds a source marks as adult are shown blurred in the library and the artwork chooser.")};
-      else if (u.setting == 2 || u.setting == 3)
+      else if (u.setting == 3 || u.setting == 4)
         notes = {tr("IGDB: release details, covers and screenshots. Free: sign in at dev.twitch.tv/console, register an "
                     "application (any name, redirect http://localhost, category Application Integration), then copy "
                     "its Client ID and make a New Secret."),
@@ -428,8 +454,8 @@ void View::buildSheet(const UI &u) {
                     "Preferences, API."),
                  tr("RAWG: release dates, developers and genres. Free key: rawg.io/apidocs."),
                  tr("With no source knowing a game, its own title screen is used.")};
-      left = {u.setting == 0 ? hint("btn-cross-26", "Change", Button::Cross) : hint("btn-cross-26", "Type key", Button::Cross)};
-      if (u.setting > 0)
+      left = {u.setting <= 1 ? hint("btn-cross-26", "Change", Button::Cross) : hint("btn-cross-26", "Type key", Button::Cross)};
+      if (u.setting > 1)
         left.push_back(hint("btn-square-26", "Remove key", Button::Square));
       left.push_back(back);
     } else if (u.page == Page::Sound) {
@@ -442,8 +468,8 @@ void View::buildSheet(const UI &u) {
       focusRow = u.setting;
       if (u.setting >= 2)
         notes = {tr("Plays the highlighted game's own title music, read from its files. Nothing is downloaded."),
-                 tr("A ZIP game plays it once it has been unpacked. Put a hardrpg-theme.ogg (or .mp3 or .wav) in a "
-                    "game's folder to choose its music. MIDI titles stay silent.")};
+                 tr("Each game's track is found once and kept, so it starts at once next time. Put a hardrpg-theme.ogg "
+                    "(or .mp3 or .wav) in a game's folder to choose its music. MIDI titles stay silent.")};
       else
         notes = {tr("Sounds for moving, opening, going back and starting a game.")};
       left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", "Default", Button::Square), back};
@@ -483,7 +509,12 @@ void View::buildSheet(const UI &u) {
   }
 
   // Background: the last game shown on home, far back behind a dark veil.
-  {
+  // Over a running game (overlay): only the veil, so the paused game shows
+  // through it.
+  if (overlay) {
+    // Nothing: the engine dims the game on the GPU, which costs nothing
+    // here (a full-screen fill is the slowest thing the CPU draws).
+  } else {
     Quad q;
     q.color = ink;
     q.w = float(width), q.h = float(height);
@@ -677,13 +708,114 @@ void View::buildSheet(const UI &u) {
       auto &layer = rowCache[key];
       if (layer.key.empty()) {
         beginLayer(layer, key, w, h);
-        int size = name.size() > 5 ? 12 : name.size() > 2 ? 14 : 17;
+        int size = name.size() > 8 ? 11 : name.size() > 5 ? 12 : name.size() > 2 ? 14 : 17;
         label(w / 2, (h - size - 4) / 2, name, size, used && !here ? faint : white, 255, false, 0, w - 4);
         endLayer();
       }
       place(layer.image, x, ky);
     }
     y = 463;
+  } else if (special == ControlsMap) {
+    // The console, each button's mapping in a label beside it with a line to
+    // the button, the screen as the touch screen's button, and pills below.
+    const Image &art = icon("vita-640");
+    const double k = UI::mapArtW / 1800.0;
+    int sx, sy, sw, sh;
+    UI::controlsRect(14, sx, sy, sw, sh);
+    bool screenHere = u.setting == 14;
+    if (screenHere)
+      solidQuad(ruby, sx - 3, sy - 3, sw + 6, sh + 6, 1, 6);
+    solidQuad({10, 10, 12}, sx, sy, sw, sh, 1, 2);
+    if (!art.empty()) {
+      Quad q;
+      q.image = &art;
+      q.x = float(UI::mapArtX), q.y = float(UI::mapArtY), q.w = float(UI::mapArtW);
+      q.h = float(art.height * double(UI::mapArtW) / art.width);
+      scene.push_back(q);
+    }
+    if (screenHere)
+      solidQuad(ruby, sx, sy, sw, sh, 0.18, 2);
+    {
+      std::string key = "mapscreen|" + u.controlValue(14) + "|" + languageCode(language());
+      auto &l = rowCache[key];
+      if (l.key.empty()) {
+        beginLayer(l, key, sw - 16, 64);
+        label((sw - 16) / 2, 0, tr("Front touch screen"), 12, faint, 255, false, 0, sw - 20);
+        auto lines = wrap(u.controlValue(14), 15, sw - 24);
+        for (size_t i = 0; i < lines.size() && i < 2; ++i)
+          label((sw - 16) / 2, 20 + int(i) * 19, lines[i], 15, white, 255, false, 0, sw - 20);
+        endLayer();
+      }
+      place(l.image, sx + 8, sy + sh / 2 - 30);
+    }
+    (void)k;
+    // Lines first, so the labels sit on top of them.
+    for (int row = 1; row <= 12; ++row) {
+      int x, y, w, h, ax, ay;
+      UI::controlsRect(row, x, y, w, h);
+      UI::controlsAnchor(row, ax, ay);
+      bool here = u.setting == row;
+      Color c = here ? ruby : white;
+      double a = here ? 1 : 0.42;
+      int ly = y + h / 2, from = x + w / 2 < 480 ? x + w : x;
+      int x0 = std::min(from, ax), x1 = std::max(from, ax);
+      solidQuad({0, 0, 0}, x0 - 1, ly - 2, x1 - x0 + 2, 4, 0.45);
+      solidQuad(c, x0, ly - 1, x1 - x0, 2, a);
+      int y0 = std::min(ly, ay), y1 = std::max(ly, ay);
+      if (y1 > y0) {
+        solidQuad({0, 0, 0}, ax - 2, y0 - 1, 4, y1 - y0 + 2, 0.45);
+        solidQuad(c, ax - 1, y0, 2, y1 - y0, a);
+      }
+      solidQuad(c, ax - 4, ay - 4, 8, 8, here ? 1 : 0.8, 4);
+    }
+    for (int row = 1; row <= 12; ++row) {
+      int x, y, w, h;
+      UI::controlsRect(row, x, y, w, h);
+      bool here = u.setting == row;
+      solidQuad(here ? ruby : Color{24, 24, 28}, x, y, w, h, here ? 1 : 0.92, 8);
+      if (!here)
+        solidQuad(white, x, y, w, h, 0.06, 8);
+      std::string text = std::string(buttonIcon(row - 1)) + "  " + u.controlValue(row);
+      std::string key = "mapbutton|" + text + "|" + std::to_string(w);
+      auto &l = rowCache[key];
+      if (l.key.empty()) {
+        beginLayer(l, key, w - 16, h);
+        label(0, (h - 20) / 2, text, 15, white, 255, false, -1, w - 18);
+        endLayer();
+      }
+      place(l.image, x + 10, y);
+    }
+    // The other rows: switches and pages, as pills.
+    for (int row : {0, 13, 15, 16, 17, 18}) {
+      int x, y, w, h;
+      UI::controlsRect(row, x, y, w, h);
+      bool here = u.setting == row;
+      solidQuad(here ? ruby : white, x, y, w, h, here ? 1 : 0.1, 10);
+      static const char *names[] = {"Custom controls", "", "", "", "", "", "", "", "", "", "", "", "",
+                                    "Tap to walk", "", "Rear touch pad", "Sticks and pointer", "Test inputs",
+                                    "Reset everything"};
+      std::string value = row == 0 ? tr(u.controls.enabled ? "On" : "Off") : row == 13 ? tr(u.controls.tapToWalk ? "On" : "Off")
+                          : row == 15 ? u.controlValue(15) : row == 18 ? tr("Back to defaults") : tr("Open");
+      std::string key = std::string("mappill|") + names[row] + "|" + value + "|" + languageCode(language());
+      auto &l = rowCache[key];
+      if (l.key.empty()) {
+        beginLayer(l, key, w - 12, h);
+        label(0, 6, tr(names[row]), 12, {214, 214, 218}, 255, false, -1, w - 14);
+        label(0, 24, value, 14, white, 255, true, -1, w - 14);
+        endLayer();
+      }
+      place(l.image, x + 8, y);
+    }
+    // What the focus is on, or the last message, in words.
+    std::string line = !u.message.empty() ? u.message : u.controlLabel(u.setting) + ":  " + u.controlValue(u.setting);
+    auto &l = rowCache["mapline|" + line];
+    if (l.key.empty()) {
+      beginLayer(l, "mapline|" + line, 700, 22);
+      label(350, 0, line, 14, muted, 255, false, 0, 696);
+      endLayer();
+    }
+    place(l.image, 130, 413);
+    y = 600; // no notes
   } else if (special == ControlsPad) {
     bool rear = u.controlsPad == 2;
     int x, py, w, h;
@@ -701,47 +833,109 @@ void View::buildSheet(const UI &u) {
       endLayer();
     }
     place(mode.image, x, py);
-    // The surface as the player holds it.
-    solidQuad(white, 214, 200, 668, 240, 0.04, 14);
-    std::string surfaceKey = std::string("padsurface|") + (rear ? "rear|" : "front|") + languageCode(language());
+    // The console as the player holds it, front or back, with each zone
+    // where it really is: Tokyoship's illustration (CC BY 3.0, see
+    // licenses/Vita-illustration.txt), or its outline for the back.
+    int sx, sy, sw, sh;
+    UI::padSurface(sx, sy, sw, sh, rear);
+    const Image &front = icon("vita-640");
+    const Image &back = icon("vita-rear-640");
+    if (rear && back.empty() && vitaBack.empty() && !front.empty()) {
+      // The back: the same outline in the console's colour.
+      vitaBack = front;
+      for (size_t i = 0; i < vitaBack.rgba.size(); i += 4) {
+        unsigned a = vitaBack.rgba[i + 3];
+        vitaBack.rgba[i] = uint8_t(38 * a / 255);
+        vitaBack.rgba[i + 1] = uint8_t(38 * a / 255);
+        vitaBack.rgba[i + 2] = uint8_t(42 * a / 255);
+      }
+      vitaBack.touch();
+    }
+    // The back: the project's picture; its outline when that is missing.
+    const Image &art = rear ? (back.empty() ? vitaBack : back) : front;
+    if (rear && back.empty())
+      UI::padSurface(sx, sy, sw, sh); // the outline has no pad drawn: use the screen's place
+    double artH = art.empty() ? 0 : art.height * double(UI::padArtW) / art.width;
+    if (!rear)
+      solidQuad({10, 10, 12}, sx, sy, sw, sh, 1, 2);
+    if (!art.empty()) {
+      Quad q;
+      q.image = &art;
+      q.x = float(UI::padArtX), q.y = float(UI::padArtY), q.w = float(UI::padArtW), q.h = float(artH);
+      scene.push_back(q);
+    }
+    if (rear && back.empty())
+      solidQuad({70, 70, 76}, sx, sy, sw, sh, 1, 12); // the touch pad
+    else if (rear)
+      solidQuad(white, sx, sy, sw, sh, 0.06, 6); // the pad, lightly marked
+    int padMode = rear ? u.controls.rear : u.controls.front;
+    bool drawn = !rear && (padMode == 1 || padMode == 3);
+    std::string surfaceKey = std::string("padsurface|") + (rear ? "rear|" : "front|") + std::to_string(drawn) + "|" +
+                             languageCode(language());
     auto &caption = rowCache[surfaceKey];
     if (caption.key.empty()) {
       beginLayer(caption, surfaceKey, 640, 18);
-      label(0, 0, tr(rear ? "The back of the console, left and right as you hold it" : "The screen"), 12, faint);
+      label(0, 0,
+            tr(rear    ? "The back of the console, left and right as you hold it"
+               : drawn ? "Drawn on the game picture, which is a different size in each game"
+                       : "The whole screen, black borders included"),
+            12, faint);
       endLayer();
     }
-    place(caption.image, 228, 204);
+    place(caption.image, UI::padArtX, UI::padArtY - 19);
+    if (drawn) {
+      // The example game picture the drawn buttons sit in.
+      int gx, gy, gw, gh;
+      UI::padGamePicture(gx, gy, gw, gh);
+      solidQuad(white, gx, gy, gw, gh, 0.08, 0);
+      if (padMode == 3)
+        solidQuad(white, gx, gy + gh * .55, gw * .36, gh * .45, 0.22, 6); // the D-pad
+    }
     if (u.controlsCount() == 1) {
-      int m = rear ? u.controls.rear : u.controls.front;
-      std::string text = tr(m == 2 ? (rear ? "Trackpad: hold <l> and slide to move the pointer." : "Mouse pointer: touches move and click the pointer.")
-                                   : "Off. Choose a mode with Left and Right to map zones.");
+      std::string text = tr(padMode == 2 ? (rear ? "Trackpad: hold <l> and slide to move the pointer." : "Mouse pointer: touches move and click the pointer.")
+                                      : "Off. Choose a mode with Left and Right to map zones.");
       auto &l = rowCache["padoff|" + text];
       if (l.key.empty()) {
-        beginLayer(l, "padoff|" + text, 616, 24);
-        label(0, 0, text, 17, muted);
+        beginLayer(l, "padoff|" + text, sw - 20, 40);
+        auto lines = wrap(text, 14, sw - 20);
+        for (size_t i = 0; i < lines.size() && i < 2; ++i)
+          label((sw - 20) / 2, int(i) * 19, lines[i], 14, muted, 255, false, 0);
         endLayer();
       }
-      place(l.image, 240, 300);
+      place(l.image, sx + 10, sy + sh / 2 - 18);
     }
     for (int r = 1; r < u.controlsCount(); ++r) {
       u.padRowRect(r, x, py, w, h);
       bool here = u.setting == r;
-      if (here)
-        solidQuad(ruby, x, py, w, h, 0.9, 10);
-      else
-        solidQuad(white, x, py, w, h, 0.1, 10);
-      std::string name = u.zoneName(r);
-      std::string zkey = "zone|" + name + "|" + u.controlValue(r) + "|" + std::to_string(w) + "x" + std::to_string(h);
+      solidQuad(here ? ruby : white, x, py, w, h, here ? 0.9 : 0.18, 6);
+      if (!here)
+        solidQuad({0, 0, 0}, x + 1, py + 1, w - 2, h - 2, 0.25, 5);
+      std::string zkey = "zone|" + u.controlValue(r) + "|" + std::to_string(w) + "x" + std::to_string(h);
       auto &zone = rowCache[zkey];
       if (zone.key.empty()) {
         beginLayer(zone, zkey, w, h);
-        label(12, 10, name, 14, {230, 230, 232});
-        label(12, h > 120 ? h / 2 - 16 : 34, u.controlValue(r), 22, white, 255, true, -1, w - 24);
+        // Small zones show only what they do.
+        int size = h < 50 || w < 90 ? 12 : 16;
+        auto lines = wrap(u.controlValue(r), size, w - 8);
+        int lineH = size + 3, top = (h - int(std::min<size_t>(lines.size(), 2)) * lineH) / 2;
+        for (size_t i = 0; i < lines.size() && i < 2; ++i)
+          label(w / 2, top + int(i) * lineH, lines[i], size, white, 255, size > 12, 0, w - 6);
         endLayer();
       }
       place(zone.image, x, py);
     }
-    y = 450;
+    // Which zone the focus is on, in words, under the picture.
+    if (u.setting >= 1) {
+      std::string text = u.zoneName(u.setting) + ":  " + u.controlValue(u.setting);
+      auto &l = rowCache["padfocus|" + text];
+      if (l.key.empty()) {
+        beginLayer(l, "padfocus|" + text, 560, 22);
+        label(280, 0, text, 15, white, 255, false, 0, 556);
+        endLayer();
+      }
+      place(l.image, UI::padArtX, UI::padArtY + artH + 2);
+    }
+    y = 474;
   } else if (special == ControlsTest) {
     // A drawing of the Vita: each button lights up ruby while held, the
     // sticks' dots follow the sticks, and fingers show on the screen and on

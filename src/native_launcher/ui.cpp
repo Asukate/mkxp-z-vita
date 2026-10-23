@@ -3,6 +3,7 @@
 #include "i18n.h"
 #include "release.h"
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <fstream>
 #include <sstream>
@@ -101,10 +102,55 @@ std::string UI::themeFolder() const {
   if (!themeMusic || browser || !(focus == Focus::Home || gameOptions))
     return "";
   auto *e = homeEntry();
-  if (!e || e->kind == Kind::Folder)
+  return e ? themeSource(*e) : "";
+}
+std::string UI::themeSource(const Entry &e) const {
+  if (e.kind == Kind::Folder)
     return "";
-  // A ZIP game plays from its unpacked copy, once there is one.
-  return e->node.archive ? model.paths.at("cache/zip-" + key(e->node.identity(model.paths))) : e->node.path();
+  auto custom = customThemes.find(entryKey(e));
+  if (custom != customThemes.end())
+    return custom->second;
+  if (!e.node.archive)
+    return e.node.path();
+  // A ZIP game plays from its unpacked copy, or from the ZIP itself.
+  auto id = e.node.identity(model.paths);
+  auto found = themeSourceCache.find(id);
+  if (found != themeSourceCache.end())
+    return found->second;
+  auto unpacked = model.paths.at("cache/zip-" + key(id));
+  return themeSourceCache[id] = directory(unpacked) ? unpacked : e.node.path();
+}
+std::vector<std::string> UI::themeSources() const {
+  std::vector<std::string> out;
+  if (!themeMusic)
+    return out;
+  for (auto &e : model.list) {
+    auto s = themeSource(e);
+    if (!s.empty() && std::find(out.begin(), out.end(), s) == out.end())
+      out.push_back(s);
+  }
+  return out;
+}
+std::vector<std::string> UI::themeNearby() const {
+  std::vector<std::string> out;
+  if (themeFolder().empty() || home.grid)
+    return out;
+  auto list = homeList();
+  for (int i : {home.target + 1, home.target - 1})
+    if (i >= 0 && i < int(list.size()))
+      out.push_back(themeSource(model.list[list[size_t(i)]]));
+  return out;
+}
+std::vector<std::string> UI::rtpFolders() const {
+  std::vector<std::string> out;
+  try {
+    auto paths = model.rtpPaths(); // kept: the loop reads into it
+    for (auto &kv : paths.as_object())
+      if (kv.second.is_string() && directory(kv.second.as_string()))
+        out.push_back(kv.second.as_string());
+  } catch (...) {
+  }
+  return out;
 }
 UI::UI(Paths paths, bool scan)
     : model(std::move(paths), scan),
@@ -393,6 +439,19 @@ void UI::sheetTouch(int x, int y) {
     if (again)
       action(Button::Cross);
   };
+  if (controlsMap()) {
+    for (int row = 0; row <= 18; ++row) {
+      int rx, ry, rw, rh;
+      if (controlsRect(row, rx, ry, rw, rh) && inside(x, y, rx, ry, rw, rh)) {
+        bool again = setting == row;
+        setting = row;
+        if (again)
+          action(Button::Cross);
+        return;
+      }
+    }
+    return;
+  }
   if (page == Page::Controls) {
     if (controlsTesting)
       return;
@@ -482,6 +541,18 @@ void UI::openGameMenu(size_t index) {
     canFreeZip = !r.zip.empty() && !r.unpacked.empty();
   }
   gameOptions = true;
+  gameSetting = setting = settingFirst = 0;
+  page = Page::Game;
+  focus = Focus::Settings;
+  message.clear();
+}
+void UI::openInGame(const Entry &entry) {
+  gameEntry = gameMenuSource = entry;
+  displayValues = model.gameSettings(entry);
+  canFreeZip = false;
+  gameOptions = inGame = true;
+  inGameExit = Staying;
+  inGameChanged = false;
   gameSetting = setting = settingFirst = 0;
   page = Page::Game;
   focus = Focus::Settings;
@@ -625,6 +696,10 @@ void UI::gameAction(Button b) {
     message.clear();
     return;
   }
+  if (b == Button::Circle && inGame && page == Page::Game) {
+    inGameExit = Resume;
+    return;
+  }
   if (b == Button::Circle) {
     if (page == Page::Game) {
       gameOptions = false;
@@ -638,6 +713,11 @@ void UI::gameAction(Button b) {
     message.clear();
     return;
   }
+  if (controlsMap() && (b == Button::Up || b == Button::Down || b == Button::Left || b == Button::Right)) {
+    setting = controlsNeighbor(setting, b);
+    message.clear();
+    return;
+  }
   if (b == Button::Up || b == Button::Down) {
     int step = b == Button::Up ? -1 : 1;
     if (page == Page::Rtp)
@@ -647,6 +727,27 @@ void UI::gameAction(Button b) {
       move(setting, settingFirst, count, 7, step);
     }
     message.clear();
+    return;
+  }
+  if (page == Page::Game && b == Button::Cross && inGame) {
+    gameSetting = setting;
+    switch (setting) {
+    case 0:
+      inGameExit = Resume;
+      break;
+    case 1:
+      openControls();
+      break;
+    case 2:
+      openPage(Page::Display);
+      break;
+    case 3:
+      openPage(Page::Metrics);
+      break;
+    case 4:
+      inGameExit = BackToLibrary;
+      break;
+    }
     return;
   }
   if (page == Page::Game && b == Button::Cross) {
@@ -730,7 +831,84 @@ void UI::gameAction(Button b) {
       } else if (b == Button::Cross)
         openBrowser(BrowseMode::Rtp);
     }
+    inGameChanged = inGameChanged || page == Page::Display || page == Page::Metrics;
   }
+}
+namespace {
+// Buttons on the drawing (Tokyoship's illustration, 1800 px wide), in
+// controlSources order: Cross, Circle, Square, Triangle, Select, Start, Up,
+// Down, Left, Right, L, R.
+const int mapButtons[12][2] = {{1627, 350}, {1707, 273}, {1547, 273}, {1627, 197}, {1550, 644}, {1648, 644},
+                               {171, 208},  {171, 342},  {104, 274},  {238, 274},  {440, 34},   {1660, 34}};
+// Label columns, top to bottom, as button indexes.
+const int mapLeft[] = {10, 6, 8, 9, 7};
+const int mapRight[] = {11, 3, 1, 2, 0, 4, 5};
+const int mapPills[] = {0, 13, 15, 16, 17, 18};
+} // namespace
+bool UI::controlsRect(int row, int &x, int &y, int &w, int &h) {
+  const double k = mapArtW / 1800.0;
+  if (row == 14) { // the screen in the drawing
+    x = mapArtX + int(356 * k + .5), y = mapArtY + int(66 * k + .5);
+    w = int(1087 * k + .5), h = int(607 * k + .5);
+    return true;
+  }
+  for (int i = 0; i < 6; ++i)
+    if (mapPills[i] == row) {
+      x = 16 + i * 156, y = 440, w = 150, h = 46;
+      return true;
+    }
+  if (row < 1 || row > 12)
+    return false;
+  int button = row - 1;
+  for (int i = 0; i < 5; ++i)
+    if (mapLeft[i] == button) {
+      x = 16, y = 150 + i * 52, w = 190, h = 36;
+      return true;
+    }
+  for (int i = 0; i < 7; ++i)
+    if (mapRight[i] == button) {
+      x = 754, y = 150 + i * 41, w = 190, h = 36;
+      return true;
+    }
+  return false;
+}
+bool UI::controlsAnchor(int row, int &x, int &y) {
+  if (row < 1 || row > 12)
+    return false;
+  const double k = mapArtW / 1800.0;
+  x = mapArtX + int(mapButtons[row - 1][0] * k + .5);
+  y = mapArtY + int(mapButtons[row - 1][1] * k + .5);
+  return true;
+}
+int UI::controlsNeighbor(int row, Button b) {
+  int x, y, w, h;
+  if (!controlsRect(row, x, y, w, h))
+    return row;
+  double cx = x + w / 2.0, cy = y + h / 2.0;
+  bool vertical = b == Button::Up || b == Button::Down;
+  int best = row;
+  double bestScore = 1e18;
+  for (int other = 0; other <= 18; ++other) {
+    int ox, oy, ow, oh;
+    if (other == row || !controlsRect(other, ox, oy, ow, oh))
+      continue;
+    double dx = ox + ow / 2.0 - cx, dy = oy + oh / 2.0 - cy;
+    // Its centre must be that way.
+    double toward = b == Button::Up ? -dy : b == Button::Down ? dy : b == Button::Left ? -dx : dx;
+    if (toward <= 1)
+      continue;
+    // The gap to it that way, and its gap to the side (none when the two
+    // overlap side to side): the nearest one in line wins.
+    auto gap = [](int a0, int a1, int b0, int b1) { return std::max(0, std::max(b0 - a1, a0 - b1)); };
+    double ahead = vertical ? gap(y, y + h, oy, oy + oh) : gap(x, x + w, ox, ox + ow);
+    double side = vertical ? gap(x, x + w, ox, ox + ow) : gap(y, y + h, oy, oy + oh);
+    double score = ahead + side * 4 + toward * 0.01;
+    if (score < bestScore) {
+      bestScore = score;
+      best = other;
+    }
+  }
+  return best;
 }
 // The controls menu has two lists. The main one is what most games need:
 // the switch, one row per button, then the tester and reset. Touch zones,
@@ -767,7 +945,10 @@ void UI::assignControl(int value) {
     // Choosing a mapping is asking for custom controls.
     controls.enabled = true;
     model.saveControls(controlsEntry, controls);
-    message = trf("{} now does {}. Custom controls are on; applies on next launch.", {controlLabel(setting), controlText(value)});
+    inGameChanged = true;
+    message = trf(inGame ? "{} now does {}. Custom controls are on and apply now."
+                         : "{} now does {}. Custom controls are on; applies on next launch.",
+                  {controlLabel(setting), controlText(value)});
   }
   controlPicking = false;
 }
@@ -807,8 +988,8 @@ void UI::pickControlKey(Button b) {
   }
 }
 static const char *const frontModeNames[] = {
-    "Off", "Two drawn corner buttons", "Mouse pointer", "D-pad + drawn button",
-    "Whole screen", "Left / right halves", "Four corners"};
+    "Off", "Two buttons on the game picture", "Mouse pointer", "D-pad and button on the game picture",
+    "Whole screen", "Screen halves, left and right", "Screen corners"};
 static const char *const rearModeNames[] = {
     "Off", "Two upper zones", "Trackpad (hold <l>)", "Four corners",
     "Whole pad", "Left / right halves"};
@@ -923,11 +1104,11 @@ void UI::changeControl(int step) {
       break;
     }
   }
-  model.saveControls(controlsEntry,controls);
+  model.saveControls(controlsEntry,controls);inGameChanged=true;
   if(message.empty())
     message=setting==13 && !controlsAdvanced && !controlsPad && controls.tapToWalk
             ?tr("Tap to walk on: works in games with standard tile movement. Next launch.")
-            :trf("Saved for {}. Applies on next launch.",{controlsEntry.name});
+            :trf(inGame ? "Saved for {}. Applied now." : "Saved for {}. Applies on next launch.",{controlsEntry.name});
 }
 void UI::refreshFolders() { gameFolders = model.searchFolders(); }
 // The key rows, in the order the Game info and artwork page lists them.
@@ -1000,7 +1181,7 @@ void UI::changeDisplay(int step, bool reset) {
   else model.changeDisplay(k, v);
   displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
   message = gameOptions
-                ? trf("Saved for {}. Applies on next launch.", {gameEntry.name})
+                ? trf(inGame ? "Saved for {}. Applied now." : "Saved for {}. Applies on next launch.", {gameEntry.name})
                 : tr("Display settings saved for the next game launch.");
 }
 void UI::changeMetrics(int step, bool reset) {
@@ -1015,23 +1196,23 @@ void UI::changeMetrics(int step, bool reset) {
     else
       model.changeDisplay("fastForward", value);
     displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
-    message = gameOptions ? trf("Saved for {}. Applies on next launch.", {gameEntry.name})
+    message = gameOptions ? trf(inGame ? "Saved for {}. Applied now." : "Saved for {}. Applies on next launch.", {gameEntry.name})
                           : tr("Fast forward saved for the next game launch.");
     return;
   }
   auto i = displayValues.as_object().find("performanceMetrics");
   int mode = 0;
   if (i != displayValues.as_object().end() && i->second.is_integer() &&
-      i->second.as_integer() >= 0 && i->second.as_integer() <= 2)
+      i->second.as_integer() >= 0 && i->second.as_integer() <= 3)
     mode = i->second.as_integer();
-  auto value = Json::integer_type(reset ? 0 : (mode + step + 3) % 3);
+  auto value = Json::integer_type(reset ? 0 : (mode + step + 4) % 4);
   if (gameOptions)
     model.changeGameSetting(gameEntry, "performanceMetrics", value, reset);
   else
     model.changeDisplay("performanceMetrics", value);
   displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
   message = gameOptions
-                ? trf("Saved for {}. Applies on next launch.", {gameEntry.name})
+                ? trf(inGame ? "Saved for {}. Applied now." : "Saved for {}. Applies on next launch.", {gameEntry.name})
                 : tr("Performance metrics saved for the next game launch.");
 }
 void UI::changeAudio(bool reset) {
@@ -1042,7 +1223,7 @@ void UI::changeAudio(bool reset) {
     value = found->second.as_boolean();
   model.changeGameSetting(gameEntry, keys[setting], Json(!value), reset);
   displayValues = model.gameSettings(gameEntry);
-  message = trf("Saved for {}. Applies on next launch.", {gameEntry.name});
+  message = trf(inGame ? "Saved for {}. Applied now." : "Saved for {}. Applies on next launch.", {gameEntry.name});
 }
 void UI::preparation(const std::string &label) {
   preparationLabel = tr(label);
@@ -1200,11 +1381,17 @@ void UI::openSetting() {
   }
   if (page == Page::Keys) {
     if (setting == 0) {
+      autoGameInfo = !autoGameInfo;
+      savePreferences();
+      message = tr(autoGameInfo ? "New games get their game info automatically." : "Game info downloads only when you ask.");
+      if (!autoGameInfo && artQuiet)
+        artFetch.reset();
+    } else if (setting == 1) {
       blurAdult = !blurAdult;
       savePreferences();
       message = tr(blurAdult ? "Adult artwork is blurred." : "Adult artwork is shown as is.");
     } else
-      editKey(setting - 1);
+      editKey(setting - 2);
     return;
   }
   if (page == Page::Errors) {
@@ -1348,8 +1535,8 @@ void UI::action(Button b) {
           model.activeErrorPath = errors[setting].path;
           message = trf("Saved: {}", {model.exportError()});
         }
-      } else if (page == Page::Keys && setting > 0) {
-        std::remove(keyFile(setting - 1).c_str());
+      } else if (page == Page::Keys && setting > 1) {
+        std::remove(keyFile(setting - 2).c_str());
         message = tr("Key removed.");
       } else if (page == Page::Rtp) {
         model.setRtp(packs[rtpSelected]);

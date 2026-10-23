@@ -1465,7 +1465,10 @@ void ArtFetch::start(std::vector<Job> jobs, const std::string &artRoot, const st
   state->igdbSecret = readKey(dataRoot + "igdb-client-secret.txt");
 #ifdef __vita__
   auto holder = new std::shared_ptr<State>(state);
-  auto thread = sceKernelCreateThread("hardrpg_art_fetch", State::entry, 0x10000100, 256 * 1024, 0, 0, nullptr);
+  // Below the screen and the picture loader, on the core the screen does
+  // not use: decoding downloaded pictures never holds up scrolling.
+  auto thread = sceKernelCreateThread("hardrpg_art_fetch", State::entry, 0x10000100 + 30, 256 * 1024, 0,
+                                      SCE_KERNEL_CPU_MASK_USER_1, nullptr);
   if (thread < 0 || sceKernelStartThread(thread, sizeof(holder), &holder) < 0) {
     if (thread >= 0)
       sceKernelDeleteThread(thread);

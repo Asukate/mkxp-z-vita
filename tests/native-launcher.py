@@ -250,6 +250,75 @@ class NativeLauncher(unittest.TestCase):
         self.assertNotEqual(subprocess.run([str(probe),str(request),str(self.root),
             str(self.storage)+'/'],capture_output=True).returncode,0)
 
+    def test_in_game_menu_edits_the_running_game(self):
+        self.game(self.games/'Running', title='Running')
+        state = self.ui('cross,cross')                      # details, then play
+        self.assertTrue(state['launchRequested'])
+        key = state['entries'][0]['config']
+        game = lambda actions='', snapshot=None: self.run_binary('--in-game', key, '--actions', actions,
+                                                                 *(['--snapshot', snapshot] if snapshot else []))
+        # The game's page with five rows; Resume first.
+        state = game()
+        self.assertTrue(state['inGame'])
+        self.assertEqual((state['page'], state['setting'], state['inGameExit']), (8, 0, 0))
+        self.assertEqual(game('cross')['inGameExit'], 1)            # Resume
+        self.assertEqual(game('circle')['inGameExit'], 1)           # Circle resumes too
+        self.assertEqual(game('down,down,down,down,cross')['inGameExit'], 2)   # Back to library
+        # Display opens the game's own display page; a change is saved for
+        # the game and marked for the engine to apply.
+        state = game('down,down,cross')
+        self.assertEqual((state['page'], state['inGameExit']), (1, 0))
+        state = game('down,down,cross,cross')
+        self.assertTrue(state['inGameChanged'])
+        saved = json.loads((self.root/'config'/f'{key}.json').read_text())
+        self.assertIn('fixedAspectRatio', saved)
+        # Circle on a sub-page goes back to the in-game page, on its row.
+        state = game('down,cross,circle')
+        self.assertEqual((state['page'], state['setting'], state['inGameExit']), (8, 1, 0))
+        # Controls: a change saves this game's controls at once.
+        state = game('down,cross,cross')
+        self.assertTrue(state['inGameChanged'])
+        self.assertTrue((self.root/'controls'/f'{key}.json').exists())
+        # Only the game that is running: another key is refused.
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_binary('--in-game', '0123456789abcdef', '--actions', '')
+        game('', self.storage/'in-game.png')
+
+    def test_details_screenshots_open_full_screen(self):
+        import struct, zlib
+        def png(w, h, rgb):
+            raw = b''.join(b'\0' + bytes(rgb) * w for _ in range(h))
+            chunk = lambda t, d: struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+            return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) +
+                    chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+        self.game(self.games/'Shots', title='Shots')
+        art = self.root/'art'/'shots'
+        art.mkdir(parents=True)
+        for i, rgb in enumerate([(200, 30, 30), (30, 200, 30), (30, 30, 200)], 1):
+            (art/f'shot{i}.png').write_bytes(png(64, 36, rgb))
+        # Details, then Down picks the first screenshot and Cross opens it.
+        state = self.ui('cross,draw,down')
+        self.assertEqual((state['shotsShown'], state['homeShotFocus'], state['homeViewing']), (3, 0, -1))
+        state = self.ui('cross,draw,down,right,cross')
+        self.assertEqual((state['homeShotFocus'], state['homeViewing']), (1, 1))
+        # Left and Right page and wrap; Circle closes and keeps the details.
+        state = self.ui('cross,draw,down,cross,left')
+        self.assertEqual(state['homeViewing'], 2)
+        state = self.ui('cross,draw,down,cross,circle')
+        self.assertEqual(state['homeViewing'], -1)
+        self.assertTrue(state['homeDetails'])
+        self.assertFalse(state['launchRequested'])
+        # Up returns to the game: Cross plays again.
+        self.assertTrue(self.ui('cross,draw,down,up,cross')['launchRequested'])
+        # A tap on the second screenshot opens it; a tap in the middle closes.
+        state = self.ui('cross,draw,touch:500:450')
+        self.assertEqual(state['homeViewing'], 1)
+        self.assertEqual(self.ui('cross,draw,touch:500:450,touch:480:250')['homeViewing'], -1)
+        # Play and Options sit under the cover.
+        self.assertEqual(self.ui('cross,draw,touch:250:460')['homePanel'], 2)
+        self.ui('cross,draw,down,cross', self.storage/'screenshot-viewer.png')
+        self.ui('cross,draw,down', self.storage/'details-shots.png')
+
     def test_touch_scroll_selection_and_filter_boundaries(self):
         for i in range(24): self.game(self.games/f'{i:02}',title=f'Game {i:02}')
         # Swiping the carousel moves the focus without launching.
@@ -264,7 +333,7 @@ class NativeLauncher(unittest.TestCase):
         state=self.ui('touch:704:284,touch:704:284')
         self.assertTrue(state['homeDetails'])
         self.assertFalse(state['launchRequested'])
-        state=self.ui('touch:704:284,touch:704:284,touch:400:460')
+        state=self.ui('touch:704:284,touch:704:284,touch:96:460')
         self.assertTrue(state['launchRequested'])
         self.assertEqual(state['launchingName'],'Game 01')
         # The Add games card ends the shelf; Left stops at the first game.
@@ -507,17 +576,32 @@ class NativeLauncher(unittest.TestCase):
     def test_launcher_preferences_and_artwork_keys(self):
         prefs=self.root/'launcher-preferences.json'
         # Settings: Game info and artwork is row 6, then Sound; Exit is last.
-        # On that page the adult artwork blur is first, then the source keys:
-        # SteamGridDB, IGDB's client ID and secret, RAWG.
-        info=SETTINGS+',down'*6+',cross'
-        self.assertEqual(self.ui(info)['page'],12)
+        # On that page automatic game info is first, then the adult artwork
+        # blur, then the source keys: SteamGridDB, IGDB's client ID and
+        # secret, RAWG.
+        page=SETTINGS+',down'*6+',cross'
+        self.assertEqual(self.ui(page)['page'],12)
+        # Automatic game info starts on and is saved when switched off.
+        self.assertTrue(self.ui()['autoGameInfo'])
+        self.ui(page+',cross')
+        self.assertIs(json.loads(prefs.read_text())['autoGameInfo'],False)
+        self.assertFalse(self.ui()['autoGameInfo'])
+        self.ui(page+',cross')
+        self.assertTrue(self.ui()['autoGameInfo'])
+        info=page+',down'
+
         self.assertTrue(self.ui(SETTINGS+',down'*10+',cross')['exitRequested'])
+        # The blur starts off; an old file's "blurAdult": true is not read.
+        prefs.write_text('{"blurAdult": true}')
+        self.assertFalse(self.ui()['blurAdult'])
         state=self.ui(info+',cross')
-        self.assertFalse(state['blurAdult'])
-        self.assertIs(json.loads(prefs.read_text())['blurAdult'],False)
+        self.assertTrue(state['blurAdult'])
+        self.assertIs(json.loads(prefs.read_text())['blurAdultArtwork'],True)
+        self.assertTrue(self.ui()['blurAdult'])
+        self.ui(info+',cross')
         self.assertFalse(self.ui()['blurAdult'])
         prefs.write_text('{broken')
-        self.assertTrue(self.ui()['blurAdult'])            # a damaged file falls back to blurring
+        self.assertFalse(self.ui()['blurAdult'])           # a damaged file falls back to no blur
         self.ui(info+',square')                            # Square on the blur row removes nothing
         keys=info+',down'
         grid,rawg=self.root/'steamgriddb-key.txt',self.root/'rawg-key.txt'
@@ -645,7 +729,7 @@ class NativeLauncher(unittest.TestCase):
         file.write_text(json.dumps(dict(preloadScript=['keep.rb'])))
         speed = SETTINGS + ',down,down,down,down,cross'
         self.assertEqual(self.ui(speed)['page'], 5)
-        for keys, expected in [(',cross', 1), (',right', 2), (',left', 1)]:
+        for keys, expected in [(',cross', 1), (',right', 2), (',right', 3), (',right', 0), (',left', 3)]:
             self.ui(speed + keys)
             self.assertEqual(config()['performanceMetrics'], expected)
         self.ui(speed + ',square')
@@ -655,7 +739,7 @@ class NativeLauncher(unittest.TestCase):
         self.ui(speed + ',down,left,square')
         self.assertEqual(config(), dict(preloadScript=['keep.rb'], performanceMetrics=0, fastForward=True))
         before = file.read_bytes()
-        for key, invalid in [('SESourceCount', [7]), ('performanceMetrics', [-1, 3, True, 'FPS']),
+        for key, invalid in [('SESourceCount', [7]), ('performanceMetrics', [-1, 4, True, 'FPS']),
                              ('fastForward', [0, 1, 'on', None])]:
             for value in invalid:
                 with self.subTest(key=key, value=value):
@@ -1114,19 +1198,34 @@ class NativeLauncher(unittest.TestCase):
         state=self.ui(GAME+',cross,scroll:18,cross')
         self.assertFalse(state['controls']['enabled'])
 
+    def test_controls_picture_moves_by_direction(self):
+        self.game(self.games/'pic',title='Picture fixture')
+        at = lambda keys: self.ui(GAME+',cross'+keys)['setting']
+        self.assertEqual(at(''), 0)                         # Custom controls, bottom left
+        self.assertEqual(at(',up'), 8)                      # the D-pad's Down label above it
+        self.assertEqual(at(',up,right'), 14)               # the screen beside it
+        self.assertEqual(at(',up,right,right'), 1)          # then the Cross label
+        self.assertEqual(at(',right'), 13)                  # pills go left and right
+        # Cross on a button's label opens the picker; on the screen, its zones.
+        self.assertTrue(self.ui(GAME+',cross,up,up,cross')['controlPicking'])
+        self.assertEqual(self.ui(GAME+',cross,up,right,cross')['controlsPad'], 1)
+        # A tap focuses a label; a second tap opens it.
+        self.assertEqual(self.ui(GAME+',cross,touch:850:330')['setting'], 1)
+        self.assertTrue(self.ui(GAME+',cross,touch:850:330,touch:850:330')['controlPicking'])
+
     def test_buttons_and_touch_zones_map_to_keys(self):
         self.game(self.games/'keys',title='Keys fixture')
         profile=lambda: json.loads(next((self.root/'controls').glob('*.json')).read_text())
         # Cross row: the picker opens; a key from the keyboard rows replaces Confirm.
-        self.assertTrue(self.ui(GAME+',cross,down,cross')['controlPicking'])
-        state=self.ui(GAME+',cross,down,cross,down,down,down,down,right,right,cross')
+        self.assertTrue(self.ui(GAME+',cross,scroll:1,cross')['controlPicking'])
+        state=self.ui(GAME+',cross,scroll:1,cross,down,down,down,down,right,right,cross')
         self.assertFalse(state['controlPicking'])
         key=state['controls']['buttons'][0]
         self.assertGreaterEqual(key,1000)                  # a keyboard key, not an RPG Maker action
         self.assertTrue(state['controls']['enabled'])       # mapping turns custom controls on
         self.assertEqual(profile()['buttons'][0],key)
         # Circle leaves the picker without changing the mapping.
-        state=self.ui(GAME+',cross,down,down,cross,down,down,circle')
+        state=self.ui(GAME+',cross,scroll:2,cross,down,down,circle')
         self.assertFalse(state['controlPicking'])
         self.assertEqual(state['controls']['buttons'][1],12)
         # A saved key outside the offered set is refused on reading.

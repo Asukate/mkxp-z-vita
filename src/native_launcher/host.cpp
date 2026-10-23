@@ -226,7 +226,8 @@ void preview(UI &ui, View &view, const std::string &sfx) {
     };
   }
   std::string themeWanted, themeAsked;
-  uint32_t themeSince = 0;
+  uint32_t themeSince = 0, themeListedAt = 0;
+  audio.search(ui.model.paths.at("cache/themes"), ui.rtpFolders());
   auto followTheme = [&] {
     audio.setLevels(ui.effectsVolume, ui.musicVolume);
     auto folder = ui.themeFolder();
@@ -234,13 +235,19 @@ void preview(UI &ui, View &view, const std::string &sfx) {
     if (folder != themeWanted) {
       themeWanted = folder;
       themeSince = now;
+      if (!themeAsked.empty() && themeAsked != folder) {
+        audio.theme("");
+        themeAsked.clear();
+      }
     }
-    if (themeWanted.empty() && !themeAsked.empty()) {
-      audio.theme("");
-      themeAsked.clear();
-    } else if (themeWanted != themeAsked && now - themeSince >= 700 && !ui.animating()) {
+    if (themeWanted != themeAsked && !themeWanted.empty() && now - themeSince >= 350 && !ui.animating()) {
       audio.theme(themeWanted);
       themeAsked = themeWanted;
+    }
+    audio.nearby(ui.themeNearby());
+    if (now - themeListedAt >= 2000 || !themeListedAt) {
+      themeListedAt = now | 1;
+      audio.prepare(ui.themeSources());
     }
   };
   SDL_Window *window = SDL_CreateWindow("HardRPG native launcher preview",
@@ -390,7 +397,7 @@ int main(int argc, char **argv) {
     }
     hardrpg::Paths paths;
     std::string font = "assets/liberation.ttf", sfx = "launcher/sfx", snapshot, script, actions, releaseFixture,
-                rename, search, text;
+                rename, search, text, inGame;
     bool edit = false, settle = false, returning = false;
     // The welcome guide shows only with "--welcome auto" (as on a first
     // start); other runs go straight to home without marking it seen.
@@ -428,6 +435,37 @@ int main(int argc, char **argv) {
         script = value;
       else if (arg == "--actions")
         actions = value;
+      else if (arg == "--stats-preview") {
+        // The in-game performance overlay's panels, for looking at them.
+        hardrpg::View v(font);
+        std::fill(v.pixels.begin(), v.pixels.end(), 90);
+        std::vector<hardrpg::View::StatRow> rows = {
+            {"Frame", "16.7 ms  \xc2\xb7  peak 21 ms", 0},
+            {"CPU", "63% main thread  \xc2\xb7  444 MHz", 0},
+            {"GPU", "222 MHz  \xc2\xb7  video 41/112 MB", 0},
+            {"Memory", "58/112 MB  \xc2\xb7  free 23 MB", 2},
+            {"Battery", "78%  \xc2\xb7  3 h 12 min  \xc2\xb7  31.4 \xc2\xb0" "C", 0},
+            {"Power draw", "\xe2\x89\x88 1.35 W", 0}};
+        int y = 10;
+        for (int level : {1, 2, 3}) {
+          std::vector<hardrpg::View::StatRow> shown(rows.begin(), rows.begin() + (level == 1 ? 0 : level == 2 ? 1 : 6));
+          const auto &img = v.statsPanel(level == 3 ? "38 FPS" : "60 FPS", level == 3 ? 2 : 1, shown,
+                                         level >= 3 ? 250 : level == 2 ? 200 : 104);
+          for (int r = 0; r < img.height; ++r)
+            for (int c = 0; c < img.width; ++c) {
+              const uint8_t *src = &img.rgba[(size_t(r) * img.width + c) * 4];
+              uint8_t *dst = &v.pixels[(size_t(y + r) * 960 + 10 + c) * 4];
+              for (int k = 0; k < 3; ++k)
+                dst[k] = uint8_t(src[k] + dst[k] * (255 - src[3]) / 255);
+              dst[3] = 255;
+            }
+          y += img.height + 12;
+        }
+        v.save(value);
+        std::puts("{}");
+        return 0;
+      } else if (arg == "--in-game")
+        inGame = value; // the running game's settings key, as the engine has it
       else if (arg == "--battery")
         battery = std::stoi(value);
       else if (arg == "--rename") {
@@ -490,8 +528,15 @@ int main(int argc, char **argv) {
         return rename != "--cancel";
       };
     ui.search(search);
+    if (!inGame.empty()) {
+      Entry playing;
+      if (!ui.model.activeGame(playing, inGame))
+        throw std::runtime_error("No running game with that settings key");
+      ui.openInGame(playing);
+    }
     if(!releaseFixture.empty())ui.offerRelease(newerRelease(readFile(releaseFixture,262144),HARDRPG_VERSION_TAG));
     hardrpg::View view(font);
+    view.overlay = !inGame.empty();
     std::istringstream stream(actions);
     std::string action;
     while (std::getline(stream, action, ','))
@@ -528,6 +573,18 @@ int main(int argc, char **argv) {
             ui.pollArt();
           }
           ui.pollArt();
+        } else if (action == "draw") {
+          // Draw as the device would, until artwork has loaded, so what the
+          // view tells the UI (screenshot count, touch boxes) is known.
+          for (int frame = 0; frame < 600 && ui.animating(); ++frame)
+            ui.tick(1 / 60.0);
+          view.draw(ui);
+          auto start = std::chrono::steady_clock::now();
+          while (view.pendingLoads && std::chrono::steady_clock::now() - start < std::chrono::seconds(10)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            view.draw(ui);
+          }
+          view.draw(ui);
         } else if (action.find("scroll:") == 0)
           ui.scroll(std::stoi(action.substr(7)));
         else if (action == "loadexec-fail")
@@ -578,6 +635,9 @@ int main(int argc, char **argv) {
       o["homePanel"] = int(ui.home.panel);
       o["homeGrid"] = ui.home.grid;
       o["homeDetails"] = ui.home.details;
+      o["homeShotFocus"] = ui.home.shotFocus;
+      o["homeViewing"] = ui.home.viewing;
+      o["shotsShown"] = ui.shotsShown;
       o["homeSort"] = ui.home.sort;
       o["homeDirection"] = ui.home.direction;
       o["blurAdult"] = ui.blurAdult;
@@ -609,11 +669,16 @@ int main(int argc, char **argv) {
     state.as_object()["rtpSelected"] = ui.rtpSelected;
     state.as_object()["missingRtp"] = ui.missingRtp;
     state.as_object()["page"] = int(ui.page);
+    state.as_object()["inGame"] = ui.inGame;
+    state.as_object()["inGameExit"] = int(ui.inGameExit);
+    state.as_object()["inGameChanged"] = ui.inGameChanged;
+    state.as_object()["display"] = ui.displayValues;
     state.as_object()["releaseLines"] = int(ui.releaseReport.size());
     state.as_object()["releaseScroll"] = ui.releaseScroll;
     state.as_object()["releaseTag"] = ui.releaseNotice.tag;
     state.as_object()["controls"] = ui.controls.json();
     state.as_object()["controlsTesting"] = ui.controlsTesting;
+    state.as_object()["controlsPad"] = ui.controlsPad;
     state.as_object()["controlPicking"] = ui.controlPicking;
     state.as_object()["gameOptions"] = ui.gameOptions;
     state.as_object()["configuredGame"] = ui.gameOptions ? ui.gameEntry.name : "";
@@ -638,6 +703,7 @@ int main(int argc, char **argv) {
     state.as_object()["welcomeActive"] = ui.welcome.active;
     state.as_object()["welcomeSlide"] = ui.welcome.slide;
     state.as_object()["welcomeSeen"] = ui.welcomeSeen;
+    state.as_object()["autoGameInfo"] = ui.autoGameInfo;
     std::cout << state.stringify() << "\n";
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

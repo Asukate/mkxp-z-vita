@@ -100,7 +100,7 @@ const Text table[] = {
     {"Title screen", "Pantalla de título", "Tela de título"},
     {"Remove from favourites", "Quitar de favoritos", "Remover dos favoritos"},
     {"Add to favourites", "Añadir a favoritos", "Adicionar aos favoritos"},
-    {"Download game info", "Descargar info del juego", "Baixar info do jogo"},
+    {"Change artwork and info", "Cambiar imágenes e info", "Trocar imagens e info"},
     {"Game info for all games", "Info de todos los juegos", "Info de todos os jogos"},
     {"Game settings", "Ajustes del juego", "Ajustes do jogo"},
     {"Rename", "Cambiar nombre", "Renomear"},
@@ -205,6 +205,17 @@ const Text table[] = {
     {"Add a key", "Añadir clave", "Adicionar chave"},
     {"Saved", "Guardada", "Salva"},
     {"Blur adult artwork", "Difuminar imágenes para adultos", "Desfocar imagens adultas"},
+    {"Download game info automatically", "Descargar info de juegos automáticamente", "Baixar info dos jogos automaticamente"},
+    {"Each new game is looked up once, in the background, while HardRPG is open and online. "
+     "Triangle on a game looks it up again and lets you pick the pictures.",
+     "Cada juego nuevo se busca una vez, en segundo plano, mientras HardRPG está abierto y conectado. "
+     "Triángulo sobre un juego lo busca de nuevo y te deja elegir las imágenes.",
+     "Cada jogo novo é buscado uma vez, em segundo plano, enquanto o HardRPG está aberto e conectado. "
+     "Triângulo num jogo busca de novo e deixa você escolher as imagens."},
+    {"New games get their game info automatically.", "Los juegos nuevos reciben su info automáticamente.",
+     "Os jogos novos recebem a info automaticamente."},
+    {"Game info downloads only when you ask.", "La info de juegos se descarga solo cuando la pides.",
+     "A info dos jogos só é baixada quando você pede."},
     {"No key needed", "Sin clave", "Sem chave"},
     {"Covers and backgrounds a source marks as adult are shown blurred in the library and the artwork chooser.",
      "Las portadas y fondos que una fuente marca para adultos se ven difuminados en la biblioteca y al elegir imágenes.",
@@ -340,11 +351,18 @@ const Text table[] = {
     {"Custom controls are off: this shows the raw buttons.", "Los controles personalizados están desactivados: se ven los botones tal cual.",
      "Os controles personalizados estão desligados: aparecem os botões puros."},
     {"In game this does: {}", "En el juego hace: {}", "No jogo faz: {}"},
-    {"Two drawn corner buttons", "Dos botones en las esquinas", "Dois botões nos cantos"},
+    {"Two buttons on the game picture", "Dos botones sobre la imagen del juego", "Dois botões na imagem do jogo"},
+    {"D-pad and button on the game picture", "Cruceta y botón sobre la imagen del juego",
+     "Direcional e botão na imagem do jogo"},
+    {"Screen halves, left and right", "Mitades de la pantalla, izquierda y derecha", "Metades da tela, esquerda e direita"},
+    {"Screen corners", "Esquinas de la pantalla", "Cantos da tela"},
+    {"Drawn on the game picture, which is a different size in each game",
+     "Dibujados sobre la imagen del juego, que tiene otro tamaño en cada juego",
+     "Desenhados na imagem do jogo, que tem um tamanho diferente em cada jogo"},
+    {"The whole screen, black borders included", "Toda la pantalla, bordes negros incluidos",
+     "A tela inteira, bordas pretas incluídas"},
     {"Mouse pointer", "Puntero", "Ponteiro"},
-    {"D-pad + drawn button", "Cruceta + botón", "Direcional + botão"},
     {"Whole screen", "Toda la pantalla", "Tela inteira"},
-    {"Left / right halves", "Mitades izquierda / derecha", "Metades esquerda / direita"},
     {"Four corners", "Cuatro esquinas", "Quatro cantos"},
     {"Two upper zones", "Dos zonas superiores", "Duas zonas de cima"},
     {"Trackpad (hold <l>)", "Trackpad (mantén <l>)", "Trackpad (segure <l>)"},
@@ -654,21 +672,27 @@ const Text table[] = {
      "Segure <l>+<r>+<select> num jogo para voltar aqui. O que não foi salvo é perdido."},
     {"Game info", "Info de juegos", "Info dos jogos"},
     {"Covers and game details", "Portadas y detalles", "Capas e detalhes"},
-    {"HardRPG can download covers, backgrounds, logos and details such as the year and developer. Press <triangle> Triangle on a game and "
-     "choose Download game info.",
-     "HardRPG puede descargar portadas, fondos, logos y detalles como el año y el desarrollador. Pulsa <triangle> Triángulo sobre un juego y "
-     "elige Descargar info del juego.",
-     "O HardRPG pode baixar capas, fundos, logos e detalhes como o ano e o desenvolvedor. Aperte <triangle> Triângulo num jogo e escolha "
-     "Baixar info do jogo."},
+    {"HardRPG downloads covers, backgrounds, logos and details such as the year and developer by itself while it is "
+     "open and online, one game at a time. Press <triangle> Triangle on a game and choose Change artwork and info to look "
+     "again and pick the pictures.",
+     "HardRPG descarga por sí solo portadas, fondos, logos y detalles como el año y el desarrollador mientras está abierto y "
+     "conectado, un juego a la vez. Pulsa <triangle> Triángulo sobre un juego y elige Cambiar imágenes e info para buscar de "
+     "nuevo y elegir las imágenes.",
+     "O HardRPG baixa sozinho capas, fundos, logos e detalhes como o ano e o desenvolvedor enquanto está aberto e conectado, "
+     "um jogo por vez. Aperte <triangle> Triângulo num jogo e escolha Trocar imagens e info para buscar de novo e escolher as "
+     "imagens."},
     {"Some sources work right away. Others need a free API key, which you can add in Settings, Game info and artwork. Each source "
      "there says where to get its key.",
      "Algunas fuentes funcionan enseguida. Otras necesitan una clave API gratuita, que puedes añadir en Ajustes, Info e imágenes de "
      "juegos. Cada fuente explica ahí dónde conseguir su clave.",
      "Algumas fontes funcionam na hora. Outras precisam de uma chave de API grátis, que você adiciona em Ajustes, Info e imagens "
      "dos jogos. Cada fonte diz ali onde conseguir a chave."},
-    {"You can always keep the pictures you have: the artwork chooser shows what each source found first.",
-     "Siempre puedes quedarte con las imágenes que tienes: primero verás lo que encontró cada fuente.",
-     "Você sempre pode manter as imagens que já tem: primeiro você vê o que cada fonte encontrou."},
+    {"Your own pictures and music: put cover, hero (the background), logo (PNG or JPG) or theme.ogg in "
+     "ux0:/data/hardrpg/art/<game name>/. They are used instead of downloaded ones.",
+     "Tus propias imágenes y música: pon cover, hero (el fondo), logo (PNG o JPG) o theme.ogg en "
+     "ux0:/data/hardrpg/art/<nombre del juego>/. Se usan en lugar de las descargadas.",
+     "Suas próprias imagens e música: coloque cover, hero (o fundo), logo (PNG ou JPG) ou theme.ogg em "
+     "ux0:/data/hardrpg/art/<nome do jogo>/. Elas são usadas no lugar das baixadas."},
     // Launcher sound (Settings, Sound).
     {"Default", "Predeterminado", "Padrão"},
     {"Menu sounds only", "Solo sonidos del menú", "Só sons do menu"},
@@ -686,12 +710,61 @@ const Text table[] = {
     {"Plays the highlighted game's own title music, read from its files. Nothing is downloaded.",
      "Reproduce la música de título del juego seleccionado, leída de sus archivos. No se descarga nada.",
      "Toca a música de título do jogo selecionado, lida dos arquivos dele. Nada é baixado."},
-    {"A ZIP game plays it once it has been unpacked. Put a hardrpg-theme.ogg (or .mp3 or .wav) in a game's folder to choose "
-     "its music. MIDI titles stay silent.",
-     "Un juego en ZIP la reproduce cuando ya se ha descomprimido. Pon un hardrpg-theme.ogg (o .mp3 o .wav) en la carpeta de un "
-     "juego para elegir su música. Los títulos MIDI no suenan.",
-     "Um jogo em ZIP toca depois de descompactado. Coloque um hardrpg-theme.ogg (ou .mp3 ou .wav) na pasta de um jogo para "
-     "escolher a música. Títulos em MIDI ficam em silêncio."},
+    {"Each game's track is found once and kept, so it starts at once next time. Put a hardrpg-theme.ogg (or .mp3 or .wav) "
+     "in a game's folder to choose its music. MIDI titles stay silent.",
+     "La pista de cada juego se busca una vez y se guarda, así empieza al instante la próxima vez. Pon un hardrpg-theme.ogg "
+     "(o .mp3 o .wav) en la carpeta de un juego para elegir su música. Los títulos MIDI no suenan.",
+     "A faixa de cada jogo é encontrada uma vez e guardada, então começa na hora da próxima vez. Coloque um hardrpg-theme.ogg "
+     "(ou .mp3 ou .wav) na pasta de um jogo para escolher a música. Títulos em MIDI ficam em silêncio."},
+    // Details panel screenshots.
+    {"Left and Right: more screenshots", "Izquierda y derecha: más capturas", "Esquerda e direita: mais capturas"},
+    {"Up: game details", "Arriba: detalles del juego", "Cima: detalhes do jogo"},
+    {"Down: screenshots", "Abajo: capturas", "Baixo: capturas"},
+    // The controls picture.
+    {"D-pad: move around the picture", "Cruceta: moverse por la imagen", "Direcional: mover pela imagem"},
+    {"Back to defaults", "Volver a los valores iniciales", "Voltar ao padrão"},
+    // The performance overlay.
+    {"Full stats", "Estadísticas completas", "Estatísticas completas"},
+    {"Full stats add how busy the game's main thread is, the CPU and GPU speeds, memory and video memory, "
+     "and the battery: charge, time left, temperature and an estimate of the power drawn.",
+     "Las estadísticas completas añaden la carga del hilo principal del juego, las velocidades de CPU y GPU, la memoria y "
+     "la memoria de video, y la batería: carga, tiempo restante, temperatura y una estimación del consumo.",
+     "As estatísticas completas acrescentam a carga da thread principal do jogo, as velocidades de CPU e GPU, a memória e "
+     "a memória de vídeo, e a bateria: carga, tempo restante, temperatura e uma estimativa do consumo."},
+    {"The power estimate shows after about a minute away from the charger.",
+     "La estimación del consumo aparece tras un minuto sin cargador.",
+     "A estimativa de consumo aparece após um minuto fora do carregador."},
+    {"Frame", "Cuadro", "Quadro"},
+    {"peak", "pico", "pico"},
+    {"main thread", "hilo principal", "thread principal"},
+    {"video", "video", "vídeo"},
+    {"Memory", "Memoria", "Memória"},
+    {"free", "libre", "livre"},
+    {"Battery", "Batería", "Bateria"},
+    {"charging", "cargando", "carregando"},
+    {"Power draw", "Consumo", "Consumo"},
+    {"on the charger", "con el cargador", "no carregador"},
+    {"measuring...", "midiendo...", "medindo..."},
+    // The menu over a running game.
+    {"Paused", "En pausa", "Pausado"},
+    {"Resume", "Continuar", "Continuar"},
+    {"Back to library", "Volver a la biblioteca", "Voltar à biblioteca"},
+    {"Changes apply as soon as you make them and are saved for this game.",
+     "Los cambios se aplican al instante y se guardan para este juego.",
+     "As mudanças valem na hora e ficam salvas para este jogo."},
+    {"Open this menu again: hold <l>+<r>+<start>, or tap the icon in the screen's empty border.",
+     "Para volver a abrir este menú: mantén <l>+<r>+<start> o toca el icono en el borde vacío de la pantalla.",
+     "Para abrir este menu de novo: segure <l>+<r>+<start> ou toque no ícone na borda vazia da tela."},
+    {"Saved for {}. Applied now.", "Guardado para {}. Ya se aplicó.", "Salvo para {}. Já está valendo."},
+    {"{} now does {}. Custom controls are on and apply now.",
+     "{} ahora hace {}. Controles personalizados activados; ya se aplican.",
+     "{} agora faz {}. Controles personalizados ligados; já estão valendo."},
+    {"Any button can also be mapped to Fast forward in Controls.",
+     "También puedes asignar el avance rápido a cualquier botón en Controles.",
+     "Você também pode atribuir o avanço rápido a qualquer botão em Controles."},
+    {"Drawn in an empty border when there is one, otherwise in a corner.",
+     "Se muestra en un borde vacío si lo hay; si no, en una esquina.",
+     "Aparece numa borda vazia se houver; senão, num canto."},
 };
 
 const std::map<std::string, const Text *> &index() {

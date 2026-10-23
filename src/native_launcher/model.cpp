@@ -1281,7 +1281,7 @@ static Json downFilter(const Json &value) {
 }
 void Model::changeDisplay(const std::string &name, const Json &value) {
   if (name == "performanceMetrics") {
-    if (!value.is_integer() || value.as_integer() < 0 || value.as_integer() > 2)
+    if (!value.is_integer() || value.as_integer() < 0 || value.as_integer() > 3)
       throw std::runtime_error("Invalid performance metrics mode");
   } else if ((name == "fixedAspectRatio" || name == "integerScalingActive" ||
               name == "fastForward")
@@ -1319,7 +1319,7 @@ void Model::changeGameSetting(const Entry &entry, const std::string &name,
                           : name == "smoothScaling"
                                 ? filterIndex(value) < 0
                                 : !value.is_integer() || value.as_integer() < 0 ||
-                                      value.as_integer() > 2)))
+                                      value.as_integer() > 3)))
     throw std::runtime_error("Invalid game setting.");
   auto file = paths.at("config/" + key(entry.node.identity(paths)) + ".json");
   auto saved =
@@ -1699,11 +1699,43 @@ Json Model::launch(const Entry &e, Progress progress, PreparationStatus status) 
   if (encoded.size() > 4096)
     throw std::runtime_error(tr("Launch paths are too long; choose a closer game or RTP folder."));
   auto active = object();
-  active.as_object()["name"] = e.name;
-  active.as_object()["engine"] = Json::integer_type(e.version);
+  auto &a = active.as_object();
+  a["name"] = e.name;
+  a["engine"] = Json::integer_type(e.version);
+  // Enough to find the game again from inside it (the in-game menu).
+  a["kind"] = Json::integer_type(int(e.kind));
+  a["relative"] = e.node.relative;
+  a["inner"] = e.node.inner;
+  a["root"] = e.node.root;
+  a["archive"] = e.node.archive;
+  a["alias"] = e.node.alias;
+  a["config"] = key(e.node.identity(paths));
   atomicWrite(paths.at("active-game.json"), active.stringify());
   atomicWrite(paths.at("selection.json"), encoded);
   return selection;
+}
+bool Model::activeGame(Entry &out, const std::string &config) const {
+  try {
+    auto text = readFile(paths.at("active-game.json"), 65536);
+    auto v = json5pp::parse(text);
+    auto &o = v.as_object();
+    Entry e;
+    e.name = o.at("name").as_string();
+    e.version = int(o.at("engine").as_integer());
+    e.kind = Kind(o.at("kind").as_integer());
+    e.node.relative = o.at("relative").as_string();
+    e.node.inner = o.at("inner").as_string();
+    e.node.root = o.at("root").as_string();
+    e.node.archive = o.at("archive").as_boolean();
+    e.node.alias = o.at("alias").as_string();
+    // It must be the game that is running: its settings file is config.
+    if (key(e.node.identity(paths)) != config || o.at("config").as_string() != config)
+      return false;
+    out = e;
+    return true;
+  } catch (const std::exception &) {
+    return false;
+  }
 }
 std::vector<std::string> Model::libraryRoots() const {
   std::vector<std::string> out{paths.at("games")};

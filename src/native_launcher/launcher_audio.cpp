@@ -7,10 +7,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <vector>
+#include <sys/stat.h>
 #ifdef __vita__
 #include <psp2/audioout.h>
+#include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
 #else
 #include <SDL.h>
@@ -36,7 +39,9 @@ namespace hardrpg {
 namespace {
 constexpr int outRate = 48000;
 constexpr int blockFrames = 1024; // about 21 ms
-constexpr size_t maxTrackBytes = 40u << 20;
+// Tracks up to this size are read into memory (and kept for a while); larger
+// ones are decoded straight from the file, a little at a time.
+constexpr long long memoryTrackBytes = 8ll << 20;
 
 void pause(int ms) {
 #ifdef __vita__
@@ -46,28 +51,78 @@ void pause(int ms) {
 #endif
 }
 
-std::string readWhole(const std::string &path) {
+long long fileSize(const std::string &path) {
+  struct stat st;
+  return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) ? (long long)st.st_size : -1;
+}
+
+// The whole file, or "" when it is missing or larger than limit. Sized once:
+// growing a string while reading needs twice the memory for a moment.
+std::string readWhole(const std::string &path, long long limit = memoryTrackBytes) {
   std::string out;
+  long long size = fileSize(path);
+  if (size <= 0 || size > limit)
+    return out;
   FILE *f = std::fopen(path.c_str(), "rb");
   if (!f)
     return out;
-  char buffer[65536];
-  size_t n;
-  while ((n = std::fread(buffer, 1, sizeof buffer, f)) > 0) {
-    out.append(buffer, n);
-    if (out.size() > maxTrackBytes) {
-      out.clear();
-      break;
-    }
-  }
+  out.resize(size_t(size));
+  if (std::fread(&out[0], 1, out.size(), f) != out.size())
+    out.clear();
   std::fclose(f);
   return out;
 }
 
+// ---------------------------------------------------------------- input
+// What a decoder reads: a file held in memory, or one on disk.
+struct Input {
+  virtual ~Input() {}
+  virtual size_t read(void *to, size_t n) = 0;
+  virtual bool seek(long long offset, int whence) = 0;
+  virtual long long tell() = 0;
+};
+struct MemoryInput : Input {
+  std::shared_ptr<const std::string> data;
+  size_t at = 0;
+  size_t read(void *to, size_t n) override {
+    n = std::min(n, data->size() - at);
+    std::memcpy(to, data->data() + at, n);
+    at += n;
+    return n;
+  }
+  bool seek(long long offset, int whence) override {
+    long long base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? (long long)at : (long long)data->size();
+    long long to = base + offset;
+    if (to < 0 || to > (long long)data->size())
+      return false;
+    at = size_t(to);
+    return true;
+  }
+  long long tell() override { return (long long)at; }
+};
+struct FileInput : Input {
+  FILE *f = nullptr;
+  std::vector<char> buffer = std::vector<char>(64 * 1024); // few, larger reads from the card
+  ~FileInput() {
+    if (f)
+      std::fclose(f);
+  }
+  bool open(const std::string &path) {
+    f = std::fopen(path.c_str(), "rb");
+    if (f)
+      std::setvbuf(f, buffer.data(), _IOFBF, buffer.size());
+    return f != nullptr;
+  }
+  size_t read(void *to, size_t n) override { return std::fread(to, 1, n, f); }
+  bool seek(long long offset, int whence) override { return fseeko(f, off_t(offset), whence) == 0; }
+  long long tell() override { return (long long)ftello(f); }
+};
+
 // ---------------------------------------------------------------- decoders
-// Each reads 16-bit interleaved PCM out of a file held in memory.
+// Each reads 16-bit interleaved PCM out of its input.
 struct Decoder {
   int channels = 0, rate = 0;
+  std::unique_ptr<Input> input;
   virtual ~Decoder() {}
   // Up to frames frames; 0 at the end of the track (or of its loop).
   virtual long read(int16_t *out, long frames) = 0;
@@ -75,37 +130,21 @@ struct Decoder {
   virtual bool loop() = 0;
 };
 
-struct Memory {
-  const std::string *data;
-  size_t at = 0;
-};
-size_t memRead(void *ptr, size_t size, size_t count, void *source) {
-  auto &m = *static_cast<Memory *>(source);
-  size_t n = std::min(size * count, m.data->size() - m.at);
-  std::memcpy(ptr, m.data->data() + m.at, n);
-  m.at += n;
-  return size ? n / size : 0;
+size_t oggRead(void *ptr, size_t size, size_t count, void *source) {
+  return size ? static_cast<Input *>(source)->read(ptr, size * count) / size : 0;
 }
-int memSeek(void *source, ogg_int64_t offset, int whence) {
-  auto &m = *static_cast<Memory *>(source);
-  ogg_int64_t base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? ogg_int64_t(m.at) : ogg_int64_t(m.data->size());
-  ogg_int64_t to = base + offset;
-  if (to < 0 || to > ogg_int64_t(m.data->size()))
-    return -1;
-  m.at = size_t(to);
-  return 0;
+int oggSeek(void *source, ogg_int64_t offset, int whence) {
+  return static_cast<Input *>(source)->seek((long long)offset, whence) ? 0 : -1;
 }
-long memTell(void *source) { return long(static_cast<Memory *>(source)->at); }
+long oggTell(void *source) { return long(static_cast<Input *>(source)->tell()); }
 
 struct OggDecoder : Decoder {
-  Memory memory;
   OggVorbis_File file;
   bool open = false;
   ogg_int64_t loopStart = 0, loopEnd = 0; // RPG Maker's LOOPSTART/LOOPLENGTH tags
-  bool init(const std::string &bytes) {
-    memory.data = &bytes;
-    ov_callbacks callbacks = {memRead, memSeek, nullptr, memTell};
-    if (ov_open_callbacks(&memory, &file, nullptr, 0, callbacks) < 0)
+  bool init() {
+    ov_callbacks callbacks = {oggRead, oggSeek, nullptr, oggTell};
+    if (ov_open_callbacks(input.get(), &file, nullptr, 0, callbacks) < 0)
       return false;
     open = true;
     vorbis_info *info = ov_info(&file, -1);
@@ -158,11 +197,21 @@ struct OggDecoder : Decoder {
   bool loop() override { return ov_pcm_seek(&file, loopStart) == 0; }
 };
 
+size_t mp3Read(void *source, void *to, size_t n) { return static_cast<Input *>(source)->read(to, n); }
+drmp3_bool32 mp3Seek(void *source, int offset, drmp3_seek_origin origin) {
+  int whence = origin == DRMP3_SEEK_SET ? SEEK_SET : origin == DRMP3_SEEK_END ? SEEK_END : SEEK_CUR;
+  return static_cast<Input *>(source)->seek(offset, whence) ? DRMP3_TRUE : DRMP3_FALSE;
+}
+drmp3_bool32 mp3Tell(void *source, drmp3_int64 *at) {
+  *at = drmp3_int64(static_cast<Input *>(source)->tell());
+  return DRMP3_TRUE;
+}
+
 struct Mp3Decoder : Decoder {
   drmp3 mp3;
   bool open = false;
-  bool init(const std::string &bytes) {
-    if (!drmp3_init_memory(&mp3, bytes.data(), bytes.size(), nullptr))
+  bool init() {
+    if (!drmp3_init(&mp3, mp3Read, mp3Seek, mp3Tell, nullptr, input.get(), nullptr))
       return false;
     open = true;
     channels = int(mp3.channels);
@@ -181,78 +230,83 @@ struct Mp3Decoder : Decoder {
 
 // Plain PCM WAV, 8 or 16 bit.
 struct WavDecoder : Decoder {
-  const unsigned char *data = nullptr;
-  size_t size = 0, at = 0;
+  long long data = -1, size = 0, at = 0; // the samples: where, how many bytes, how far read
   int bits = 0;
   static uint32_t u32(const unsigned char *p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; }
   static uint16_t u16(const unsigned char *p) { return uint16_t(p[0] | p[1] << 8); }
-  bool init(const std::string &bytes) {
-    auto *p = reinterpret_cast<const unsigned char *>(bytes.data());
-    size_t n = bytes.size();
-    if (n < 12 || std::memcmp(p, "RIFF", 4) || std::memcmp(p + 8, "WAVE", 4))
+  bool init() {
+    unsigned char head[12];
+    if (input->read(head, 12) != 12 || std::memcmp(head, "RIFF", 4) || std::memcmp(head + 8, "WAVE", 4))
       return false;
-    for (size_t i = 12; i + 8 <= n;) {
-      uint32_t len = u32(p + i + 4);
-      const unsigned char *body = p + i + 8;
-      if (len > n - i - 8)
-        len = uint32_t(n - i - 8);
-      if (!std::memcmp(p + i, "fmt ", 4) && len >= 16) {
-        if (u16(body) != 1)
+    long long pos = 12;
+    for (int guard = 0; guard < 64; ++guard) {
+      unsigned char chunk[8];
+      if (!input->seek(pos, SEEK_SET) || input->read(chunk, 8) != 8)
+        break;
+      uint32_t len = u32(chunk + 4);
+      if (!std::memcmp(chunk, "fmt ", 4) && len >= 16) {
+        unsigned char body[16];
+        if (input->read(body, 16) != 16 || u16(body) != 1)
           return false; // compressed WAV
         channels = u16(body + 2);
         rate = int(u32(body + 4));
         bits = u16(body + 14);
-      } else if (!std::memcmp(p + i, "data", 4)) {
-        data = body;
+      } else if (!std::memcmp(chunk, "data", 4)) {
+        data = pos + 8;
         size = len;
+        break;
       }
-      i += 8 + len + (len & 1);
+      pos += 8 + len + (len & 1);
     }
-    return data && (bits == 8 || bits == 16) && channels >= 1 && channels <= 2 && rate >= 8000;
+    return data >= 0 && (bits == 8 || bits == 16) && channels >= 1 && channels <= 2 && rate >= 8000 &&
+           input->seek(data, SEEK_SET);
   }
   long read(int16_t *out, long frames) override {
-    size_t frameBytes = size_t(channels * bits / 8);
-    long n = long(std::min<size_t>(size_t(frames), (size - at) / frameBytes));
+    long long frameBytes = channels * bits / 8;
+    long n = long(std::min<long long>(frames, (size - at) / frameBytes));
+    unsigned char raw[2048 * 4];
+    n = std::min<long>(n, long(sizeof raw / frameBytes));
+    n = long(input->read(raw, size_t(n * frameBytes)) / size_t(frameBytes));
     for (long i = 0; i < n * channels; ++i) {
-      const unsigned char *s = data + at + size_t(i) * size_t(bits / 8);
+      const unsigned char *s = raw + size_t(i) * size_t(bits / 8);
       out[i] = bits == 16 ? int16_t(u16(s)) : int16_t((int(s[0]) - 128) << 8);
     }
-    at += size_t(n) * frameBytes;
+    at += n * frameBytes;
     return n;
   }
   bool loop() override {
     at = 0;
-    return true;
+    return input->seek(data, SEEK_SET);
   }
 };
 
-std::unique_ptr<Decoder> decoderFor(const std::string &ext, const std::string &bytes) {
-  if (ext == ".ogg") {
-    std::unique_ptr<OggDecoder> d(new OggDecoder);
-    if (d->init(bytes))
-      return std::unique_ptr<Decoder>(d.release());
-  } else if (ext == ".mp3") {
-    std::unique_ptr<Mp3Decoder> d(new Mp3Decoder);
-    if (d->init(bytes))
-      return std::unique_ptr<Decoder>(d.release());
-  } else if (ext == ".wav") {
-    std::unique_ptr<WavDecoder> d(new WavDecoder);
-    if (d->init(bytes))
-      return std::unique_ptr<Decoder>(d.release());
-  }
-  return nullptr;
+std::unique_ptr<Decoder> decoderFor(const std::string &ext, std::unique_ptr<Input> input) {
+  std::unique_ptr<Decoder> d;
+  if (ext == ".ogg")
+    d.reset(new OggDecoder);
+  else if (ext == ".mp3")
+    d.reset(new Mp3Decoder);
+  else if (ext == ".wav")
+    d.reset(new WavDecoder);
+  else
+    return nullptr;
+  d->input = std::move(input);
+  bool ok = ext == ".ogg" ? static_cast<OggDecoder *>(d.get())->init()
+          : ext == ".mp3" ? static_cast<Mp3Decoder *>(d.get())->init()
+                          : static_cast<WavDecoder *>(d.get())->init();
+  return ok ? std::move(d) : nullptr;
 }
 
 // A decoder played at the output rate in stereo, by linear interpolation.
 struct Stream {
-  std::string bytes; // the file, which the decoder reads
   std::unique_ptr<Decoder> decoder;
   std::vector<int16_t> buffer; // stereo frames
   double at = 0, step = 1;
   bool looping = false, ended = false;
   float volume = 1;
   std::string name;
-  void begin() { step = double(decoder->rate) / outRate; }
+  // pitch: the game's pitch in percent, which RPG Maker plays as speed.
+  void begin(int pitch = 100) { step = double(decoder->rate) / outRate * std::max(50, std::min(150, pitch)) / 100.0; }
   bool refill() {
     size_t drop = size_t(at);
     if (drop) {
@@ -293,10 +347,23 @@ struct Stream {
   }
 };
 
-std::unique_ptr<Stream> openStream(std::string bytes, const std::string &ext) {
+// From bytes in memory, or (bytes empty) from the file at path.
+std::unique_ptr<Stream> openStream(std::shared_ptr<const std::string> bytes, const std::string &ext,
+                                   const std::string &path = "") {
+  std::unique_ptr<Input> input;
+  if (bytes && !bytes->empty()) {
+    std::unique_ptr<MemoryInput> m(new MemoryInput);
+    m->data = std::move(bytes);
+    input = std::move(m);
+  } else if (!path.empty()) {
+    std::unique_ptr<FileInput> f(new FileInput);
+    if (!f->open(path))
+      return nullptr;
+    input = std::move(f);
+  } else
+    return nullptr;
   std::unique_ptr<Stream> s(new Stream);
-  s->bytes = std::move(bytes);
-  s->decoder = decoderFor(ext, s->bytes);
+  s->decoder = decoderFor(ext, std::move(input));
   if (!s->decoder)
     return nullptr;
   s->begin();
@@ -317,15 +384,28 @@ struct LauncherAudio::Impl {
   // Music: what plays, and what replaces it once it has faded out.
   std::unique_ptr<Stream> music, incoming;
   bool switching = false;
-  float gain = 0, target = 0, fadeIn = 1.0f / outRate, fadeOut = 1.0f / (0.3f * outRate), outStep = 0;
+  float gain = 0, target = 0, fadeIn = 1.0f / (0.2f * outRate), fadeOut = 1.0f / (0.3f * outRate), outStep = 0;
   std::string playing;
   std::atomic<float> effectsLevel{0.49f}, musicLevel{0.64f};
-  std::mutex mixing;
+  mutable std::mutex mixing;
   // Requests from the interface thread to the loader.
   std::mutex asking;
   std::string wanted, loaded;
   bool fadeRequested = false;
   int fadeMs = 0;
+  std::string cache, useCache; // set by the interface; the loader's copy
+  std::vector<std::string> rtps, useRtps;
+  std::vector<std::string> prepare, nearby; // the library, and the games beside the highlighted one
+  size_t prepared = 0;
+  uint32_t prepareFrom = 0; // background work waits until the screen is up
+  // Tracks read lately, so going back to a game starts at once.
+  struct Track {
+    std::shared_ptr<const std::string> bytes;
+    Theme theme;
+    bool found = false;
+  };
+  std::map<std::string, Track> tracks;
+  std::vector<std::string> trackOrder; // oldest first
 #ifdef __vita__
   int port = -1;
   SceUID mixer = -1, loader = -1;
@@ -369,6 +449,7 @@ struct LauncherAudio::Impl {
         switching = false;
         gain = 0;
         target = music ? 1 : 0;
+        outStep = 0;
       } else if (switching)
         target = 0;
       if (music) {
@@ -415,11 +496,88 @@ struct LauncherAudio::Impl {
     }
   }
 
+  // Fades out whatever plays, quickly, without waiting for what comes next.
+  void fadeNow(int ms) {
+    std::lock_guard<std::mutex> lock(mixing);
+    outStep = 1.0f / (std::max(ms, 1) * (outRate / 1000.0f));
+    incoming.reset();
+    switching = music != nullptr;
+  }
+
+  // A game's track: from memory, or found (the theme cache makes that one
+  // small file read) and read into memory, keeping the last few.
+  Track *track(const std::string &source) {
+    auto it = tracks.find(source);
+    if (it != tracks.end()) {
+      trackOrder.erase(std::find(trackOrder.begin(), trackOrder.end(), source));
+      trackOrder.push_back(source);
+      return &it->second;
+    }
+    Track t;
+    t.found = findTheme(source, t.theme, useCache, useRtps);
+    if (t.found) {
+      // Small tracks are read into memory; large ones play from the file.
+      std::string bytes = std::move(t.theme.bytes);
+      t.theme.bytes.clear();
+      if (bytes.empty()) {
+        long long size = fileSize(t.theme.file);
+        if (size <= 0)
+          t.found = false, t.theme.note = "the track could not be read";
+        else if (size <= memoryTrackBytes)
+          bytes = readWhole(t.theme.file);
+      }
+      if (!bytes.empty())
+        t.bytes = std::make_shared<const std::string>(std::move(bytes));
+    }
+    // At most six tracks and 24 MB stay in memory: the launcher's heap is
+    // shared with its artwork.
+    size_t total = t.bytes ? t.bytes->size() : 0;
+    for (auto &k : trackOrder)
+      total += tracks[k].bytes ? tracks[k].bytes->size() : 0;
+    while (!trackOrder.empty() && (trackOrder.size() >= 6 || total > (24u << 20))) {
+      auto &old = tracks[trackOrder.front()];
+      total -= old.bytes ? old.bytes->size() : 0;
+      tracks.erase(trackOrder.front());
+      trackOrder.erase(trackOrder.begin());
+    }
+    trackOrder.push_back(source);
+    return &(tracks[source] = std::move(t));
+  }
+
+  static uint32_t millis() {
+#ifdef __vita__
+    return uint32_t(sceKernelGetProcessTimeWide() / 1000);
+#else
+    return SDL_GetTicks();
+#endif
+  }
+
   void loadLoop() {
     while (!quit) {
+      // Nothing here may end the launcher: a track that fails is skipped.
+      try {
+        loadStep();
+      } catch (const std::exception &e) {
+        std::fprintf(stderr, "Launcher theme loader: %s\n", e.what());
+        tracks.clear();
+        trackOrder.clear();
+        pause(50);
+      } catch (...) {
+        tracks.clear();
+        trackOrder.clear();
+        pause(50);
+      }
+    }
+  }
+
+  // One request, or one piece of background work.
+  void loadStep() {
+    {
       std::string want;
       bool change = false, fade = false;
       int ms = 0;
+      std::vector<std::string> near;
+      std::string next;
       {
         std::lock_guard<std::mutex> lock(asking);
         if (fadeRequested) {
@@ -432,46 +590,64 @@ struct LauncherAudio::Impl {
           loaded = wanted;
           change = true;
         }
+        near = nearby;
+        useCache = cache;
+        useRtps = rtps;
+        if (!change && prepared < prepare.size() && int32_t(millis() - prepareFrom) >= 0)
+          next = prepare[prepared++];
       }
-      if (fade) {
-        std::lock_guard<std::mutex> lock(mixing);
-        outStep = 1.0f / (std::max(ms, 1) * (outRate / 1000.0f));
-        incoming.reset();
-        switching = music != nullptr;
-      }
-      if (!change) {
-        pause(20);
-        continue;
-      }
-      std::unique_ptr<Stream> next;
-      Theme theme;
-      if (!want.empty() && findTheme(want, theme)) {
-        auto bytes = theme.file.empty() ? std::move(theme.bytes) : readWhole(theme.file);
-        if (!bytes.empty())
-          next = openStream(std::move(bytes), theme.ext);
-        if (next) {
-          next->looping = true;
-          next->volume = float(theme.volume) / 100.0f;
-          next->name = theme.name;
+      if (fade)
+        fadeNow(ms);
+      if (change) {
+        // The old track goes at once; the new one comes in when it is read.
+        fadeNow(250);
+        std::unique_ptr<Stream> stream;
+        if (!want.empty()) {
+          Track *t = track(want);
+          if (t->found) {
+            stream = openStream(t->bytes, t->theme.ext, t->theme.file);
+            if (stream) {
+              stream->looping = true;
+              // The game's own volume, softened: a quiet title still plays.
+              stream->volume = 0.55f + 0.45f * float(std::max(0, std::min(100, t->theme.volume))) / 100.0f;
+              stream->begin(t->theme.pitch);
+              stream->name = t->theme.name;
+            }
+          }
         }
-        std::fprintf(stderr, "Launcher theme: %s (%s)\n", theme.name.c_str(), next ? "playing" : "unplayable");
+        {
+          std::lock_guard<std::mutex> lock(asking);
+          if (wanted != want)
+            return; // moved on while this one loaded
+        }
+        std::lock_guard<std::mutex> lock(mixing);
+        incoming = std::move(stream);
+        switching = true;
+        return;
       }
-      {
-        std::lock_guard<std::mutex> lock(asking);
-        if (wanted != want)
-          continue; // moved on while this one loaded
+      // Idle: read the neighbours' tracks, then find every game's track
+      // (kept in the theme cache), so the music is ready when asked for.
+      bool worked = false;
+      for (auto &n : near)
+        if (!n.empty() && !tracks.count(n)) {
+          track(n);
+          worked = true;
+          break;
+        }
+      if (!worked && !next.empty()) {
+        Theme t;
+        findTheme(next, t, useCache, useRtps);
+        worked = true;
       }
-      std::lock_guard<std::mutex> lock(mixing);
-      incoming = std::move(next);
-      switching = true;
-      outStep = 0;
+      // Never hold the core: the art loader shares it.
+      pause(worked ? 2 : 20);
     }
   }
 
   bool loadEffects(const std::string &folder) {
     bool any = false;
     for (int i = 0; i < int(Sound::Count); ++i) {
-      auto s = openStream(readWhole(folder + "/" + soundName(Sound(i)) + ".ogg"), ".ogg");
+      auto s = openStream(std::make_shared<const std::string>(readWhole(folder + "/" + soundName(Sound(i)) + ".ogg")), ".ogg");
       if (!s)
         continue;
       int32_t block[blockFrames * 2];
@@ -493,8 +669,10 @@ LauncherAudio::~LauncherAudio() { stop(); }
 bool LauncherAudio::start(const std::string &folder) {
   if (impl->running)
     return true;
+  themeInit();
   impl->loadEffects(folder);
   impl->quit = false;
+  impl->loaded.clear();
 #ifdef __vita__
   impl->port = Impl::openPort();
   if (impl->port < 0) {
@@ -505,7 +683,8 @@ bool LauncherAudio::start(const std::string &folder) {
   // The mixer runs on core 1, above the interface; the loader on core 2.
   impl->mixer = sceKernelCreateThread("hardrpg_audio_mix", Impl::mixerEntry, 64, 64 * 1024, 0,
                                       SCE_KERNEL_CPU_MASK_USER_1, nullptr);
-  impl->loader = sceKernelCreateThread("hardrpg_audio_load", Impl::loaderEntry, 0x10000100, 256 * 1024, 0,
+  // Below the interface and the art loader: finding tracks can wait.
+  impl->loader = sceKernelCreateThread("hardrpg_audio_load", Impl::loaderEntry, 0x10000100 + 20, 256 * 1024, 0,
                                        SCE_KERNEL_CPU_MASK_USER_2, nullptr);
   if (impl->mixer < 0 || impl->loader < 0) {
     if (impl->mixer >= 0)
@@ -563,6 +742,10 @@ void LauncherAudio::stop() {
   impl->music.reset();
   impl->incoming.reset();
   impl->voices.clear();
+  impl->playing.clear();
+  // Memory goes back to the game; the theme cache on disk stays.
+  impl->tracks.clear();
+  impl->trackOrder.clear();
 }
 
 void LauncherAudio::play(Sound s) {
@@ -574,9 +757,29 @@ void LauncherAudio::play(Sound s) {
   impl->voices.push_back({int(s), 0});
 }
 
-void LauncherAudio::theme(const std::string &gameDir) {
+void LauncherAudio::theme(const std::string &source) {
   std::lock_guard<std::mutex> lock(impl->asking);
-  impl->wanted = gameDir;
+  impl->wanted = source;
+}
+
+void LauncherAudio::search(const std::string &cache, const std::vector<std::string> &rtps) {
+  std::lock_guard<std::mutex> lock(impl->asking);
+  impl->cache = cache;
+  impl->rtps = rtps;
+}
+
+void LauncherAudio::prepare(const std::vector<std::string> &sources) {
+  std::lock_guard<std::mutex> lock(impl->asking);
+  if (sources == impl->prepare)
+    return;
+  impl->prepare = sources;
+  impl->prepared = 0;
+  impl->prepareFrom = Impl::millis() + 4000;
+}
+
+void LauncherAudio::nearby(const std::vector<std::string> &sources) {
+  std::lock_guard<std::mutex> lock(impl->asking);
+  impl->nearby = sources;
 }
 
 void LauncherAudio::setLevels(int effects, int music) {

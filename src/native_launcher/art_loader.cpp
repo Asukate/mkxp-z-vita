@@ -84,9 +84,14 @@ void ArtLoader::beginFrame() {
   std::lock_guard<std::mutex> hold(lock);
   ++frame;
 }
+namespace {
+std::string queueId(const std::string &key, bool shots, int shot, bool hero) {
+  return key + (shots ? (shot ? "|shot" + std::to_string(shot) : std::string("|shots")) : hero ? "|hero" : "|cover");
+}
+} // namespace
 void ArtLoader::want(const Request &r, double distance) {
   std::lock_guard<std::mutex> hold(lock);
-  auto id = r.key + (r.shots ? "|shots" : r.hero ? "|hero" : "|cover");
+  auto id = queueId(r.key, r.shots, r.shot, r.hero);
   if (active.count(id))
     return;
   auto found = queue.find(id);
@@ -103,12 +108,16 @@ bool ArtLoader::take(Result &out) {
     return false;
   out = std::move(done.front());
   done.pop_front();
-  active.erase(out.key + (out.shots ? "|shots" : out.hero ? "|hero" : "|cover"));
+  active.erase(queueId(out.key, out.shots, out.shot, out.hero));
   return true;
 }
 bool ArtLoader::busy() {
   std::lock_guard<std::mutex> hold(lock);
   return !queue.empty() || working || !done.empty();
+}
+bool ArtLoader::ready() {
+  std::lock_guard<std::mutex> hold(lock);
+  return !done.empty();
 }
 void ArtLoader::store(const std::string &path, Image image) {
   if (path.empty())
@@ -137,6 +146,7 @@ void ArtLoader::run() {
           gone.key = it->second.request.key;
           gone.hero = it->second.request.hero;
           gone.shots = it->second.request.shots;
+          gone.shot = it->second.request.shot;
           gone.cancelled = true;
           done.push_back(std::move(gone));
           it = queue.erase(it);
@@ -186,6 +196,7 @@ ArtLoader::Result ArtLoader::load(const Request &q) {
   r.key = q.key;
   r.hero = q.hero;
   r.shots = q.shots;
+  r.shot = q.shot;
   if (rescanWanted.exchange(false))
     foldersRead = false;
   if (!foldersRead) {
@@ -234,6 +245,26 @@ ArtLoader::Result ArtLoader::load(const Request &q) {
     Image img = Image::load(file).cover(q.width, q.height);
     return blur ? img.blurred(std::max(6, q.width / 24)) : img;
   };
+  if (q.shots && q.shot) {
+    // One screenshot, as large as fits, for the viewer.
+    if (find(("shot" + std::to_string(q.shot)).c_str(), path, stamp)) {
+      auto file = cached("v-" + hashed(stamp + size) + ".jpg");
+      Image img = Image::load(file);
+      if (img.empty()) {
+        Image full = Image::load(path);
+        if (!full.empty()) {
+          double k = std::min(double(q.width) / full.width, double(q.height) / full.height);
+          img = full.resized(std::max(1, int(full.width * k)), std::max(1, int(full.height * k)));
+          if (blur)
+            img = img.blurred(std::max(6, img.width / 24));
+          img.saveJpeg(file);
+        }
+      }
+      if (!img.empty())
+        r.pictures.push_back(std::move(img));
+    }
+    return r;
+  }
   if (q.shots) {
     for (int i = 1; i <= 4; ++i) {
       if (!find(("shot" + std::to_string(i)).c_str(), path, stamp))
@@ -260,6 +291,16 @@ ArtLoader::Result ArtLoader::load(const Request &q) {
       }
     }
     return r;
+  }
+  // The player's own title music, kept beside the game's pictures.
+  for (auto &name : q.names) {
+    if (!r.theme.empty() || (foldersOk && !folders.count(folded(name))))
+      continue;
+    for (const char *ext : {".ogg", ".mp3", ".wav"})
+      if (source(q.root + name + "/theme" + ext, stamp)) {
+        r.theme = q.root + name + "/theme" + ext;
+        break;
+      }
   }
   if (find("cover", path, stamp)) {
     auto file = cached("c-" + hashed(stamp + size) + ".jpg");

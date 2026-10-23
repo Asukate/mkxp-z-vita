@@ -4,6 +4,8 @@
 // a ZIP's inner folder. Usage: theme WORK_DIR
 #include "native_launcher/theme.h"
 #include <cassert>
+#include <cstdlib>
+#include <iterator>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -34,12 +36,12 @@ std::string link(long i) { return ";" + fix(i); }
 std::string str(const std::string &s) { return "I\"" + fix(long(s.size())) + s + fix(1) + sym("E") + "T"; }
 // An RPG::System whose @title_bgm names track at volume, after a Table (user
 // data) and before a second BGM that reuses the symbols by link.
-std::string systemData(const std::string &track, int volume) {
+std::string systemData(const std::string &track, int volume, int pitch = 100) {
   std::string table(40, '\x01');
   return std::string("\x04\x08", 2) + "o" + sym("RPG::System") + fix(3) +
          sym("@data") + "u" + sym("Table") + fix(long(table.size())) + table +
          sym("@title_bgm") + "o" + sym("RPG::BGM") + fix(3) + sym("@name") + str(track) + sym("@volume") + "i" +
-         fix(volume) + sym("@pitch") + "i" + fix(100) +
+         fix(volume) + sym("@pitch") + "i" + fix(pitch) +
          // symbols so far: 0 RPG::System 1 @data 2 Table 3 @title_bgm 4 RPG::BGM 5 @name 6 E 7 @volume 8 @pitch
          sym("@battle_bgm") + "o" + link(4) + fix(1) + link(5) + "I\"" + fix(6) + "Battle" + fix(1) + link(6) + "T";
 }
@@ -105,15 +107,17 @@ std::string ber(uint32_t v) {
   return out;
 }
 std::string chunk(uint32_t id, const std::string &data) { return ber(id) + ber(uint32_t(data.size())) + data; }
-std::string database(const std::string &track, int volume) {
-  std::string music = chunk(0x01, track) + chunk(0x03, ber(uint32_t(volume))) + std::string(1, '\0');
+std::string database(const std::string &track, int volume, int tempo = 100) {
+  std::string music = chunk(0x01, track) + chunk(0x03, ber(uint32_t(volume))) + chunk(0x04, ber(uint32_t(tempo))) +
+                      std::string(1, '\0');
   std::string system = chunk(0x0A, std::string(300, 'x')) + chunk(0x1F, music) + std::string(1, '\0');
   return ber(11) + "LcfDataBase" + chunk(0x0B, std::string(200, 'y')) + chunk(0x16, system) + std::string(1, '\0');
 }
 
-Theme find(const std::string &dir, bool expect = true) {
+Theme find(const std::string &dir, bool expect = true, const std::string &cache = "",
+           const std::vector<std::string> &rtps = {}) {
   Theme t;
-  bool found = findTheme(root + "/" + dir, t);
+  bool found = findTheme(root + "/" + dir, t, cache, rtps);
   if (found != expect) {
     std::cerr << dir << ": expected " << (expect ? "a theme" : "none") << "\n";
     std::exit(1);
@@ -134,6 +138,9 @@ int main(int argc, char **argv) {
   assert(marshalTitleBgm("not marshal", volume).empty() && volume == 100);
   assert(lcfTitleMusic(database("Opening", 90), volume) == "Opening" && volume == 90);
   assert(lcfTitleMusic(database("(OFF)", 90), volume).empty());
+  int pitch = 100;
+  assert(marshalTitleBgm(systemData("Slow", 20, 50), volume, &pitch) == "Slow" && volume == 20 && pitch == 50);
+  assert(lcfTitleMusic(database("Fast", 90, 120), volume, &pitch) == "Fast" && pitch == 120);
 
   // VX Ace, loose files, matched without regard to case.
   write(root + "/ace/Game.ini", "[Game]\n");
@@ -174,10 +181,26 @@ int main(int argc, char **argv) {
   t = find("rtp");
   assert(t.name == "mytitle_loop" && t.ext == ".ogg");
 
-  // MIDI only: nothing to play.
+  // MIDI only: nothing to play, and the reason says so.
   write(root + "/midi/Data/System.rvdata2", systemData("Song", 100));
   write(root + "/midi/Audio/BGM/Song.mid", "MThd");
-  find("midi", false);
+  t = find("midi", false);
+  assert(t.note.find("MIDI") != std::string::npos);
+
+  // No title music set at all.
+  write(root + "/silent/Data/System.rvdata2", systemData("", 100));
+  makeDirs(root + "/silent/Audio/BGM");
+  t = find("silent", false);
+  assert(t.note == "the game sets no title music");
+
+  // The track is in an RTP folder, not the game.
+  write(root + "/usesrtp/Data/System.rvdata2", systemData("Theme1", 70, 90));
+  makeDirs(root + "/usesrtp/Audio/BGM");
+  write(root + "/rtpfolder/Audio/BGM/Theme1.ogg", "OggS rtp");
+  t = find("usesrtp", false);
+  assert(t.note.find("not in the game or the RTP") != std::string::npos);
+  t = find("usesrtp", true, "", {root + "/rtpfolder"});
+  assert(t.file == root + "/rtpfolder/Audio/BGM/Theme1.ogg" && t.volume == 70 && t.pitch == 90);
 
   // hardrpg-theme.* chooses the music.
   write(root + "/override/Data/System.rvdata2", systemData("Theme", 100));
@@ -191,6 +214,56 @@ int main(int argc, char **argv) {
   write(root + "/zip/Inner Game/Audio/BGM/Zip Theme.ogg", "OggS zip");
   t = find("zip");
   assert(t.name == "Zip Theme");
+
+  // With a cache: an archived track is written there once and played from
+  // disk, and the answer is kept until the game's files change.
+  std::string cache = root + "/cache";
+  t = find("xp", true, cache);
+  assert(t.bytes.empty() && t.file.find(cache + "/") == 0 && t.ext == ".mp3");
+  {
+    std::ifstream in(t.file, std::ios::binary);
+    std::string kept((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    assert(kept == "ID3 xp music bytes");
+  }
+  auto again = find("xp", true, cache);
+  assert(again.file == t.file && again.name == "Opening" && again.volume == 60);
+  t = find("midi", false, cache);
+  assert(find("midi", false, cache).note == t.note && t.note.find("MIDI") != std::string::npos);
+  // The game changed (an override was added): looked for again.
+  write(root + "/midi/hardrpg-theme.ogg", "OggS chosen");
+  t = find("midi", true, cache);
+  assert(t.name == "hardrpg-theme");
+
+  // A ZIP read in place, without unpacking: its game in an inner folder,
+  // data and music inside an XP archive.
+  write(root + "/zipsrc/My Game/Game.ini", "[Game]\n");
+  write(root + "/zipsrc/My Game/Game.rgssad", rgssad({{"Data\\System.rxdata", systemData("Zipped", 50)},
+                                                     {"Audio\\BGM\\Zipped.ogg", "OggS zipped"}}));
+  write(root + "/zipsrc/Other/Music/Title.ogg", "OggS not a game");
+  std::string command = "cd '" + root + "/zipsrc' && python3 -c \"import zipfile,os\n"
+                        "z=zipfile.ZipFile('../packed.zip','w',zipfile.ZIP_DEFLATED)\n"
+                        "[z.write(os.path.join(d,f)) for d,_,fs in os.walk('.') for f in fs]\""
+                        " && cd '" + root + "' && python3 -c \"import zipfile;zipfile.ZipFile('plain.zip','w').writestr('a.txt','x')\"";
+  assert(std::system(command.c_str()) == 0);
+  themeInit();
+  t = find("packed.zip", true, cache);
+  assert(t.name == "Zipped" && t.volume == 50 && t.bytes.empty() && t.file.find(cache + "/") == 0);
+  t = find("packed.zip", true, cache);
+  assert(t.name == "Zipped");
+  t = find("plain.zip", false, cache);
+  assert(t.note == "no RPG Maker game found in it");
+
+  // Music in a ZIP beside the game (To the Moon's Audio.dat), the title
+  // track started by a script: found by its name.
+  write(root + "/pack/Game.ini", "[Game]\n");
+  write(root + "/pack/Game.rgssad", rgssad({{"Data\\System.rxdata", systemData("", 100)}}));
+  command = "cd '" + root + "/pack' && python3 -c \"import zipfile\n"
+            "z=zipfile.ZipFile('Audio.dat','w')\n"
+            "z.writestr('Audio/BGM/Moon (Title Theme).ogg','OggS packed title')\n"
+            "z.writestr('Audio/BGM/Other.ogg','OggS other')\"";
+  assert(std::system(command.c_str()) == 0);
+  t = find("pack");
+  assert(t.name == "moon (title theme)" && t.bytes == "OggS packed title");
 
   // Not a game, and not there.
   makeDirs(root + "/empty");
