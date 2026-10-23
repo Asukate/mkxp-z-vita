@@ -112,6 +112,18 @@ int main() {
   x = state.update(p, s).x;
   s.milliseconds += 16;
   assert(state.update(p, s).x > x);
+  // A press made during a slow frame (400 ms) still counts.
+  s.buttons = 0;
+  s.rx = 128;
+  s.milliseconds += 16;
+  state.update(p, s);
+  s.buttons = 1;
+  s.milliseconds += 400;
+  assert(state.update(p, s).actions[12]);
+  s.buttons = 0;
+  s.milliseconds += 16;
+  state.update(p, s);
+  s.rx = 255;
   s.buttons = 1;
   s.milliseconds += 1000;
   assert(!state.update(p, s).actions[12]);

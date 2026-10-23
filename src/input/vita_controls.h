@@ -430,7 +430,10 @@ public:
       reset();
       return finish();
     }
-    if (last && (s.milliseconds < last || s.milliseconds - last > 250))
+    // A gap this long is a load, a menu or a pause: buttons held across it
+    // wait for a release. Shorter gaps are slow frames (battle effects take
+    // 100-450 ms on the Vita) and a press made during one must count.
+    if (last && (s.milliseconds < last || s.milliseconds - last > 600))
       reset(s.milliseconds < last ? 8 : 4);
     float dt =
         last ? std::min(0.05f, float(s.milliseconds - last) / 1000.f) : 0;
