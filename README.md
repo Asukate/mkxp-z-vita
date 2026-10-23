@@ -106,19 +106,54 @@ For 2000 and 2003, skip installing: open the installer `.exe` with
 </details>
 
 <details>
-<summary><b>Linux and macOS</b> (no Windows needed)</summary>
+<summary><b>Linux and macOS</b></summary>
 
-Install `innoextract` and 7-Zip (`sudo apt install innoextract p7zip-full`
-on Debian/Ubuntu, `brew install innoextract p7zip` on macOS). Unzip the
-download first if it is a `.zip`, then:
+**1. Install two small tools, once.** Pick your system:
 
-| Engine | Command | Copy the contents of |
-| --- | --- | --- |
-| XP | `innoextract xp_rtp104e.exe` | `app/` → `rtp/Standard/` |
-| VX | `innoextract RPGVX_RTP/Setup.exe` | `app/` → `rtp/RPGVX/` |
-| VX Ace | `innoextract RTP100/Setup.exe` | `app/` → `rtp/RPGVXAce/` |
-| 2000 | `7z x rpg2000_rtp_installer.exe -oRTP2000` | `RTP2000/` → `rtp/2000/` |
-| 2003 | `7z x rpg2003_rtp_installer.exe -oRTP2003` | `RTP2003/` → `rtp/2003/` |
+- Arch, CachyOS, EndeavourOS, Manjaro:
+  ```bash
+  sudo pacman -S innoextract 7zip
+  ```
+- Debian, Ubuntu, Linux Mint:
+  ```bash
+  sudo apt install innoextract p7zip-full
+  ```
+- macOS ([Homebrew](https://brew.sh/)):
+  ```bash
+  brew install innoextract p7zip
+  ```
+
+**2. Unpack the RTP.** Put the file you downloaded in an empty folder, open a
+terminal in that folder and run the lines for your engine:
+
+- **XP**
+  ```bash
+  innoextract xp_rtp104e.exe
+  ```
+  Copy everything inside `app/` to `ux0:/data/hardrpg/rtp/Standard/`.
+- **VX**
+  ```bash
+  7z x vx_rtp102e.zip
+  innoextract RPGVX_RTP/Setup.exe
+  ```
+  Copy everything inside `app/` to `ux0:/data/hardrpg/rtp/RPGVX/`.
+- **VX Ace**
+  ```bash
+  7z x RPGVXAce_RTP.zip
+  innoextract RTP100/Setup.exe
+  ```
+  Copy everything inside `app/` to `ux0:/data/hardrpg/rtp/RPGVXAce/`.
+- **2000**
+  ```bash
+  7z x rpg2000_rtp_installer.exe -oRTP2000
+  ```
+  Copy everything inside `RTP2000/` to `ux0:/data/hardrpg/rtp/2000/`.
+- **2003**
+  ```bash
+  7z x rpg2003_rtp_installer.zip
+  7z x rpg2003_rtp_installer.exe -oRTP2003
+  ```
+  Copy everything inside `RTP2003/` to `ux0:/data/hardrpg/rtp/2003/`.
 
 </details>
 
