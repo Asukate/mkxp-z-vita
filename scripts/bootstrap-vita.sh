@@ -201,11 +201,13 @@ if [[ ! -f "$PREFIX/lib/libphysfs.a" ]]; then
     # mount-table enumeration, so declare NO_CDROM explicitly (same precedent
     # as physfs ANDROID/EMSCRIPTEN ports).
     cp "$DEPS_DIR/physfs_platform_vita.c" "$TP/physfs/src/physfs_platform_vita.c"
-    if (cd "$TP/physfs" && patch -p1 -N --dry-run < "$DEPS_DIR/patches/physfs/3.2.0-vita-platform.patch" >/dev/null 2>&1); then
-        (cd "$TP/physfs" && patch -p1 < "$DEPS_DIR/patches/physfs/3.2.0-vita-platform.patch" >/dev/null)
-    else
-        log "physfs vita patch already applied (or tree state); continuing"
-    fi
+    for physfs_patch in 3.2.0-vita-platform.patch 3.2.0-zip-stat-without-seek.patch; do
+        if (cd "$TP/physfs" && patch -p1 -N --dry-run < "$DEPS_DIR/patches/physfs/$physfs_patch" >/dev/null 2>&1); then
+            (cd "$TP/physfs" && patch -p1 < "$DEPS_DIR/patches/physfs/$physfs_patch" >/dev/null)
+        else
+            log "physfs patch $physfs_patch already applied (or tree state); continuing"
+        fi
+    done
     (cd "$TP/physfs/cmakebuild" && cmake .. -DCMAKE_TOOLCHAIN_FILE="$CAND_SRC/linux/toolchain-vita.cmake" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_FLAGS="$TP_CFLAGS -DPHYSFS_NO_CDROM_SUPPORT=1" -DCMAKE_CXX_FLAGS="$TP_CFLAGS" \
         -DCMAKE_INSTALL_PREFIX="$PREFIX" -DPHYSFS_BUILD_STATIC=true -DPHYSFS_BUILD_SHARED=false -DPHYSFS_BUILD_TEST=false -DPHYSFS_VITA_BACKEND=ON >/dev/null \
         && make -j"$JOBS" >/dev/null && make install >/dev/null)

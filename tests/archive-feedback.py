@@ -73,7 +73,7 @@ lifecycle = compile('zip-lifecycle', ['tests/native-zip-lifecycle.cpp',
     'src/native_launcher/home.cpp', 'src/native_launcher/art_fetch.cpp',
     'src/native_launcher/image.cpp', 'src/native_launcher/text_input.cpp',
     'src/native_launcher/welcome.cpp', 'src/native_launcher/i18n.cpp'],
-    ['-Wl,--wrap=PHYSFS_mount', *LAUNCHER])
+    ['-Wl,--wrap=PHYSFS_mount', '-Wl,--wrap=PHYSFS_mountIo', *LAUNCHER])
 casefold = compile('rgss-casefold', ['tests/rgss-casefold.cpp', 'src/crypto/rgssad.cpp'])
 # The Vita build keeps RGSS1/2 entry tables in ux0:/data/hardrpg/cache;
 # on the desktop that is a relative path, so this runs in its own folder.

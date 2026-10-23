@@ -1,3 +1,4 @@
+#include "buffered_io.h"
 #include "model.h"
 #include "i18n.h"
 #include "release.h"
@@ -142,7 +143,7 @@ struct ArchiveMount {
   explicit ArchiveMount(const std::string &p, const std::string &m) : source(p), point(m) {
     if (!PHYSFS_isInit() && !PHYSFS_init("hardrpg"))
       throw std::runtime_error("Cannot initialize archive reader");
-    if (!PHYSFS_mount(p.c_str(), point.c_str(), 0))
+    if (!mountArchive(p, point))
       throw std::runtime_error(tr("Cannot open ZIP archive"));
   }
   ~ArchiveMount() { PHYSFS_unmount(source.c_str()); }

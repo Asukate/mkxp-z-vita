@@ -9,6 +9,12 @@ extern "C" int __wrap_PHYSFS_mount(const char *path, const char *point,
   ++mounts;
   return __real_PHYSFS_mount(path, point, append);
 }
+extern "C" int __real_PHYSFS_mountIo(PHYSFS_Io *, const char *, const char *, int);
+extern "C" int __wrap_PHYSFS_mountIo(PHYSFS_Io *io, const char *path, const char *point,
+                                     int append) {
+  ++mounts;
+  return __real_PHYSFS_mountIo(io, path, point, append);
+}
 
 int main(int argc, char **argv) {
   assert(argc == 3);

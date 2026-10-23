@@ -57,7 +57,7 @@ class NativeLauncher(unittest.TestCase):
             ['pkg-config', '--cflags', '--libs', 'physfs'], text=True))
         subprocess.check_call([os.environ.get('CXX', 'g++'), '-std=c++14', '-O2',
             '-I'+str(ROOT/'src'), str(ROOT/'tests/native-rtp-cache.cpp'),
-            str(ROOT/'src/native_launcher/model.cpp'), str(ROOT/'src/native_launcher/i18n.cpp'), '-Wl,--wrap=PHYSFS_mount',
+            str(ROOT/'src/native_launcher/model.cpp'), str(ROOT/'src/native_launcher/i18n.cpp'), '-Wl,--wrap=PHYSFS_mount', '-Wl,--wrap=PHYSFS_mountIo',
             *flags, '-o', str(cls.rtp_probe)])
 
     def setUp(self):

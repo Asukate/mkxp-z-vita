@@ -1,0 +1,22 @@
+diff --git a/src/physfs_archiver_zip.c b/src/physfs_archiver_zip.c
+index 7327a61..e797ef6 100644
+--- a/src/physfs_archiver_zip.c
++++ b/src/physfs_archiver_zip.c
+@@ -1661,6 +1661,17 @@ static int ZIP_stat(void *opaque, const char *filename, PHYSFS_Stat *stat)
+     if (entry == NULL)
+         return 0;
+ 
++    /*
++     * A plain file's type and size are in the central directory. Its local
++     *  header is only needed to read its data, so it is checked when the
++     *  file is opened: listing a folder no longer seeks to every file.
++     */
++    else if ((entry->resolved == ZIP_UNRESOLVED_FILE) && (!entry->tree.isdir))
++    {
++        stat->filesize = (PHYSFS_sint64) entry->uncompressed_size;
++        stat->filetype = PHYSFS_FILETYPE_REGULAR;
++    } /* else if */
++
+     else if (!zip_resolve(info->io, info, entry))
+         return 0;
+ 

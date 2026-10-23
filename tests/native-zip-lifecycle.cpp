@@ -17,6 +17,15 @@ extern "C" int __wrap_PHYSFS_mount(const char*p,const char*m,int a){
  }
  return __real_PHYSFS_mount(p,m,a);
 }
+extern "C" int __real_PHYSFS_mountIo(PHYSFS_Io*,const char*,const char*,int);
+extern "C" int __wrap_PHYSFS_mountIo(PHYSFS_Io*io,const char*p,const char*m,int a){
+ ++mounts;
+ if(blockMount.load()) {
+   mountEntered.store(true);
+   while(blockMount.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+ }
+ return __real_PHYSFS_mountIo(io,p,m,a);
+}
 int main(int argc,char**argv){
  assert(argc==2);hardrpg::Paths paths;paths.root=argv[1];
  paths.storage={std::string(argv[1])+"/"};
