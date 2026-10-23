@@ -578,6 +578,9 @@ void EventThread::process(RGSSThreadData &rtData)
 #endif
                 break;
                 
+#ifndef __vita__
+            /* On the Vita, Input::update reads the pad itself (with the
+             * samples between frames), so SDL's controller copy is unused. */
             case SDL_CONTROLLERBUTTONDOWN:
                 controllerState.buttons[event.cbutton.button] = true;
                 vitaDiagControllerButton(event.cbutton.button, true);
@@ -591,6 +594,7 @@ void EventThread::process(RGSSThreadData &rtData)
             case SDL_CONTROLLERAXISMOTION:
                 controllerState.axes[event.caxis.axis] = event.caxis.value;
                 break;
+#endif
                 
             case SDL_CONTROLLERDEVICEADDED:
                 if (event.cdevice.which > 0)

@@ -1609,6 +1609,8 @@ struct GraphicsPrivate {
             redrawScreen();
         }
         vitaResetControls();
+        /* Presses made in the menu are not replayed into the game. */
+        vitaPadReset();
         threadData->ethread->setGameMenuOpen(false);
         fpsLimiter.resetFrameAdjust();
     }

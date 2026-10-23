@@ -174,6 +174,8 @@ void Config::read(int argc, char *argv[]) {
 #endif
         {"subImageFix", false},
         {"vitaKeepAwake", false},
+        {"vitaPadHistory", true},
+        {"vitaPadTest", false},
 #ifdef __WIN32__
         {"enableBlitting", false},
 #else
@@ -420,6 +422,8 @@ try { exp } catch (...) {}
 #endif
     SET_OPT(subImageFix, boolean);
     SET_OPT(vitaKeepAwake, boolean);
+    SET_OPT(vitaPadHistory, boolean);
+    SET_OPT(vitaPadTest, boolean);
     SET_OPT(enableBlitting, boolean);
     SET_OPT_CUSTOMKEY(integerScaling.active, integerScalingActive, boolean);
     SET_OPT_CUSTOMKEY(integerScaling.lastMileScaling, integerScalingLastMile, boolean);

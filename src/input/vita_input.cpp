@@ -12,6 +12,9 @@
 #include <fstream>
 #include <cstdio>
 #include "vita_resume.h"
+#include "vita_pad_replay.h"
+#include <algorithm>
+#include <vector>
 
 
 struct VitaButtonMap {
@@ -44,20 +47,167 @@ static int scaleStick(unsigned char v) {
 	return d * 256;
 }
 
-void vitaPollPads() {
+namespace {
+/* The pad as the game sees it on this Input.update, made once per update by
+ * vitaPadBeginFrame and read by both the default bindings and the profiles. */
+struct PadFrame {
+	uint16_t buttons = 0;
+	unsigned char lx = 128, ly = 128, rx = 128, ry = 128;
+	bool valid = false;
+};
+PadFrame padFrame;
+hardrpg::PadReplay padReplay;
+bool padHistory = true, padTest = false, padPrimed = false;
+uint64_t padLastStamp = 0, padLastFrameUs = 0;
+unsigned padEpoch = 0;
+/* Presses older than this when the game reads the pad again are not
+ * replayed: after a load, a menu or a resume the game gets the current state. */
+const uint64_t padMaxGapUs = 500000;
+unsigned long padUpdates = 0, padReplayed = 0;
+int padLogs = 0;
+/* Test packages only (vitaPadTest): scripted presses replace the pad. */
+struct ScriptPress {
+	uint64_t down, up;
+	uint16_t mask;
+};
+std::vector<ScriptPress> padScript;
+uint64_t padSynthUs = 0;
+
+uint16_t padBits(uint32_t sce) {
+	uint16_t bits = 0;
+	for (size_t i = 0; i < sizeof(buttonMap) / sizeof(buttonMap[0]); ++i)
+		if (sce & buttonMap[i].sce)
+			bits |= uint16_t(1u << i);
+	return bits;
+}
+uint16_t scriptMask(uint64_t us) {
+	uint16_t mask = 0;
+	for (auto &p : padScript)
+		if (us >= p.down && us < p.up)
+			mask |= p.mask;
+	return mask;
+}
+void padRestart(uint16_t bits, uint64_t stamp) {
+	padReplay.reset(bits);
+	padLastStamp = stamp;
+}
+}
+
+void vitaConfigurePad(bool history, bool test) {
+	padHistory = history;
+	padTest = test;
+	padPrimed = false;
+}
+
+void vitaPadReset() { padPrimed = false; }
+
+void vitaPadBeginFrame() {
 	static bool samplingSet = false;
 	if (!samplingSet) {
 		sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
 		samplingSet = true;
 	}
+	const uint64_t now = sceKernelGetProcessTimeWide();
+	const unsigned epoch = vitaResumeEpoch();
+	const bool gap = padLastFrameUs && now - padLastFrameUs > padMaxGapUs;
+	/* Only the samples taken since the last update can be new (one per
+	 * 16.7 ms); a normal frame asks for three instead of the whole buffer. */
+	const uint64_t elapsed = padLastFrameUs ? now - padLastFrameUs : padMaxGapUs;
+	const int wanted = int(std::min<uint64_t>(64, elapsed / 16667 + 3));
+	if (epoch != padEpoch || gap)
+		padPrimed = false;
+	padEpoch = epoch;
+	padLastFrameUs = now;
+	++padUpdates;
 
-	SceCtrlData pad;
-	int result = sceCtrlPeekBufferPositive(0, &pad, 1);
-	if (result < 0)
+	if (padTest) {
+		/* The scripted pad is sampled on the same ~60 Hz grid as the real one. */
+		if (!padPrimed) {
+			padSynthUs = now;
+			padReplay.reset(scriptMask(now));
+			padPrimed = true;
+		}
+		if (padHistory) {
+			for (; padSynthUs + 16667 <= now; padSynthUs += 16667)
+				padReplay.feed(padSynthUs + 16667, scriptMask(padSynthUs + 16667));
+		} else {
+			padSynthUs = now;
+			padReplay.reset(scriptMask(now));
+		}
+		padFrame.buttons = padReplay.deliver();
+		padFrame.lx = padFrame.ly = padFrame.rx = padFrame.ry = 128;
+		padFrame.valid = true;
 		return;
+	}
 
+	SceCtrlData pad[64];
+	const int n = sceCtrlPeekBufferPositive(0, pad, padHistory && padPrimed ? wanted : padHistory ? 64 : 1);
+	if (n <= 0) {
+		padFrame.valid = false;
+		return;
+	}
+	std::sort(pad, pad + n, [](const SceCtrlData &a, const SceCtrlData &b) {
+		return a.timeStamp < b.timeStamp;
+	});
+	const SceCtrlData &latest = pad[n - 1];
+	if (!padHistory || !padPrimed) {
+		/* No replay of what happened before the game started reading. */
+		padRestart(padBits(latest.buttons), latest.timeStamp);
+		padPrimed = true;
+		if (padHistory && padLogs == 0 && n > 1) {
+			++padLogs;
+			std::fprintf(stderr, "Pad history: %d samples, %.1f ms apart\n", n,
+			             double(latest.timeStamp - pad[0].timeStamp) / 1000.0 / (n - 1));
+		}
+	} else {
+		int fresh = 0;
+		for (int i = 0; i < n; ++i) {
+			if (pad[i].timeStamp <= padLastStamp)
+				continue;
+			padReplay.feed(pad[i].timeStamp, padBits(pad[i].buttons));
+			++fresh;
+		}
+		padLastStamp = latest.timeStamp;
+		if (fresh > 1) {
+			++padReplayed;
+			if (padLogs < 4 && padReplay.pending()) {
+				++padLogs;
+				std::fprintf(stderr, "Pad replay: %d samples in one frame, %lu changes waiting\n",
+				             fresh, (unsigned long)padReplay.pending());
+			}
+		}
+	}
+	padFrame.buttons = padReplay.deliver();
+	padFrame.lx = latest.lx;
+	padFrame.ly = latest.ly;
+	padFrame.rx = latest.rx;
+	padFrame.ry = latest.ry;
+	padFrame.valid = true;
+}
+
+void vitaPadScript(const std::vector<std::array<double, 3>> &presses) {
+	if (!padTest)
+		return;
+	const uint64_t now = sceKernelGetProcessTimeWide();
+	padScript.clear();
+	for (auto &p : presses)
+		padScript.push_back({now + uint64_t(p[0] * 1000), now + uint64_t(p[1] * 1000), uint16_t(p[2])});
+}
+
+std::string vitaPadStats() {
+	char text[200];
+	std::snprintf(text, sizeof(text),
+	              "history=%d test=%d updates=%lu multi_sample=%lu deferred=%lu dropped=%lu pending=%lu",
+	              padHistory, padTest, padUpdates, padReplayed, padReplay.deferredUpdates,
+	              padReplay.dropped, (unsigned long)padReplay.pending());
+	return text;
+}
+
+void vitaPollPads() {
+	if (!padFrame.valid)
+		return;
 	for (size_t i = 0; i < sizeof(buttonMap) / sizeof(buttonMap[0]); ++i) {
-		bool pressed = (pad.buttons & buttonMap[i].sce) != 0;
+		bool pressed = (padFrame.buttons & (1u << i)) != 0;
 
 		bool &slot = EventThread::controllerState.buttons[buttonMap[i].sdl];
 		if (pressed == slot)
@@ -66,10 +216,10 @@ void vitaPollPads() {
 		vitaDiagControllerButton(buttonMap[i].sdl, pressed);
 	}
 
-	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_LEFTX] = scaleStick(pad.lx);
-	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_LEFTY] = scaleStick(pad.ly);
-	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_RIGHTX] = scaleStick(pad.rx);
-	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_RIGHTY] = scaleStick(pad.ry);
+	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_LEFTX] = scaleStick(padFrame.lx);
+	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_LEFTY] = scaleStick(padFrame.ly);
+	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_RIGHTX] = scaleStick(padFrame.rx);
+	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_RIGHTY] = scaleStick(padFrame.ry);
 }
 
 namespace {
@@ -96,15 +246,21 @@ void vitaLoadControls(const std::string &configPath) {
   // unless the screen was given touch buttons or zones, which come first.
   if(profile.tapToWalk && profile.enabled && profile.front==0)profile.front=2;
 }
-hardrpg::ControlSample vitaReadControls(bool front,bool rear) {
+hardrpg::ControlSample vitaReadControls(bool front,bool rear,bool fromFrame) {
   hardrpg::ControlSample sample;sample.milliseconds=sceKernelGetProcessTimeWide()/1000;
-  static bool analog=false; if(!analog) {sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);analog=true;}
-  SceCtrlData pad{};
-  int result = sceCtrlPeekBufferPositive(0,&pad,1);
-  if(result>0) {
-    for(size_t i=0;i<sizeof(buttonMap)/sizeof(*buttonMap);++i)
-      if(pad.buttons&buttonMap[i].sce)sample.buttons|=1u<<i;
-    sample.lx=pad.lx;sample.ly=pad.ly;sample.rx=pad.rx;sample.ry=pad.ry;
+  if(fromFrame) {
+    if(padFrame.valid) {
+      sample.buttons=padFrame.buttons;
+      sample.lx=padFrame.lx;sample.ly=padFrame.ly;sample.rx=padFrame.rx;sample.ry=padFrame.ry;
+    }
+  } else {
+    /* Menus and the launcher preview read the live pad. */
+    static bool analog=false; if(!analog) {sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);analog=true;}
+    SceCtrlData pad{};
+    if(sceCtrlPeekBufferPositive(0,&pad,1)>0) {
+      sample.buttons=padBits(pad.buttons);
+      sample.lx=pad.lx;sample.ly=pad.ly;sample.rx=pad.rx;sample.ry=pad.ry;
+    }
   }
   static bool ready[2]={false,false};static SceTouchPanelInfo info[2]{};
   for(int port=0;port<2;++port) {

@@ -75,6 +75,10 @@ struct Config {
     bool subImageFix;
     /* Vita: keep the console from entering standby on its idle timer while a game runs. */
     bool vitaKeepAwake;
+    /* Vita: keep pad presses that happen between two slow frames (on). */
+    bool vitaPadHistory;
+    /* Vita benchmark packages: the pad comes from System.vita_pad_script. */
+    bool vitaPadTest;
     bool enableBlitting;
     int maxTextureSize;
     

@@ -229,6 +229,10 @@ RB_METHOD(mkxpSettingsMenu);
 RB_METHOD(mkxpCpuCount);
 RB_METHOD(mkxpSystemMemory);
 RB_METHOD(mkxpVitaMemorySnapshot);
+#ifdef __vita__
+RB_METHOD(mkxpVitaPadScript);
+RB_METHOD(mkxpVitaPadStats);
+#endif
 RB_METHOD(mkxpReloadPathCache);
 RB_METHOD(mkxpAddPath);
 RB_METHOD(mkxpRemovePath);
@@ -405,6 +409,11 @@ static void mriBindingInit() {
     _rb_define_module_function(mod, "nproc", mkxpCpuCount);
     _rb_define_module_function(mod, "memory", mkxpSystemMemory);
     _rb_define_module_function(mod, "vita_memory_snapshot", mkxpVitaMemorySnapshot);
+#ifdef __vita__
+    /* Benchmark packages: scripted pad presses (needs vitaPadTest). */
+    _rb_define_module_function(mod, "vita_pad_script", mkxpVitaPadScript);
+    _rb_define_module_function(mod, "vita_pad_stats", mkxpVitaPadStats);
+#endif
     _rb_define_module_function(mod, "reload_cache", mkxpReloadPathCache);
     _rb_define_module_function(mod, "mount", mkxpAddPath);
     _rb_define_module_function(mod, "unmount", mkxpRemovePath);
@@ -735,6 +744,34 @@ RB_METHOD(mkxpVitaMemorySnapshot) {
     const size_t size = vitaMemorySnapshot(snapshot, sizeof(snapshot));
     return rb_utf8_str_new(snapshot, size);
 }
+
+#ifdef __vita__
+/* [[down_ms, up_ms, button_bits], ...] measured from now. */
+RB_METHOD(mkxpVitaPadScript) {
+    RB_UNUSED_PARAM;
+    rb_check_arity(argc, 1, 1);
+    VALUE list = argv[0];
+    Check_Type(list, T_ARRAY);
+    std::vector<std::array<double, 3>> presses;
+    for (long i = 0; i < RARRAY_LEN(list); ++i) {
+        VALUE item = rb_ary_entry(list, i);
+        Check_Type(item, T_ARRAY);
+        if (RARRAY_LEN(item) != 3)
+            rb_raise(rb_eArgError, "each press is [down_ms, up_ms, bits]");
+        presses.push_back({NUM2DBL(rb_ary_entry(item, 0)), NUM2DBL(rb_ary_entry(item, 1)),
+                           NUM2DBL(rb_ary_entry(item, 2))});
+    }
+    vitaPadScript(presses);
+    return Qnil;
+}
+
+RB_METHOD(mkxpVitaPadStats) {
+    RB_UNUSED_PARAM;
+    rb_check_arity(argc, 0, 0);
+    const std::string stats = vitaPadStats();
+    return rb_utf8_str_new(stats.data(), stats.size());
+}
+#endif
 
 RB_METHOD(mkxpSystemMemory) {
     RB_UNUSED_PARAM;

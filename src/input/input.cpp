@@ -778,6 +778,7 @@ struct InputPrivate
         last_update = 0;
 #ifdef __vita__
         vitaLoadControls(rtData.config.vitaConfigPath);
+        vitaConfigurePad(rtData.config.vitaPadHistory, rtData.config.vitaPadTest);
 #endif
         
         initStaticKbBindings();
@@ -1126,9 +1127,7 @@ struct InputPrivate
 #ifdef __vita__
         /* Some Vita SDL shims expose controller 0 and feed physical input via
          * SDL controller events; older/no-controller paths still use SceCtrl. */
-        const bool vitaSDLControllerPresent = shState->eThread().controller() != 0;
-        if (!vitaSDLControllerPresent)
-            vitaPollPads();
+        /* The pad was read at the start of Input::update (vitaPadBeginFrame). */
 #endif
         for (int i = 0; i < SDL_CONTROLLER_AXIS_MAX; i++)
             axisStateArray[i] = shState->eThread().controllerState.axes[i];
@@ -1262,10 +1261,14 @@ void Input::update()
     ButtonCode repeatCand = None;
     
     #ifdef __vita__
+    /* Read the pad before the bindings are polled, so a press reaches the
+     * game on this update, not the next one. */
+    vitaPadBeginFrame();
+    vitaPollPads();
     p->vitaResult = {};
     if (vitaControlProfile().enabled) {
         auto sample = vitaReadControls(vitaControlProfile().front != 0,
-                                       vitaControlProfile().rear != 0);
+                                       vitaControlProfile().rear != 0, true);
         const auto &rt = shState->rtData();
         float scale = shState->config().enableHires ?
                       shState->config().framebufferScalingFactor : 1.f;
@@ -1283,7 +1286,7 @@ void Input::update()
     } else if (vitaControlProfile().tapToWalk) {
         /* No custom mappings: only the front screen is read, as the pointer
          * and its left button, which is all tap-to-walk needs. */
-        auto sample = vitaReadControls(true, false);
+        auto sample = vitaReadControls(true, false, true);
         const auto &rt = shState->rtData();
         float scale = shState->config().enableHires ?
                       shState->config().framebufferScalingFactor : 1.f;
