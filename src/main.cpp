@@ -54,6 +54,7 @@
 #include "vita_livearea.h"
 #include "vita_error_report.h"
 #include "vita_runtime_log.h"
+#include <psp2/power.h>
 #endif
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
 #include <cstdio>
@@ -312,6 +313,12 @@ int main(int argc, char *argv[]) {
     if (vitaHandleLiveAreaLaunch())
         return 0;
     vitaStartupTimerInit();
+    /* The launcher and every game run at the Vita's full clocks, whether or
+     * not the system has an overclocking plugin (EasyRPG asks for the same). */
+    scePowerSetArmClockFrequency(444);
+    scePowerSetBusClockFrequency(222);
+    scePowerSetGpuClockFrequency(222);
+    scePowerSetGpuXbarClockFrequency(166);
     vitaRuntimeLogInit();
     fprintf(stderr, "HardRPG runtime %s started\n", MKXPZ_GIT_HASH);
 #endif
