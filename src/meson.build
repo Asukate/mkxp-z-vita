@@ -175,7 +175,7 @@ if host_system == 'vita'
     if get_option('proto_launcher')
         main_source += files('vita_proto_launcher.cpp')
         global_args += '-DMKXPZ_PROTO_LAUNCHER'
-        main_source += files('native_launcher/model.cpp', 'native_launcher/ui.cpp', 'native_launcher/view.cpp', 'native_launcher/home.cpp', 'native_launcher/home_view.cpp', 'native_launcher/image.cpp', 'native_launcher/art_loader.cpp', 'native_launcher/art_fetch.cpp', 'native_launcher/sheet_view.cpp', 'native_launcher/welcome.cpp', 'native_launcher/welcome_view.cpp', 'native_launcher/i18n.cpp', 'native_launcher/runtime.cpp', 'native_launcher/text_input.cpp', 'native_launcher/update_check.cpp', 'native_launcher/theme.cpp', 'native_launcher/launcher_audio.cpp')
+        main_source += files('native_launcher/model.cpp', 'native_launcher/ui.cpp', 'native_launcher/view.cpp', 'native_launcher/home.cpp', 'native_launcher/home_view.cpp', 'native_launcher/image.cpp', 'native_launcher/art_loader.cpp', 'native_launcher/art_fetch.cpp', 'native_launcher/sheet_view.cpp', 'native_launcher/welcome.cpp', 'native_launcher/welcome_view.cpp', 'native_launcher/i18n.cpp', 'native_launcher/runtime.cpp', 'native_launcher/text_input.cpp', 'native_launcher/update_check.cpp', 'native_launcher/theme.cpp', 'native_launcher/launcher_audio.cpp', 'native_launcher/game_menu.cpp', 'display/vita-stats.cpp')
         global_args += '-DMKXPZ_NATIVE_LAUNCHER'
     endif
     if get_option('vita_diagnostics')

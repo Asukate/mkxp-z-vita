@@ -114,6 +114,13 @@ struct VitaGLTexturePrefix
 #define MOVIE_AUDIO_BUFFER_SIZE 2048
 #define AUDIO_BUFFER_LEN_MS 2000
 
+#if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
+#include "game-menu-layer.h"
+#include "vita-stats.h"
+#include "native_launcher/game_menu.h"
+#include "input/vita_input.h"
+#include <psp2/touch.h>
+#endif
 #ifdef __vita__
 #include "vita_startup_timer.h"
 extern "C" void vitaScriptCacheFlush(void);
@@ -1449,6 +1456,163 @@ struct GraphicsPrivate {
             fastForward.measured(drawn, workUs, 1000000.0 / std::max(1, fastForward.rate(frameRate)));
     }
     FastForwardBadge fastForwardBadge;
+#if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
+    /* The in-game menu: L+R+Start held, or a tap on its icon. */
+    hardrpg::GameMenu gameMenu;
+    GameMenuLayer gameMenuLayer;
+    const hardrpg::View *gameMenuView = nullptr;
+    /* The performance overlay, drawn with the launcher's fonts. */
+    std::unique_ptr<hardrpg::View> statsView;
+    bool statsViewFailed = false;
+    VitaStats vitaStats;
+    uint64_t statsSerial = uint64_t(-1);
+    int statsLevel = -1, statsTone = 0;
+    std::string statsHeadline;
+    std::vector<hardrpg::View::StatRow> statsRows;
+    void drawStats() {
+        const int level = threadData->config.performanceMetrics;
+        if (!statsView && !statsViewFailed) {
+            try {
+                hardrpg::useLauncherLanguage();
+                statsView.reset(new hardrpg::View("app0:/font.ttf"));
+            } catch (...) {
+                statsViewFailed = true;
+            }
+        }
+        if (!statsView)
+            return;
+        /* New text twice a second, when the frame sampler has a new reading. */
+        const auto &samples = performanceOverlay.samples();
+        if (samples.serial() != statsSerial || level != statsLevel) {
+            statsSerial = samples.serial();
+            statsLevel = level;
+            vitaStats.build(level, samples.reading(), statsHeadline, statsTone, statsRows);
+        }
+        const int width = level >= 3 ? 250 : level == 2 ? 200 : 104;
+        const hardrpg::Image &panel = statsView->statsPanel(statsHeadline, statsTone, statsRows, width);
+        /* In the left border, under the menu icon, when it fits; otherwise
+         * over the game's bottom left corner. */
+        const int x = scOffset.x >= width + 8 ? (scOffset.x - width) / 2 : 8;
+        const int y = winSize.y - panel.height - 8;
+        gameMenuLayer.drawImage(panel, x, y, winSize.x, winSize.y);
+    }
+    bool menuIconTouching = false;
+    /* The icon was pressed: drawn lit for a frame, then the menu opens. */
+    bool menuIconPressed = false;
+    bool playingGame() const { return threadData->config.gameFolder != "app0:/stub"; }
+    /* A press that starts on the icon in the left border. */
+    bool menuIconTapped() {
+        int x, y, w, h;
+        if (!playingGame() || !GameMenuLayer::iconRect(scOffset.x, x, y, w, h))
+            return false;
+        static bool sampling = false;
+        if (!sampling) {
+            sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
+            sampling = true;
+        }
+        SceTouchData data = {};
+        if (sceTouchPeek(SCE_TOUCH_PORT_FRONT, &data, 1) < 0)
+            return false;
+        bool down = data.reportNum > 0;
+        bool began = down && !menuIconTouching;
+        menuIconTouching = down;
+        if (!began)
+            return false;
+        int tx = data.report[0].x / 2, ty = data.report[0].y / 2;
+        /* The whole border beside the icon counts, generously. */
+        if (tx < scOffset.x && ty < y + h + 40)
+            menuIconPressed = true;
+        return false;
+    }
+    /* Applies what the menu changed: display, speed, overlay and controls. */
+    void applyGameMenuSettings() {
+        json5pp::value values;
+        try {
+            values = json5pp::parse(gameMenu.valuesJson());
+        } catch (...) {
+            return;
+        }
+        if (!values.is_object())
+            return;
+        auto &o = values.as_object();
+        auto flag = [&](const char *name, bool &out) {
+            auto i = o.find(name);
+            if (i != o.end() && i->second.is_boolean()) { out = i->second.as_boolean(); return true; }
+            return false;
+        };
+        auto number = [&](const char *name, int &out) {
+            auto i = o.find(name);
+            if (i != o.end() && i->second.is_integer()) { out = int(i->second.as_integer()); return true; }
+            return false;
+        };
+        Config &config = threadData->config;
+        bool aspect = config.fixedAspectRatio, integer = integerScaleActive, ff = config.fastForward;
+        flag("fixedAspectRatio", aspect);
+        flag("integerScalingActive", integer);
+        number("smoothScaling", config.smoothScaling);
+        number("smoothScalingDown", config.smoothScalingDown);
+        number("performanceMetrics", config.performanceMetrics);
+        flag("fastForward", ff);
+        if (integer != integerScaleActive) {
+            integerScaleActive = integer;
+            integerLastMileScaling = !integer;
+            findHighestIntegerScale();
+            rebuildIntegerScaleBuffer();
+        }
+        config.fixedAspectRatio = aspect;
+        recalculateScreenSize(aspect);
+        findHighestIntegerScale();
+        recalculateScreenSize(aspect);
+        updateScreenResoRatio(threadData);
+        SDL_Rect screenRect = {scOffset.x, scOffset.y, scSize.x, scSize.y};
+        threadData->ethread->notifyGameScreenChange(screenRect);
+        config.fastForward = ff;
+        fastForward.allowed = ff;
+        vitaLoadControls(config.vitaConfigPath);
+    }
+    /* The game waits here while the menu is open: each frame redraws the
+     * paused game with the menu over it, so display changes show at once. */
+    void runGameMenu() {
+        if (!gameMenu.open(threadData->config.vitaConfigPath))
+            return;
+        threadData->ethread->setGameMenuOpen(true);
+        if (fastForward.active) {
+            fastForward.active = false;
+            applyFrameRate();
+        }
+        for (;;) {
+            gameMenu.step();
+            if (gameMenu.takeChanged())
+                applyGameMenuSettings();
+            if (gameMenu.exit() != hardrpg::GameMenu::Staying || threadData->rqTerm)
+                break;
+            gameMenuView = gameMenu.frame();
+            checkResize();
+            redrawScreen();
+        }
+        const bool library = gameMenu.exit() == hardrpg::GameMenu::BackToLibrary;
+        gameMenuView = nullptr;
+        gameMenuLayer.release();
+        gameMenu.close();
+        if (library) {
+            /* The event thread leaves for the launcher; the hold checks stay
+             * off until then. */
+            threadData->ethread->requestReturnToLauncher();
+            return;
+        }
+        /* Back to the game once every button is up, so the press that closed
+         * the menu does not reach it. */
+        for (int frame = 0; frame < 180 && !threadData->rqTerm; ++frame) {
+            SceCtrlData pad = {};
+            if (sceCtrlPeekBufferPositive(0, &pad, 1) <= 0 || !pad.buttons)
+                break;
+            redrawScreen();
+        }
+        vitaResetControls();
+        threadData->ethread->setGameMenuOpen(false);
+        fpsLimiter.resetFrameAdjust();
+    }
+#endif
     
     
     FPSLimiter fpsLimiter;
@@ -1654,12 +1818,24 @@ struct GraphicsPrivate {
     }
     
     void swapGLBuffer() {
+#if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
+        /* Hidden while the in-game menu is open: it would show through it. */
+        if (threadData->config.performanceMetrics && !gameMenu.isOpen())
+            drawStats();
+#else
         if (threadData->config.performanceMetrics)
             performanceOverlay.draw(threadData->config.performanceMetrics,
                                     winSize.x, winSize.y, scOffset.x, scOffset.y,
                                     scSize.x, scSize.y);
+#endif
         if (fastForward.active)
             fastForwardBadge.draw(winSize.x, winSize.y);
+#if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
+        if (gameMenu.isOpen() && gameMenuView)
+            gameMenuLayer.draw(*gameMenuView, winSize.x, winSize.y);
+        else if (playingGame())
+            gameMenuLayer.drawIcon(winSize.x, winSize.y, scOffset.x, menuIconPressed);
+#endif
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("FPS_DELAY_BEGIN");
 #endif
@@ -1810,7 +1986,9 @@ struct GraphicsPrivate {
         if (sceCtrlPeekBufferPositive(0, &pad, 1) > 0) {
             l = pad.buttons & SCE_CTRL_LTRIGGER;
             r = pad.buttons & SCE_CTRL_RTRIGGER;
-            select = pad.buttons & SCE_CTRL_SELECT;
+            /* L+R+Select returns to the launcher and L+R+Start opens the
+             * menu: neither switches fast forward. */
+            select = pad.buttons & (SCE_CTRL_SELECT | SCE_CTRL_START);
         }
         const bool mapped = vitaFastForwardHeld();
 #else
@@ -2391,6 +2569,18 @@ void Graphics::update(bool checkForShutdown) {
     
     p->checkSyncLock();
     p->updateFastForward();
+#if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
+    if (!p->frozen && p->playingGame()) {
+        /* A press on the icon is drawn lit first (this frame), and the menu
+         * opens on the next update. */
+        bool icon = p->menuIconPressed;
+        p->menuIconPressed = false;
+        if (icon || p->threadData->ethread->takeGameMenuRequest())
+            p->runGameMenu();
+        else
+            p->menuIconTapped();
+    }
+#endif
     
 #ifdef MKXPZ_STEAM
     if (STEAMSHIM_alive())

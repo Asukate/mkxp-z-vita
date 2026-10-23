@@ -206,6 +206,14 @@ void EventThread::process(RGSSThreadData &rtData)
     const Uint32 returnHoldMs = 500;
     Uint32 returnHeldAt = 0;
     bool returnHoldActive = false;
+    /* L+R+Start held as long opens the in-game menu, once per hold. */
+    const unsigned int menuButtons = SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER |
+                                     SCE_CTRL_START;
+    Uint32 menuHeldAt = 0;
+    bool menuHoldActive = false, menuHoldUsed = false;
+    gameMenuRequest.clear();
+    gameMenuOpen.clear();
+    menuReturnRequest.clear();
 #endif
     
 #ifdef MKXPZ_BUILD_XCODE
@@ -260,9 +268,29 @@ void EventThread::process(RGSSThreadData &rtData)
         }
 #endif
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
-        if (playingGame) {
+        if (playingGame && menuReturnRequest) {
+            /* The in-game menu's Back to library. */
+            returnToLauncher = true;
+            terminate = true;
+            break;
+        }
+        if (playingGame && gameMenuOpen) {
+            /* The menu reads the buttons itself. */
+            returnHoldActive = menuHoldActive = false;
+        } else if (playingGame) {
             SceCtrlData pad = {};
             int result = sceCtrlPeekBufferPositive(0, &pad, 1);
+            if (result > 0 && (pad.buttons & menuButtons) == menuButtons) {
+                if (!menuHoldActive) {
+                    menuHeldAt = SDL_GetTicks();
+                    menuHoldActive = true;
+                } else if (!menuHoldUsed && SDL_GetTicks() - menuHeldAt >= returnHoldMs) {
+                    menuHoldUsed = true;
+                    gameMenuRequest.set();
+                }
+            } else {
+                menuHoldActive = menuHoldUsed = false;
+            }
             if (result > 0 &&
                 (pad.buttons & returnButtons) == returnButtons) {
                 if (!returnHoldActive) {
@@ -755,6 +783,27 @@ void EventThread::process(RGSSThreadData &rtData)
 bool EventThread::returnToLauncherRequested() const
 {
     return returnToLauncher;
+}
+
+bool EventThread::takeGameMenuRequest()
+{
+    if (!gameMenuRequest)
+        return false;
+    gameMenuRequest.clear();
+    return true;
+}
+
+void EventThread::setGameMenuOpen(bool open)
+{
+    if (open)
+        gameMenuOpen.set();
+    else
+        gameMenuOpen.clear();
+}
+
+void EventThread::requestReturnToLauncher()
+{
+    menuReturnRequest.set();
 }
 #endif
 

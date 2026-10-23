@@ -50,6 +50,7 @@ class PerformanceOverlay {
     }
 public:
     void reset() { sampler.reset(); }
+    const PerformanceMetrics::Sampler &samples() const { return sampler; }
     void present(uint64_t now, unsigned generation) {
         if (generationSet && generation != resumeGeneration) sampler.reset();
         generationSet = true;

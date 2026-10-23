@@ -388,7 +388,7 @@ try { exp } catch (...) {}
     SET_OPT(displayFPS, boolean);
     SET_OPT(printFPS, boolean);
     SET_OPT(performanceMetrics, integer);
-    if (performanceMetrics < 0 || performanceMetrics > 2) performanceMetrics = 0;
+    if (performanceMetrics < 0 || performanceMetrics > 3) performanceMetrics = 0;
     SET_OPT(fastForward, boolean);
     SET_OPT(fullscreen, boolean);
     SET_OPT(fixedAspectRatio, boolean);

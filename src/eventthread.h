@@ -91,6 +91,13 @@ public:
 
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
     bool returnToLauncherRequested() const;
+    /* The in-game menu (L+R+Start held, or its corner icon). Called from the
+     * RGSS thread: whether the hold asked for it since the last call; that
+     * the menu is open (the button holds are ignored meanwhile); and its
+     * Back to library. */
+    bool takeGameMenuRequest();
+    void setGameMenuOpen(bool open);
+    void requestReturnToLauncher();
 #endif
 
 	/* Called from RGSS thread */
@@ -134,6 +141,7 @@ private:
 	bool showCursor;
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
     bool returnToLauncher;
+    AtomicFlag gameMenuRequest, gameMenuOpen, menuReturnRequest;
 #endif
     
     SDL_GameController *ctrl;
