@@ -33,6 +33,7 @@
 #include "debugwriter.h"
 
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <algorithm>
 #include <cctype>
@@ -1008,13 +1009,20 @@ static bool pickExistingFontName(const std::vector<std::string> &names,
 		}
 		else
 		{
-			if (i == 0)
+			/* Once per name: games set font names while they draw (damage
+			 * popups do it on every hit), and on the Vita each log line is a
+			 * write to the memory card, about 40 ms. */
+			static std::unordered_set<std::string> reported;
+			if (reported.insert(names[i]).second)
 			{
-				Debug() << "Primary font not found:" << names[i];
-			}
-			else
-			{
-				Debug() << "Fallback font not found:" << names[i];
+				if (i == 0)
+				{
+					Debug() << "Primary font not found:" << names[i];
+				}
+				else
+				{
+					Debug() << "Fallback font not found:" << names[i];
+				}
 			}
 		}
 	}
