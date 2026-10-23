@@ -3080,6 +3080,8 @@ void Bitmap::drawText(int x, int y,
 struct TextCacheEntry
 {
     SDL_Surface *surface;
+    /* textSize of the string, so a hit skips measuring it again. */
+    int alignW, alignH;
     std::list<const std::string *>::iterator order;
 };
 static std::unordered_map<std::string, TextCacheEntry> textCache;
@@ -3100,17 +3102,18 @@ static SDL_Surface *textCacheCopy(SDL_Surface *from)
     return copy;
 }
 
-/* A copy the caller owns, or null when the text has to be rendered. */
-static SDL_Surface *textCacheFind(const std::string &key)
+/* The cached entry (owned by the cache), or null when the text has to be
+ * rendered. Valid until the next textCacheStore. */
+static const TextCacheEntry *textCacheFind(const std::string &key)
 {
     std::unordered_map<std::string, TextCacheEntry>::iterator it = textCache.find(key);
     if (it == textCache.end())
         return 0;
     textCacheOrder.splice(textCacheOrder.end(), textCacheOrder, it->second.order);
-    return textCacheCopy(it->second.surface);
+    return &it->second;
 }
 
-static void textCacheStore(const std::string &key, SDL_Surface *surface)
+static void textCacheStore(const std::string &key, SDL_Surface *surface, int alignW, int alignH)
 {
     const size_t bytes = (size_t)surface->pitch * surface->h;
     if (surface->format->BitsPerPixel != 32 || bytes > textCacheBudget / 8 || textCache.count(key))
@@ -3130,6 +3133,8 @@ static void textCacheStore(const std::string &key, SDL_Surface *surface)
     std::pair<std::unordered_map<std::string, TextCacheEntry>::iterator, bool> added =
         textCache.insert(std::make_pair(key, TextCacheEntry()));
     added.first->second.surface = surface;
+    added.first->second.alignW = alignW;
+    added.first->second.alignH = alignH;
     added.first->second.order = textCacheOrder.insert(textCacheOrder.end(), &added.first->first);
     textCacheBytes += bytes;
 }
@@ -3504,14 +3509,48 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
         }
     }
     int doubleOutlineSize = scaledOutlineSize * 2;
-    
+
+    timing.stage(0);
+    profile.stage(FrameProfile::TextPrep + 1);
+    /* Everything the finished text surface and its measured size depend on:
+     * the string, the font, the rect (the outline pass crops by it) and the
+     * width the string is trimmed to. A hit needs no FreeType call at all. */
+    const int limitWidth = std::min(width() - rect.x, rect.w);
+    std::string textKey(str);
+    {
+        const SDL_Color keyColor = fontColor.toSDLColor(), keyOut = outColor.toSDLColor();
+        struct
+        {
+            TTF_Font *font; int size, w, h, outline, limit;
+            uint8_t color[4], out[4], bold, italic, solid, shadow, crop;
+        } fields;
+        memset(&fields, 0, sizeof(fields)); /* padding is part of the key */
+        fields.font = sdlFont; fields.size = p->font->getSize();
+        fields.w = rect.w; fields.h = rect.h; fields.outline = scaledOutlineSize; fields.limit = limitWidth;
+        fields.color[0] = keyColor.r; fields.color[1] = keyColor.g; fields.color[2] = keyColor.b; fields.color[3] = keyColor.a;
+        fields.out[0] = keyOut.r; fields.out[1] = keyOut.g; fields.out[2] = keyOut.b; fields.out[3] = keyOut.a;
+        fields.bold = p->font->getBold(); fields.italic = p->font->getItalic(); fields.solid = p->font->isSolid();
+        fields.shadow = p->font->getShadow(); fields.crop = shState->config().fontOutlineCrop;
+        textKey.push_back('\0');
+        textKey.append((const char *)&fields, sizeof(fields));
+    }
+    const TextCacheEntry *cached = textCacheFind(textKey);
+    const bool textCached = cached != 0;
+    SDL_Surface *txtSurf = 0;
+    int alignmentWidth, alignmentHeight;
+    float squeezeLimit = 0.5f;
+    if (textCached)
+    {
+        txtSurf = cached->surface;
+        alignmentWidth = cached->alignW;
+        alignmentHeight = cached->alignH;
+    }
+    else
+    {
     // Use the output of textSize to determine squeezing, since textSize tends to be used to determine
     // rect dimensions.
     // Also use it to determine position, because freetype sometimes treats the last character as
     // being a pixel wider than it should be, and which textSize is currently set to compensate for.
-    timing.stage(0);
-    profile.stage(FrameProfile::TextPrep + 1);
-    int alignmentWidth, alignmentHeight;
     {
         const IntRect &text_size = textSize(str);
         alignmentWidth = text_size.w;
@@ -3523,8 +3562,7 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
     
     // Trim the text to only fill double the rect width
     int charLimit = 0;
-    float squeezeLimit = 0.5f;
-    if (TTF_MeasureUTF8(sdlFont, str, std::min(width() - rect.x, rect.w) / squeezeLimit, nullptr, &charLimit) == 0)
+    if (TTF_MeasureUTF8(sdlFont, str, limitWidth / squeezeLimit, nullptr, &charLimit) == 0)
     {
         if (charLimit != fixed.size())
         {
@@ -3552,31 +3590,7 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
     
     timing.stage(1);
     profile.stage(FrameProfile::TextPrep + 2);
-    /* Everything the finished text surface depends on. The outline pass
-     * crops by the rect, so its size is part of the key. */
-    std::string textKey(str);
-    {
-        const SDL_Color keyColor = fontColor.toSDLColor(), keyOut = outColor.toSDLColor();
-        struct
-        {
-            TTF_Font *font; int size, w, h, outline;
-            uint8_t color[4], out[4], bold, italic, solid, shadow, crop;
-        } fields;
-        memset(&fields, 0, sizeof(fields)); /* padding is part of the key */
-        fields.font = sdlFont; fields.size = p->font->getSize();
-        fields.w = rect.w; fields.h = rect.h; fields.outline = scaledOutlineSize;
-        fields.color[0] = keyColor.r; fields.color[1] = keyColor.g; fields.color[2] = keyColor.b; fields.color[3] = keyColor.a;
-        fields.out[0] = keyOut.r; fields.out[1] = keyOut.g; fields.out[2] = keyOut.b; fields.out[3] = keyOut.a;
-        fields.bold = p->font->getBold(); fields.italic = p->font->getItalic(); fields.solid = p->font->isSolid();
-        fields.shadow = p->font->getShadow(); fields.crop = shState->config().fontOutlineCrop;
-        textKey.push_back('\0');
-        textKey.append((const char *)&fields, sizeof(fields));
-    }
-    SDL_Surface *txtSurf = textCacheFind(textKey);
-    const bool textCached = txtSurf != 0;
-    if (textCached)
-        ;
-    else if (p->font->isSolid())
+    if (p->font->isSolid())
         txtSurf = TTF_RenderUTF8_Solid(sdlFont, str, c);
     else
         txtSurf = TTF_RenderUTF8_Blended(sdlFont, str, c);
@@ -3607,6 +3621,8 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
         applyShadow(txtSurf, *p->format, c, scaledShadowSize);
     }
     
+    }
+
     int alignX = rect.x;
     
     switch (align)
@@ -3702,7 +3718,7 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
     }
     
     if (!textCached)
-        textCacheStore(textKey, txtSurf);
+        textCacheStore(textKey, txtSurf, alignmentWidth, alignmentHeight);
 
     timing.stage(4);
     profile.stage(FrameProfile::TextPrep + 5);
@@ -3714,12 +3730,43 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
     destRect.h = std::min(destRect.h, height() - destRect.y);
     
     IntRect sourceRect(scaledOutlineSize, scaledOutlineSize, destRect.w / squeeze, destRect.h);
-    
+    bool smooth = squeeze != 1.0f;
+
+    if (p->cpu)
     {
+        /* CPU-composed contents (window text): blend the text pixels in
+         * directly, as stretchBlt would, without a temporary bitmap or a
+         * copy of the cached surface. */
+        timing.stage(5);
+        profile.stage(FrameProfile::TextPrep + 6);
+        if (!shrinkRects(sourceRect.x, sourceRect.w, txtSurf->w, destRect.x, destRect.w, width()) &&
+            !shrinkRects(sourceRect.y, sourceRect.h, txtSurf->h, destRect.y, destRect.h, height()) &&
+            sourceRect.w > 0 && sourceRect.h > 0 && destRect.w > 0 && destRect.h > 0)
+        {
+            cpuBlit(p->cpu, destRect, txtSurf, sourceRect, 255,
+                    smooth && !(sourceRect.w == destRect.w && sourceRect.h == destRect.h));
+            const IntRect changed = cpuClip(destRect, p->cpu->w, p->cpu->h);
+            p->addTaintedArea(changed);
+            cpuTouch(p, changed);
+            p->onModified();
+        }
+        if (!textCached)
+            SDL_FreeSurface(txtSurf);
+        timing.stage(6);
+        profile.stage(FrameProfile::TextPrep + 7);
+    }
+    else
+    {
+    /* The temporary bitmap owns its surface; a cached one is copied. */
+    if (textCached)
+    {
+        txtSurf = textCacheCopy(txtSurf);
+        if (!txtSurf)
+            throw Exception(Exception::SDLError, "Error copying cached text: %s", SDL_GetError());
+    }
     Bitmap txtBitmap(txtSurf, nullptr, true);
     timing.stage(5);
     profile.stage(FrameProfile::TextPrep + 6);
-    bool smooth = squeeze != 1.0f;
     vitaDiagLog("TEXTFLOW", "draw_text_stretch_begin text=%p dest=%d,%d %dx%d source=%d,%d %dx%d smooth=%d",
                 (void *)txtSurf, destRect.x, destRect.y, destRect.w, destRect.h,
                 sourceRect.x, sourceRect.y, sourceRect.w, sourceRect.h,
