@@ -47,6 +47,11 @@
   prepared on another CPU core.
 - A Sharp screen filter is now the default: crisp pixels without uneven
   rows or columns.
+- Quick button presses are no longer lost when a frame is slow: double
+  taps and combos (LISA's battle combos, for example) land even while the
+  game stutters, and a press reaches the game one frame sooner.
+- Smoother battles and menus: window backgrounds and gauges, character
+  faces, damage numbers and text draw several times faster.
 
 ## Fixes
 
@@ -56,7 +61,8 @@
 
 ## Known issues
 
-- Pokémon Essentials games (such as Pokémon Infinite Fusion) do not run yet.
+- Pokémon Essentials games (Pokémon Uranium, Insurgence, Infinite Fusion)
+  are not playable yet.
 - Games whose title music is MIDI have no music in the library.
 - The first time a new HardRPG version starts a game, it prepares its graphics
   for a few seconds.
