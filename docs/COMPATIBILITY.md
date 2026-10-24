@@ -1,7 +1,6 @@
 # Game compatibility
 
-Results from testing on a real PS Vita with HardRPG **0.3.1 Alpha**; most
-were tested on 0.3.0 and nothing in 0.3.1 changes them. Games
+Results from testing on a real PS Vita with HardRPG **0.4.0 Alpha**. Games
 change between versions and editions, so your copy may behave differently.
 "Runs" means the game has been played on the Vita.
 
@@ -19,18 +18,18 @@ those games are still possible.
 
 | Game | Engine | Status | Notes |
 | --- | --- | --- | --- |
-| BLACK SOULS | VX Ace | 🟡 Partial | Faster maps, menus and battles in 0.3.0. |
-| BLACK SOULS II | VX Ace | 🟡 Partial | |
+| BLACK SOULS | VX Ace | ✅ Runs | |
+| BLACK SOULS II | VX Ace | ✅ Runs | |
 | Ao Oni | XP | ✅ Runs | Played from start to finish. |
 | The Witch's House | VX | 🟡 Partial | Some visual glitches in a few areas. |
 | To the Moon | XP | 🟡 Partial | Some slowdowns. |
-| LISA: The Painful (original VX Ace edition) | VX Ace | 🟡 Partial | Map W/A/S/D for combo attacks in Controls. The Unity *Definitive Edition* is not an RPG Maker game and does not run. |
+| LISA: The Painful | VX Ace | 🟡 Partial | Map W/A/S/D for combo attacks in Controls. |
 | FNaF b Final Mix | VX Ace | ✅ Runs | |
 | Red Hood's Woods | VX Ace | ✅ Runs | |
-| Hylics | VX Ace | 🟡 Partial | Some slow areas and font differences. |
+| Hylics | VX Ace | ✅ Runs | Slowdowns in some areas. |
 | Mogeko Castle (English VX Ace edition) | VX Ace | ✅ Runs | |
-| The Endless Empty | VX Ace | 🟡 Partial | Starts in 0.3.1 (stopped at startup in 0.3.0). Not played further yet. |
-| VorlorN | XP | 🟡 Partial | Starts in 0.3.1 (stopped at startup in 0.3.0). Not played further yet. |
+| The Endless Empty | VX Ace | ✅ Runs | |
+| VorlorN | XP | ✅ Runs | |
 
 ## RPG Maker 2000 and 2003 (EasyRPG)
 
@@ -51,9 +50,16 @@ These run through the bundled EasyRPG Player.
 
 ## Tested a game?
 
-Results for games not listed here are welcome. Open an
-[issue](https://github.com/Asukate/mkxp-z-vita/issues) with the game's name,
-version and where it came from, the HardRPG version, what worked and what did
-not. An exported error report and a save file from just before a problem make
-it much easier to fix; see
+Tell us about any game you play, **even if it runs fine with no problems**.
+There are far more RPG Maker games than can be tested by hand, and every
+report helps this list grow.
+
+Open an [issue](https://github.com/Asukate/mkxp-z-vita/issues) with:
+
+- the game's name, and where you got it (Steam, itch.io, a free download)
+- the HardRPG version
+- how it went: runs well, or what did not work
+
+If something went wrong, an exported error report and a save file from just
+before the problem make it much easier to fix; see
 [Something went wrong?](../README.md#something-went-wrong).

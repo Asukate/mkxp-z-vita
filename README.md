@@ -279,7 +279,9 @@ with a script error, and very demanding games can run slowly.
 > **Pokémon Essentials games** (Pokémon Infinite Fusion and other fan games)
 > are a work in progress and **not supported yet**.
 
-See the [compatibility list](docs/COMPATIBILITY.md) for game-by-game results.
+See the [compatibility list](docs/COMPATIBILITY.md) for game-by-game results. Played a game that is
+not on the list? [Tell us](docs/COMPATIBILITY.md#tested-a-game), even if it runs
+fine.
 
 ## Something went wrong?
 
