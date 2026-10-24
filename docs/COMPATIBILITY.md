@@ -21,9 +21,9 @@ those games are still possible.
 | BLACK SOULS | VX Ace | ✅ Runs | |
 | BLACK SOULS II | VX Ace | ✅ Runs | |
 | Ao Oni | XP | ✅ Runs | Played from start to finish. |
-| The Witch's House | VX | 🟡 Partial | Some visual glitches in a few areas. |
-| To the Moon | XP | 🟡 Partial | Some slowdowns. |
-| LISA: The Painful | VX Ace | 🟡 Partial | Map W/A/S/D for combo attacks in Controls. |
+| The Witch's House | VX | ✅ Runs | |
+| To the Moon | XP | ✅ Runs | Slowdowns in some areas. |
+| LISA: The Painful | VX Ace | ✅ Runs | Map W/A/S/D for combo attacks in Controls. |
 | FNaF b Final Mix | VX Ace | ✅ Runs | |
 | Red Hood's Woods | VX Ace | ✅ Runs | |
 | Hylics | VX Ace | ✅ Runs | Slowdowns in some areas. |
@@ -45,8 +45,15 @@ These run through the bundled EasyRPG Player.
 ## Not supported yet
 
 > [!WARNING]
-> **Pokémon Essentials games are a work in progress.** Pokémon Infinite Fusion
-> and other games built on Pokémon Essentials do not run yet.
+> **Pokémon Essentials games are a work in progress** and are not playable in
+> 0.4.0. Development builds already open some of them; they still need
+> performance work and game-specific fixes.
+
+| Game | Engine | Status | Notes |
+| --- | --- | --- | --- |
+| Pokémon Uranium | XP (Essentials) | ⛔ Not supported | Development builds open it: language menu, data load and intro. |
+| Pokémon Insurgence | XP (Essentials) | ⛔ Not supported | Development builds open it: splash screens, title and main menu. |
+| Pokémon Infinite Fusion | XP (Essentials) | ⛔ Not supported | Its data is larger than the memory the Vita gives the game; needs memory work. |
 
 ## Tested a game?
 
