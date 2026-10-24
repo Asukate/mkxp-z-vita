@@ -219,8 +219,9 @@ Highlight a game, press **Triangle**, then **Game settings**:
 - **Remove from library:** takes the game off the list, then asks whether to
   delete its files too (and, for a ZIP game, its unpacked copy). The answer
   is No unless you choose Yes.
-- **Delete the ZIP, keep the game:** for a ZIP game you've already played,
-  frees the ZIP's space; the game keeps playing from its unpacked copy.
+- **Delete the ZIP, keep the game:** for a ZIP game that an earlier HardRPG
+  already unpacked, frees the ZIP's space; the game keeps playing from its
+  unpacked copy.
 
 In **Controls**, every Vita button, and parts of the touch screen and rear pad,
 can be set to an RPG Maker button or **any keyboard key**. That makes games
@@ -306,7 +307,7 @@ replaying the game to reach the same spot.
 | Game | Save location |
 | --- | --- |
 | A game folder in `games/` | Inside the game's own folder, usually `Save01.rxdata`, `Save01.rvdata` or `Save01.rvdata2` |
-| A ZIP game | Inside its unpacked copy in `ux0:/data/hardrpg/cache/` |
+| A ZIP game unpacked by an earlier HardRPG | Inside its unpacked copy in `ux0:/data/hardrpg/cache/` |
 | An RPG Maker 2000/2003 game | `ux0:/data/hardrpg/saves/easyrpg/` (files named `Save01.lsd` and so on) |
 
 Some games save in a folder of their own; if you can't find it, mention that
