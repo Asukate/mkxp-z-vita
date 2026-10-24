@@ -1,6 +1,7 @@
 // Desktop preview and fixture driver for the production native model/view.
 #include "runtime.h"
 #include "launcher_audio.h"
+#include <cstdlib>
 #include "view.h"
 #include "release.h"
 #include <SDL.h>
@@ -87,6 +88,7 @@ Json commands(Model &m, const Json &script) {
         Entry e;
         if (!game(node, e))
           throw std::runtime_error("Not a game");
+        m.unpackZips = field(cmd, "unpack") != "no";
         m.backendAvailable = field(cmd, "runtime") == "missing"
             ? std::function<bool(const Engine &)>([](const Engine &) { return false; })
             : std::function<bool(const Engine &)>{};
@@ -492,6 +494,7 @@ int main(int argc, char **argv) {
     }
     if (!script.empty()) {
       hardrpg::Model model(paths);
+      model.unpackZips = true;
       std::cout << commands(model,
                             json5pp::parse(hardrpg::readFile(script, 1048576)))
                        .stringify()
@@ -499,6 +502,7 @@ int main(int argc, char **argv) {
       return 0;
     }
     hardrpg::UI ui(paths);
+    ui.model.unpackZips = !std::getenv("HARDRPG_NO_UNPACK");
     std::vector<std::string> sounds;
     ui.sound = [&](Sound s) { sounds.push_back(soundName(s)); };
     if (settle) {

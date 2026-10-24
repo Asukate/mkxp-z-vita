@@ -55,6 +55,12 @@
 
 ## Fixes
 
+- The library no longer stalls while title music starts: moving between
+  games in the grid or the carousel stays smooth.
+- ZIP games are no longer unpacked on the Vita, which took minutes even for
+  a small game and doubled its space. Unzip a game first, on your PC or on the
+  Vita with VitaShell. Games already unpacked by an earlier version still play.
+
 - Games that use Ruby threads no longer crash.
 - Quitting an RPG Maker 2000/2003 game returns to the library.
 - Opening a ZIP game's options no longer pauses for several seconds.

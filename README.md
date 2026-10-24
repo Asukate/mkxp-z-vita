@@ -43,7 +43,7 @@ which installs it for you. You can also follow
 > [!IMPORTANT]
 > No games are included. Use games you own.
 
-Copy each game's folder (or a ZIP of it) into `ux0:/data/hardrpg/games/`.
+Copy each game's folder into `ux0:/data/hardrpg/games/`.
 Keep the folder exactly as the game ships: the folder with `Game.ini` (or
 `RPG_RT.ini` for 2000/2003) inside it.
 
@@ -51,7 +51,7 @@ Keep the folder exactly as the game ships: the folder with `Game.ini` (or
 ux0:/data/hardrpg/
 ├── games/
 │   ├── My Game/          ← a game folder, as it came
-│   └── Another Game.zip  ← ZIPs work too
+│   └── Another Game/
 └── rtp/                  ← only if a game asks for its RTP
     ├── Standard/         RPG Maker XP
     ├── RPGVX/            RPG Maker VX
@@ -64,12 +64,12 @@ ux0:/data/hardrpg/
 folder browser, go to the folder, and press **Square** to add the games in it.
 They stay where they are.
 
-**ZIP games** are unpacked into `ux0:/data/hardrpg/cache/` the first time you
-play them. After that you can free the ZIP's space with **Triangle → Game
-settings → Delete the ZIP, keep the game**: the game stays in the list and
-plays from the unpacked copy, with its saves and settings.
+**Got a game as a ZIP?** Unzip it first, on your PC or on the Vita with
+VitaShell, and put the folder in `games/`. HardRPG lists ZIP games but does
+not unpack them: on the Vita that takes minutes even for a small game. A ZIP
+game already unpacked by an earlier HardRPG still plays.
 
-More detail: [library, ZIP games and settings](launcher/README.md).
+More detail: [library and settings](launcher/README.md).
 
 ### RTP (only if a game needs it)
 

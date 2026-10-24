@@ -924,6 +924,16 @@ class NativeLauncher(unittest.TestCase):
         state = self.ui(GAME+',scroll:8,cross')
         self.assertIn('removed from the list', state['message'])
         self.assertTrue((outside/'Game.ini').exists())
+    def test_zip_game_asks_to_be_unzipped_when_unpacking_is_off(self):
+        # 0.4.0 on the Vita: a ZIP is not unpacked; a copy from an earlier version still plays.
+        zip_path = self.zip(self.games/'later.zip', inner='')
+        key = fnv('later.zip!/')
+        self.assertIn('Unzip it first', self.cmd('launch',zip_path,kind='zip',unpack='no')['error'])
+        self.assertEqual(list((self.root/'cache').iterdir()), [])
+        self.assertFalse((self.root/'selection.json').exists())
+        self.assertEqual(self.cmd('launch',zip_path,kind='zip')['path'], 'zip-'+key)
+        (self.root/'selection.json').unlink()
+        self.assertEqual(self.cmd('launch',zip_path,kind='zip',unpack='no')['path'], 'zip-'+key)
     def test_zip_cancel_incomplete_cache_and_symlinks(self):
         zip_path = self.zip(self.games/'cancel.zip', inner='')
         key = fnv('cancel.zip!/')

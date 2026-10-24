@@ -102,6 +102,9 @@ public:
   std::vector<Entry> list;
   std::string error;
   std::function<bool(const Engine &)> backendAvailable;
+  // Unpack a ZIP game on its first start. Off on the Vita for 0.4.0 (minutes
+  // even for a small game); the desktop test host turns it on.
+  bool unpackZips = false;
   const Node &current() const { return stack.back(); }
   void refresh();
   void setDisplayName(const Entry &, const std::string &displayName);
@@ -130,7 +133,9 @@ public:
   // The game started last (active-game.json), when its settings key is
   // config: the 16 hex digits the engine was given.
   bool activeGame(Entry &, const std::string &config) const;
-  std::string prepareZip(const Node &, Progress = {});
+  // A ZIP's unpacked copy in the cache. 0.4.0 no longer unpacks: a ZIP with
+  // no copy yet is reported (rtpName names the RTP for an RTP ZIP).
+  std::string prepareZip(const Node &, Progress = {}, const std::string &rtpName = "");
   ControlProfile controls(const Entry &) const;
   void saveControls(const Entry &, const ControlProfile &);
   Json display() const;

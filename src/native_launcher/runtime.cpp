@@ -964,12 +964,27 @@ int runNativeLauncher(bool returning) {
             serviced = serviced || ui.clockText != before;
           }
           if (button != Button::None || touched || serviced || moving) {
+            auto actionStart = SDL_GetPerformanceCounter();
             if (button != Button::None)
               ui.action(button);
             auto drawStart = SDL_GetPerformanceCounter();
             view.draw(ui);
             auto built = SDL_GetPerformanceCounter();
             present(true);
+            {
+              // A frame over 50 ms is logged (at most 30 per session) with
+              // where its time went, so a stall can be traced on the device.
+              static int slowLogged = 0;
+              auto shown = SDL_GetPerformanceCounter();
+              double f = double(SDL_GetPerformanceFrequency()) / 1000;
+              double total = (shown - actionStart) / f;
+              if (total > 50 && slowLogged < 30) {
+                ++slowLogged;
+                std::fprintf(stderr, "Launcher slow frame: %.0f ms (input %.0f, draw %.0f, present %.0f) button=%d\n",
+                             total, (drawStart - actionStart) / f, (built - drawStart) / f, (shown - built) / f,
+                             int(button));
+              }
+            }
             if (ui.showFrameTime) {
               // Whole frames (input to vsync) and the part the CPU spent
               // building them; the rest is the GPU and the wait for vsync.

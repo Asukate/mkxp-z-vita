@@ -8,7 +8,8 @@ repository and dated one-line release notes; the gear opens Settings.
 
 ## Library
 
-Put user-owned game folders or ZIP files in `ux0:/data/hardrpg/games/`.
+Put user-owned game folders in `ux0:/data/hardrpg/games/`. A game that came
+as a ZIP has to be unzipped first (on a PC, or on the Vita with VitaShell).
 Cross shows a game's details and plays it on the second press; it opens a
 collection folder or ZIP at once. Circle goes back. Triangle opens the
 highlighted game's options (favourite, artwork, game settings, rename); the
@@ -68,7 +69,13 @@ always remains available. Extra paths persist in `game-folders.txt`; removing a
 reference with Square does not delete games or saves. Start's existing scan/add
 browser still adds references to individual games through `library-paths.txt`.
 
-PhysicsFS exposes ZIPs as read-only folders. Selecting a ZIP game prepares
+ZIP games are listed, but 0.4.0 does not unpack them: on the Vita that took
+minutes even for a small game and doubled its space. Starting a ZIP game that
+has no unpacked copy asks for it to be unzipped first; a 2000/2003 RTP ZIP
+likewise. Copies unpacked by earlier versions keep working as described below
+(`Model::unpackZips` turns unpacking back on; the desktop test host uses it).
+
+PhysicsFS exposes ZIPs as read-only folders. Unpacking a ZIP game prepares
 a persistent working copy under `cache/zip-<id>/` so Ruby file access and
 ordinary saves work. Preparation shows progress and can be cancelled with
 Circle. It needs space for the uncompressed game; an I/O failure removes

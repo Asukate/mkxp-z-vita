@@ -430,8 +430,14 @@ struct LauncherAudio::Impl {
   std::thread mixer, loader;
 #endif
 
+  // Called on the audio thread only. The lock covers the effect voices and
+  // the handover of a new track; the music itself is decoded outside it, so a
+  // slow decode (a track starting, a stream read from the card) never holds
+  // up the screen thread, which takes the lock for every button sound.
   void mix(int16_t *out, int frames) {
     int32_t sum[blockFrames * 2] = {};
+    Stream *current = nullptr;
+    float level = 0, from = 0, to = 0;
     {
       std::lock_guard<std::mutex> lock(mixing);
       float fx = effectsLevel;
@@ -453,23 +459,29 @@ struct LauncherAudio::Impl {
       } else if (switching)
         target = 0;
       if (music) {
-        float level = musicLevel * music->volume;
+        level = musicLevel * music->volume;
         // Fade per block: smooth enough at 21 ms, and cheap.
         float step = (target > gain ? fadeIn : outStep > 0 ? outStep : fadeOut) * frames;
-        float from = gain;
+        from = gain;
         gain = target > gain ? std::min(target, gain + step) : std::max(target, gain - step);
-        int32_t part[blockFrames * 2] = {};
-        music->mix(part, frames, 1.0f);
-        for (int i = 0; i < frames; ++i) {
-          float g = (from + (gain - from) * float(i) / float(frames)) * level;
-          sum[i * 2] += int32_t(float(part[i * 2]) * g);
-          sum[i * 2 + 1] += int32_t(float(part[i * 2 + 1]) * g);
-        }
-        if (music->ended || (gain <= 0 && target <= 0 && !switching)) {
-          music.reset();
-          playing.clear();
-          outStep = 0;
-        }
+        to = gain;
+        current = music.get();
+      }
+    }
+    if (current) {
+      // Only this thread replaces or releases `music`, so it stays valid here.
+      int32_t part[blockFrames * 2] = {};
+      current->mix(part, frames, 1.0f);
+      for (int i = 0; i < frames; ++i) {
+        float g = (from + (to - from) * float(i) / float(frames)) * level;
+        sum[i * 2] += int32_t(float(part[i * 2]) * g);
+        sum[i * 2 + 1] += int32_t(float(part[i * 2 + 1]) * g);
+      }
+      std::lock_guard<std::mutex> lock(mixing);
+      if (music.get() == current && (current->ended || (gain <= 0 && target <= 0 && !switching))) {
+        music.reset();
+        playing.clear();
+        outStep = 0;
       }
     }
     for (int i = 0; i < frames * 2; ++i)

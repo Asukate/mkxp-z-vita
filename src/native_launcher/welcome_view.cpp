@@ -25,8 +25,8 @@ struct TreeRow {
 };
 const TreeRow gameRows[] = {{false, "Ib", nullptr},
                             {false, "OFF", nullptr},
-                            {true, "Yume Nikki.zip", "unpacked on its first start"},
-                            {true, "The Witch's House.zip", "unpacked on its first start"}};
+                            {false, "Yume Nikki", nullptr},
+                            {false, "The Witch's House", nullptr}};
 const TreeRow rtpRows[] = {{false, "Standard", "RPG Maker XP"},
                            {false, "RPGVX", "RPG Maker VX"},
                            {true, "RPGVXAce.zip", "RPG Maker VX Ace"},
@@ -99,10 +99,10 @@ const Image &View::welcomeSlide(const UI &u, int slide) {
     break;
   case Welcome::Games:
     heading("Your games", "Where your games go");
-    paragraph(tr("Copy each game into this folder, as a folder or a ZIP file:"), 18, soft, 6);
+    paragraph(tr("Copy each game into this folder, as a folder:"), 18, soft, 6);
     tree(u.model.paths.at("games") + "/", treeRows(slide));
-    reminder(tr("A ZIP game is unpacked the first time it starts: that start takes longer, and the ZIP and its unpacked copy both "
-                "use space. Folders start right away."));
+    reminder(tr("A game that came as a ZIP has to be unzipped first, on your PC or on the Vita with VitaShell. Folders start "
+                "right away."));
     paragraph(tr("Games kept elsewhere can stay there: add their folder in Settings, Game folders, or press <start> on the home "
                  "screen."),
               15, muted);

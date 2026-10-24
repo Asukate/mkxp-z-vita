@@ -1552,7 +1552,7 @@ std::string Model::rtpStatus(const std::string &name) const {
         return "Detected";
   return "Missing";
 }
-std::string Model::prepareZip(const Node &node, Progress progress) {
+std::string Model::prepareZip(const Node &node, Progress progress, const std::string &rtpName) {
   auto cache = "zip-" + key(node.identity(paths));
   auto dest = paths.at("cache/" + cache);
   struct stat s;
@@ -1567,6 +1567,15 @@ std::string Model::prepareZip(const Node &node, Progress progress) {
       throw std::runtime_error("ZIP changed. Back up saves and remove its "
                                "cache folder before preparing it again.");
     return cache;
+  }
+  // Unpacking a ZIP on the Vita takes minutes even for a small game and
+  // doubles its space, so it is not offered: the player unzips it first
+  // (on a PC, or with VitaShell). Copies unpacked by earlier versions still
+  // play, above.
+  if (!unpackZips) {
+    if (!rtpName.empty())
+      throw std::runtime_error(trf("The {} RTP is a ZIP. Unzip it into ux0:/data/hardrpg/rtp/{} first.", {rtpName, rtpName}));
+    throw std::runtime_error(tr("This game is a ZIP. Unzip it first, on your PC or on the Vita with VitaShell, into a folder in games/."));
   }
   if (exists(dest))
     throw std::runtime_error(
@@ -1680,7 +1689,7 @@ Json Model::launch(const Entry &e, Progress progress, PreparationStatus status) 
         if (regular(path)) {
           if (status) status(trf("Preparing {} RTP ZIP", {name}));
           auto node = Node::fromPath(paths, path, true, mount.root);
-          path = paths.at("cache/" + prepareZip(node, progress));
+          path = paths.at("cache/" + prepareZip(node, progress, name));
         }
         auto pack = object();
         pack.as_object()["engine"] = name;

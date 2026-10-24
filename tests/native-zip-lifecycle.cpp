@@ -30,7 +30,7 @@ int main(int argc,char**argv){
  assert(argc==2);hardrpg::Paths paths;paths.root=argv[1];
  paths.storage={std::string(argv[1])+"/"};
  // The game's settings (Triangle, then Game settings, on the home screen).
- hardrpg::UI ui(paths);
+ hardrpg::UI ui(paths); ui.model.unpackZips=true; // the unpack path itself is under test
  ui.welcome.active=false; // a fresh folder is a first start; this test drives the menus
  auto before=mounts.load();ui.openGameMenu(0);
  auto first=mounts.load()-before;assert(ui.gameOptions);std::cout<<"settings mounts="<<first<<std::endl;
