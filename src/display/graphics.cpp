@@ -21,6 +21,7 @@
  */
 
 #include "graphics.h"
+#include <atomic>
 #include "performance-overlay.h"
 #include "fast-forward.h"
 #include "fast-forward-badge.h"
@@ -2492,17 +2493,54 @@ struct GraphicsPrivate {
         return ret;
     }
     
+#ifdef __vita__
+    /* Every graphics property call from Ruby takes this lock. An SDL mutex costs about
+     * 0.6 us per lock and unlock on the Vita, more than the property change itself.
+     * This one is also recursive and exclusive, and takes one atomic compare when no
+     * other thread holds it; a thread that finds it held yields until it is free. */
+    std::atomic<void *> glLockOwner{nullptr};
+    int glLockDepth = 0;
+
+    /* Per-thread value: the user thread register (TPIDRURO) the Vita kernel sets for each thread. */
+    static inline void *threadTag() {
+        void *tp;
+        __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tp));
+        return tp;
+    }
+    void acquireGLLock() {
+        void *me = threadTag();
+        if (glLockOwner.load(std::memory_order_relaxed) == me) {
+            ++glLockDepth;
+            return;
+        }
+        void *expected = nullptr;
+        while (!glLockOwner.compare_exchange_weak(expected, me, std::memory_order_acquire,
+                                                  std::memory_order_relaxed)) {
+            expected = nullptr;
+            SDL_Delay(0);
+        }
+        glLockDepth = 1;
+    }
+    void releaseGLLock() {
+        if (--glLockDepth == 0)
+            glLockOwner.store(nullptr, std::memory_order_release);
+    }
+#else
+    void acquireGLLock() { SDL_LockMutex(glResourceLock); }
+    void releaseGLLock() { SDL_UnlockMutex(glResourceLock); }
+#endif
+
     void setLock(bool force = false) {
         if (!(force || multithreadedMode)) return;
 
-        int lockResult = SDL_LockMutex(glResourceLock);
+        acquireGLLock();
         SDL_GL_MakeCurrent(threadData->window, threadData->glContext);
     }
     
     void releaseLock(bool force = false) {
         if (!(force || multithreadedMode)) return;
 
-        int unlockResult = SDL_UnlockMutex(glResourceLock);
+        releaseGLLock();
     }
 
     void updateAvgFPS() {
