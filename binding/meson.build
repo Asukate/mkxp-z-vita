@@ -33,7 +33,8 @@ binding_source = [files(
     'filesystem-binding.cpp',
     'windowvx-binding.cpp',
     'tilemapvx-binding.cpp',
-    'http-binding.cpp'
+    'http-binding.cpp',
+    'native-events.cpp'
 )]
 
 if miniffi == true

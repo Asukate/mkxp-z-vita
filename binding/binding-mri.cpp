@@ -198,6 +198,8 @@ void CUSLBindingInit();
 #endif
 
 void httpBindingInit();
+void nativeEventsInit(int rgssVersion);
+void nativeEventsSectionLoaded(VALUE fname, VALUE source);
 
 RB_METHOD(mkxpDelta);
 RB_METHOD(mriPrint);
@@ -315,6 +317,8 @@ static void mriBindingInit() {
         rb_eval_string(module_rpg3);
     else
         assert(!"unreachable");
+
+    nativeEventsInit(rgssVer);
 
 #ifdef __vita__
     /* Vita has no console: fd 1/2 are unusable, so any game-side
@@ -1717,6 +1721,8 @@ static void runRMXPScripts(BacktraceData &btData) {
 #else
             evalString(string, fname, &state);
 #endif
+            if (!state)
+                nativeEventsSectionLoaded(fname, string);
             for (int repairs = 0; state && repairs < 16 && repairLegacySyntax(string); ++repairs) {
                 vitaDiagLog("RUBY", "rgss_legacy_syntax_repair index=%ld name=%s pass=%d",
                             i, scriptName, repairs + 1);
