@@ -36,6 +36,7 @@
 #include <unordered_map>
 #include <string>
 #include <utility>
+#include <array>
 
 extern "C" VALUE rb_gvar_get(ID);
 
@@ -121,6 +122,8 @@ struct Slot {
     ID ivar;            /* SK_ATTR */
     NativeFn native;    /* SK_NATIVE */
     int superSlot;      /* SK_NATIVE: slot its `super` must reach, or -1 */
+    int superAlt;       /* another slot `super` may reach instead (a script's wrapper), or -1 */
+    int superFrom;      /* helper slot: the slot whose `super` its native method makes, or -1 */
     /* one-entry cache */
     VALUE cKlass;
     uint32_t cEpoch;
@@ -128,6 +131,7 @@ struct Slot {
     /* super check cache (owner is fixed) */
     uint32_t sEpoch;
     bool sOk;
+    int sWhich; /* the slot `super` reaches when sOk */
     /* statistics */
     uint32_t direct, viaRuby;
 };
@@ -149,6 +153,13 @@ enum SlotId {
     S_GE_update, S_GE_update_stop, S_GE_update_self_movement, S_GE_near_the_screen,
     S_GE_stop_count_threshold, S_GE_check_event_trigger_auto, S_GE_move_type_random,
     S_GE_move_type_toward_player, S_GE_move_type_custom, S_GE_start,
+    /* popular scripts: symbol encounter, CACAO off-screen movement, 8-direction movement,
+     * kure region pass, MOG Anti Lag (and the alias names their wrappers call) */
+    S_GC_update, S_GC_update_symbol_opacity, S_GE_update_symbol_opacity, S_GE_self_movable,
+    S_GE_update_anti_lag, S_GE_anti_lag_on_screen, S_GE_can_update, S_GV_aref, S_GS_anti_lag,
+    S_GM_display_x, S_GM_display_y, S_SC_check_can_update_sprite, S_SPR_visible,
+    S_H_GE_update_symbol, S_H_GE_update_mog, S_H_GC_update_symbol, S_H_GE_usm_symbol,
+    S_H_GCB_rms_8dir, S_H_SC_update_mog,
     /* Game_Map */
     S_GM_adjust_x, S_GM_adjust_y, S_GM_loop_horizontal, S_GM_loop_vertical, S_GM_width, S_GM_height,
     S_GM_screen_tile_x, S_GM_screen_tile_y, S_GM_update_events,
@@ -166,7 +177,8 @@ enum SlotId {
     /* engine */
     S_SPR_update, S_SPR_x, S_SPR_y, S_SPR_set_x, S_SPR_set_y, S_SPR_set_z, S_SPR_set_opacity,
     S_SPR_set_blend_type, S_SPR_set_bush_depth, S_SPR_set_visible, S_SPR_src_rect, S_RECT_set,
-    S_GFX_width, S_GFX_height, S_ARY_clear, S_STR_eq, S_STR_neq,
+    S_GFX_width, S_GFX_height, S_ARY_clear, S_STR_eq, S_STR_neq, S_ARY_aref, S_INT_zero,
+    S_INT_truncate, S_FLO_truncate, S_INT_between, S_OBJ_is_a,
     S_COUNT
 };
 
@@ -184,6 +196,8 @@ static void slotDef(int id, const char *owner, const char *name) {
     s.owner = Qnil;
     s.expect = Qnil;
     s.superSlot = -1;
+    s.superAlt = -1;
+    s.superFrom = -1;
 }
 
 static bool superOk(Slot &s);
@@ -211,8 +225,11 @@ static bool slotOkSlow(Slot &s, int id, VALUE klass) {
         return it->second.ok;
     g_checks++;
     bool ok = computeOk(s, klass);
-    if (ok && s.kind == SK_NATIVE && s.superSlot >= 0)
-        ok = superOk(s);
+    /* A native that calls `super` (or a helper running such a native) is only used directly
+     * while that `super` reaches a default/native method too. */
+    int sf = s.superFrom >= 0 ? s.superFrom : id;
+    if (ok && s.kind == SK_NATIVE && g_slots[sf].superSlot >= 0)
+        ok = superOk(g_slots[sf]);
     g_memo[key] = Memo{g_epoch, ok};
     return ok;
 }
@@ -232,11 +249,19 @@ static inline bool slotOk(Slot &s, VALUE klass) {
 static bool superOk(Slot &s) {
     if (s.sEpoch == g_epoch)
         return s.sOk;
-    Slot &t = g_slots[s.superSlot];
     bool ok = false;
-    if (t.kind != SK_NONE && !NIL_P(t.expect)) {
+    for (int ti : {s.superSlot, s.superAlt}) {
+        if (ti < 0)
+            continue;
+        Slot &t = g_slots[ti];
+        if (t.kind == SK_NONE || NIL_P(t.expect))
+            continue;
         VALUE args[4] = {s.owner, ID2SYM(s.mid), t.owner, t.expect};
-        ok = RTEST(rb_funcallv(g_module, id_super_ok, 4, args));
+        if (RTEST(rb_funcallv(g_module, id_super_ok, 4, args))) {
+            ok = true;
+            s.sWhich = ti;
+            break;
+        }
     }
     s.sEpoch = g_epoch;
     s.sOk = ok;
@@ -272,7 +297,8 @@ static inline VALUE call2(VALUE obj, int id, VALUE a, VALUE b) {
 static VALUE callSuper(VALUE self, int id, int argc, const VALUE *argv, bool fromRuby) {
     Slot &s = g_slots[id];
     if (superOk(s)) {
-        Slot &t = g_slots[s.superSlot];
+        Slot &t = g_slots[s.sWhich];
+        t.direct++;
         switch (t.kind) {
         case SK_ENGINE:
             return t.engine(argc, const_cast<VALUE *>(argv), self);
@@ -429,8 +455,13 @@ static ID iv_real_x, iv_real_y, iv_x, iv_y, iv_jump_count, iv_jump_peak, iv_move
     iv_move_frequency, iv_trigger, iv_interpreter, iv_list, iv_event, iv_display_x, iv_display_y,
     iv_map, iv_events, iv_common_events, iv_animation, iv_character, iv_character_index, iv_cw,
     iv_ch, iv_balloon_duration, iv_balloon_sprite, iv_balloon_id, iv_character_sprites, iv_map_id,
-    cv_ani_checker, cv_ani_spr_checker;
-static ID gv_game_map, gv_data_animations;
+    cv_ani_checker, cv_ani_spr_checker, iv_symbol_encount, iv_wait_count, iv_visibility_distance,
+    iv_origin_opacity, iv_opacity, iv_uninhibited_movement, iv_region_z_pos, iv_first_z_pos,
+    iv_anti_lag, iv_can_update, iv_data;
+static ID id_update_symbol_reaction, id_update_symbol_movement, id_zero, id_truncate, id_between,
+    id_reset_sprite_effects, id_is_a, id_MOVE_CONTROL, id_DASH_PLUS, id_MOG_ANTI_LAG,
+    id_UPDATE_OUT_SCREEN_RANGE, id_Game_Event;
+static ID gv_game_map, gv_data_animations, gv_game_variables, gv_game_system;
 static VALUE g_spriteBase = Qnil, g_graphics = Qnil;
 static VALUE g_float_256 = Qnil;
 
@@ -1000,28 +1031,240 @@ static VALUE sm_update_characters(VALUE self, int, const VALUE *, bool) {
     return callOrig(self, S_SM_update_characters, 0, nullptr);
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Popular scripts                                                     */
+/*                                                                     */
+/* Each native below matches one exact script text (see STOCK in       */
+/* launcher/native_events.rb). A wrapper (`alias old new; def new ...   */
+/* old ... end`) calls the method it aliased through a helper slot,    */
+/* which runs the native that alias points to while the alias still    */
+/* resolves to it. Rare branches run the script's own Ruby body.        */
+
+/* Call `name` on self through whichever of two slots (same name, different owners) the
+ * object's class resolves to; through Ruby when neither. */
+static VALUE callEither(VALUE self, int a, int b) {
+    VALUE k = rb_class_of(self);
+    for (int id : {a, b}) {
+        Slot &s = g_slots[id];
+        if (s.kind == SK_NATIVE && slotOk(s, k)) {
+            s.direct++;
+            return s.native(self, 0, nullptr, false);
+        }
+    }
+    g_slots[a].viaRuby++;
+    return rb_funcall(self, g_slots[a].mid, 0);
+}
+/* A builtin method still in place for this receiver's class (checked, never called). */
+static inline bool builtinOk(int id, VALUE recv) {
+    Slot &s = g_slots[id];
+    return s.kind != SK_NONE && slotOk(s, rb_class_of(recv));
+}
+static VALUE truncV(VALUE v) {
+    if (FIXNUM_P(v) && builtinOk(S_INT_truncate, v))
+        return v;
+    if (isFlo(v) && builtinOk(S_FLO_truncate, v)) {
+        double d = RFLOAT_VALUE(v);
+        if (std::isfinite(d) && std::fabs(d) < 1e9)
+            return LONG2FIX((long)std::trunc(d));
+    }
+    return rb_funcall(v, id_truncate, 0);
+}
+static bool betweenV(VALUE v, VALUE lo, VALUE hi) {
+    if (FIXNUM_P(v) && FIXNUM_P(lo) && FIXNUM_P(hi) && builtinOk(S_INT_between, v))
+        return FIX2LONG(lo) <= FIX2LONG(v) && FIX2LONG(v) <= FIX2LONG(hi);
+    return RTEST(rb_funcall(v, id_between, 2, lo, hi));
+}
+static bool isA(VALUE obj, VALUE klass) {
+    if (builtinOk(S_OBJ_is_a, obj))
+        return RTEST(rb_obj_is_kind_of(obj, klass));
+    return RTEST(rb_funcall(obj, id_is_a, 1, klass));
+}
+
+/* -- symbol encounter (シンボルエンカウント補助) -- */
+
+/* Game_Character: alias _symbol_opacity_update update
+ *   def update; _symbol_opacity_update; update_symbol_opacity; end */
+static VALUE gc_update_symbol(VALUE self, int, const VALUE *, bool) {
+    call0(self, S_H_GC_update_symbol);
+    return callEither(self, S_GE_update_symbol_opacity, S_GC_update_symbol_opacity);
+}
+/* Game_Character#update_symbol_opacity: empty. */
+static VALUE gc_update_symbol_opacity(VALUE, int, const VALUE *, bool) { return Qnil; }
+/* Game_Event#update_symbol_opacity */
+static VALUE ge_update_symbol_opacity(VALUE self, int, const VALUE *, bool) {
+    VALUE vd = IV(self, visibility_distance);
+    bool zero = FIXNUM_P(vd) && builtinOk(S_INT_zero, vd) ? vd == INT2FIX(0) : RTEST(rb_funcall(vd, id_zero, 0));
+    if (!zero)
+        return callOrig(self, S_GE_update_symbol_opacity, 0, nullptr);
+    VALUE o = IV(self, origin_opacity);
+    SETIV(self, opacity, o);
+    return o;
+}
+/* Game_Event: alias _update_with_symbol update
+ *   def update
+ *     update_symbol_reaction if @symbol_encount && @wait_count <= 0 && !@move_route_forcing
+ *     _update_with_symbol
+ *   end */
+static VALUE ge_update_symbol(VALUE self, int, const VALUE *, bool) {
+    if (RTEST(IV(self, symbol_encount)) && nLe(IV(self, wait_count), INT2FIX(0)) &&
+        !RTEST(IV(self, move_route_forcing)))
+        rb_funcall(self, id_update_symbol_reaction, 0);
+    return call0(self, S_H_GE_update_symbol);
+}
+/* Game_Event: alias _update_self_movement_with_symbol update_self_movement
+ *   def update_self_movement
+ *     if @symbol_encount
+ *       update_symbol_movement if near_the_screen? && @stop_count > stop_count_threshold
+ *     else
+ *       _update_self_movement_with_symbol
+ *     end
+ *   end */
+static VALUE ge_update_self_movement_symbol(VALUE self, int, const VALUE *, bool) {
+    if (RTEST(IV(self, symbol_encount))) {
+        if (RTEST(call0(self, S_GE_near_the_screen)) &&
+            nGt(IV(self, stop_count), call0(self, S_GE_stop_count_threshold)))
+            return rb_funcall(self, id_update_symbol_movement, 0);
+        return Qnil;
+    }
+    return call0(self, S_H_GE_usm_symbol);
+}
+
+/* -- CACAO off-screen movement (画面外の自律移動) -- */
+
+static VALUE ge_update_self_movement_cacao(VALUE self, int, const VALUE *, bool) {
+    if (RTEST(call0(self, S_GE_self_movable))) {
+        VALUE t = IV(self, move_type);
+        if (nEq(INT2FIX(1), t)) return call0(self, S_GE_move_type_random);
+        if (nEq(INT2FIX(2), t)) return call0(self, S_GE_move_type_toward_player);
+        if (nEq(INT2FIX(3), t)) return call0(self, S_GE_move_type_custom);
+    }
+    return Qnil;
+}
+static VALUE ge_self_movable_cacao(VALUE self, int, const VALUE *, bool) {
+    if (!(RTEST(IV(self, uninhibited_movement)) || RTEST(call0(self, S_GE_near_the_screen))))
+        return Qfalse;
+    if (!nGt(IV(self, stop_count), call0(self, S_GE_stop_count_threshold)))
+        return Qfalse;
+    return Qtrue;
+}
+
+/* -- 8-direction movement (星潟): real_move_speed with MOVE_CONTROL::DASH_PLUS -- */
+
+/* Game_Variables#[]: @data[variable_id] || 0 */
+static VALUE gv_aref(VALUE self, int argc, const VALUE *argv, bool) {
+    checkArity(argc, 1, 1);
+    VALUE d = IV(self, data), v;
+    if (FIXNUM_P(argv[0]) && RB_TYPE_P(d, T_ARRAY) && rb_class_of(d) == rb_cArray && builtinOk(S_ARY_aref, d))
+        v = rb_ary_entry(d, FIX2LONG(argv[0]));
+    else
+        v = rb_funcall(d, id_aref, 1, argv[0]);
+    return RTEST(v) ? v : INT2FIX(0);
+}
+/* Game_CharacterBase: alias real_move_speed_8direction real_move_speed
+ *   def real_move_speed
+ *     if $game_variables[MOVE_CONTROL::DASH_PLUS] > 0 ... else real_move_speed_8direction end
+ *   end */
+static VALUE gcb_real_move_speed_8dir(VALUE self, int, const VALUE *, bool) {
+    VALUE mc = rb_const_get(g_slots[S_GCB_real_move_speed].owner, id_MOVE_CONTROL);
+    VALUE k = rb_const_get_from(mc, id_DASH_PLUS);
+    VALUE v = call1(rb_gvar_get(gv_game_variables), S_GV_aref, k);
+    if (nGt(v, INT2FIX(0)))
+        return callOrig(self, S_H_GCB_rms_8dir, 0, nullptr); /* the script's own body */
+    return call0(self, S_H_GCB_rms_8dir);
+}
+
+/* -- kure region pass (リージョン通行設定): screen_z -- */
+
+static VALUE gcb_screen_z_kure(VALUE self, int, const VALUE *, bool) {
+    VALUE v = IV(self, region_z_pos);
+    if (RTEST(v))
+        return v;
+    v = IV(self, first_z_pos);
+    if (RTEST(v))
+        return v;
+    return nMul(IV(self, priority_type), INT2FIX(100));
+}
+
+/* -- MOG Anti Lag -- */
+
+/* Game_Event: alias mog_anti_lag_update update
+ *   def update; update_anti_lag unless !@anti_lag; return if !@can_update; mog_anti_lag_update; end */
+static VALUE ge_update_mog(VALUE self, int, const VALUE *, bool) {
+    if (RTEST(IV(self, anti_lag)))
+        call0(self, S_GE_update_anti_lag);
+    if (!RTEST(IV(self, can_update)))
+        return Qnil;
+    return call0(self, S_H_GE_update_mog);
+}
+static VALUE ge_update_anti_lag(VALUE self, int, const VALUE *, bool) {
+    if (!RTEST(call0(rb_gvar_get(gv_game_system), S_GS_anti_lag))) {
+        SETIV(self, can_update, Qtrue);
+        return Qnil;
+    }
+    return call0(self, S_GE_anti_lag_on_screen);
+}
+static VALUE ge_anti_lag_event_on_screen(VALUE self, int, const VALUE *, bool) {
+    SETIV(self, can_update, Qfalse);
+    VALUE mod = rb_const_get(g_slots[S_GE_anti_lag_on_screen].owner, id_MOG_ANTI_LAG);
+    VALUE out = rb_const_get_from(mod, id_UPDATE_OUT_SCREEN_RANGE);
+    VALUE gm = gameMap();
+    VALUE px = truncV(call0(gm, S_GM_display_x));
+    VALUE py = truncV(call0(gm, S_GM_display_y));
+    VALUE dx = nSub(IV(self, x), px);
+    VALUE dy = nSub(IV(self, y), py);
+    if (betweenV(dx, nSub(INT2FIX(0), out), nAdd(INT2FIX(20), out)) &&
+        betweenV(dy, nSub(INT2FIX(0), out), nAdd(INT2FIX(15), out))) {
+        SETIV(self, can_update, Qtrue);
+        return Qtrue;
+    }
+    return Qnil;
+}
+static VALUE sc_check_can_update_sprite(VALUE self, int, const VALUE *, bool) {
+    VALUE c = IV(self, character);
+    if (RTEST(call0(self, S_SPR_visible)) && !RTEST(call0(c, S_GE_can_update)))
+        rb_funcall(self, id_reset_sprite_effects, 0);
+    VALUE v = call0(c, S_GE_can_update);
+    call1(self, S_SPR_set_visible, v);
+    return v;
+}
+/* Sprite_Character: alias mog_anti_lag_update update
+ *   def update
+ *     if $game_system.anti_lag and @character.is_a?(Game_Event)
+ *       check_can_update_sprite
+ *       return unless self.visible
+ *     end
+ *     mog_anti_lag_update
+ *   end */
+static VALUE sc_update_mog(VALUE self, int, const VALUE *, bool) {
+    if (RTEST(call0(rb_gvar_get(gv_game_system), S_GS_anti_lag)) &&
+        isA(IV(self, character), rb_const_get(g_slots[S_SC_update].owner, id_Game_Event))) {
+        call0(self, S_SC_check_can_update_sprite);
+        if (!RTEST(call0(self, S_SPR_visible)))
+            return Qnil;
+    }
+    return call0(self, S_H_SC_update_mog);
+}
+
 /* ------------------------------------------------------------------ */
 /* Ruby-facing entry points                                            */
 
-static signed char g_arityLo[S_COUNT], g_arityHi[S_COUNT];
-
-template <int ID>
-static VALUE entry(int argc, VALUE *argv, VALUE self) {
-    checkArity(argc, g_arityLo[ID], g_arityHi[ID]);
-    return g_slots[ID].native(self, argc, argv, true);
-}
-
 struct NativeDef {
     int slot;
-    const char *variant; /* which default text this native matches */
+    const char *variant; /* which script text this native matches */
     NativeFn fn;
-    RubyMethod entryFn;
-    int superSlot;
-    int lo, hi; /* arity */
+    int superSlot;       /* slot `super` must reach, -1 none, KEEP: a wrapper keeps the slot's */
+    int superAlt;        /* another slot `super` may reach instead, or -1 */
+    int lo, hi;          /* arity */
+    int helper;          /* wrapper: slot of the alias name it calls, or -1 */
+    int base;            /* wrapper: slot whose native that alias points to */
 };
+enum { KEEP = -2 };
 
-#define ND(slot, var, fn, sup) {slot, var, fn, entry<slot>, sup, 0, 0}
-#define NDA(slot, var, fn, sup, lo, hi) {slot, var, fn, entry<slot>, sup, lo, hi}
+#define ND(slot, var, fn, sup) {slot, var, fn, sup, -1, 0, 0, -1, -1}
+#define NDS(slot, var, fn, sup, alt) {slot, var, fn, sup, alt, 0, 0, -1, -1}
+#define NDA(slot, var, fn, sup, lo, hi) {slot, var, fn, sup, -1, lo, hi, -1, -1}
+#define NDW(slot, var, fn, helper, base) {slot, var, fn, KEEP, -1, 0, 0, helper, base}
 static const NativeDef g_natives[] = {
     ND(S_GCB_moving, "", gcb_moving, -1),
     ND(S_GCB_jumping, "", gcb_jumping, -1),
@@ -1043,7 +1286,9 @@ static const NativeDef g_natives[] = {
     ND(S_GCB_update_anime_count, "", gcb_update_anime_count, -1),
     ND(S_GCB_update_anime_pattern, "", gcb_update_anime_pattern, -1),
     ND(S_GC_update_stop, "", gc_update_stop, S_GCB_update_stop),
-    ND(S_GE_update, "", ge_update, S_GCB_update),
+    /* With the symbol encounter script, `super` from Game_Event#update reaches its
+     * Game_Character#update wrapper instead of Game_CharacterBase#update. */
+    NDS(S_GE_update, "", ge_update, S_GCB_update, S_GC_update),
     ND(S_GE_update_stop, "", ge_update_stop, S_GC_update_stop),
     ND(S_GE_update_self_movement, "", ge_update_self_movement, -1),
     NDA(S_GE_near_the_screen, "", ge_near_the_screen, -1, 0, 2),
@@ -1067,15 +1312,54 @@ static const NativeDef g_natives[] = {
     ND(S_SC_update_src_rect, "", sc_update_src_rect, -1),
     ND(S_SC_update_position, "jp", sc_update_position_jp, -1),
     ND(S_SC_update_position, "en", sc_update_position_en, -1),
-    ND(S_SC_update_position, "sp1", sc_update_position_sp1, -1),
+    /* Enterbrain's VXAce_SP1 wraps the Japanese default (alias vxace_sp1_update_position). */
+    NDW(S_SC_update_position, "sp1", sc_update_position_sp1, S_SC_sp1_orig, S_SC_update_position),
     ND(S_SC_update_other, "", sc_update_other, -1),
     ND(S_SC_update_balloon, "", sc_update_balloon, -1),
     ND(S_SC_setup_new_effect, "", sc_setup_new_effect, -1),
     NDA(S_SC_move_animation, "", sc_move_animation, -1, 2, 2),
     ND(S_SM_update_characters, "", sm_update_characters, -1),
+    /* symbol encounter */
+    NDW(S_GC_update, "symbol", gc_update_symbol, S_H_GC_update_symbol, S_GCB_update),
+    ND(S_GC_update_symbol_opacity, "symbol", gc_update_symbol_opacity, -1),
+    ND(S_GE_update_symbol_opacity, "symbol", ge_update_symbol_opacity, -1),
+    NDW(S_GE_update, "symbol", ge_update_symbol, S_H_GE_update_symbol, S_GE_update),
+    NDW(S_GE_update_self_movement, "symbol", ge_update_self_movement_symbol, S_H_GE_usm_symbol,
+        S_GE_update_self_movement),
+    /* CACAO */
+    ND(S_GE_update_self_movement, "cacao", ge_update_self_movement_cacao, -1),
+    ND(S_GE_self_movable, "cacao", ge_self_movable_cacao, -1),
+    /* 8-direction */
+    NDA(S_GV_aref, "", gv_aref, -1, 1, 1),
+    NDW(S_GCB_real_move_speed, "8dir", gcb_real_move_speed_8dir, S_H_GCB_rms_8dir, S_GCB_real_move_speed),
+    /* kure */
+    ND(S_GCB_screen_z, "kure", gcb_screen_z_kure, -1),
+    /* MOG Anti Lag */
+    NDW(S_GE_update, "mog", ge_update_mog, S_H_GE_update_mog, S_GE_update),
+    ND(S_GE_update_anti_lag, "mog", ge_update_anti_lag, -1),
+    ND(S_GE_anti_lag_on_screen, "mog", ge_anti_lag_event_on_screen, -1),
+    ND(S_SC_check_can_update_sprite, "mog", sc_check_can_update_sprite, -1),
+    NDW(S_SC_update, "mog", sc_update_mog, S_H_SC_update_mog, S_SC_update),
 };
 #undef ND
+#undef NDS
 #undef NDA
+#undef NDW
+static constexpr int N_NATIVES = sizeof(g_natives) / sizeof(g_natives[0]);
+
+/* The Ruby method of each native: bound to that native, so an alias a script makes of it
+ * keeps running it after a wrapper takes over the slot. */
+template <int I>
+static VALUE entry(int argc, VALUE *argv, VALUE self) {
+    const NativeDef &d = g_natives[I];
+    checkArity(argc, d.lo, d.hi);
+    return d.fn(self, argc, argv, true);
+}
+template <size_t... Is>
+static std::array<RubyMethod, sizeof...(Is)> makeEntries(std::index_sequence<Is...>) {
+    return {{entry<(int)Is>...}};
+}
+static const std::array<RubyMethod, N_NATIVES> g_entries = makeEntries(std::make_index_sequence<N_NATIVES>{});
 
 static int slotByName(const char *owner, const char *name) {
     for (int i = 0; i < S_COUNT; ++i)
@@ -1088,7 +1372,8 @@ static VALUE instanceMethod(VALUE klass, ID mid) {
     return rb_funcall(klass, id_instance_method, 1, ID2SYM(mid));
 }
 
-/* HardRPGNative.replace(klass, :name, variant): swap in the native method. */
+/* HardRPGNative.replace(klass, :name, variant): swap in the native method. A wrapper variant
+ * also takes the alias it calls (helper slot), which must point to the base slot's native. */
 static VALUE nev_replace(VALUE, VALUE klass, VALUE name, VALUE variant) {
     const char *cname = rb_class2name(klass);
     const char *mname = rb_id2name(SYM2ID(name));
@@ -1096,32 +1381,42 @@ static VALUE nev_replace(VALUE, VALUE klass, VALUE name, VALUE variant) {
     int slot = slotByName(cname, mname);
     if (slot < 0)
         return Qfalse;
-    for (const NativeDef &d : g_natives) {
+    for (int i = 0; i < N_NATIVES; ++i) {
+        const NativeDef &d = g_natives[i];
         if (d.slot != slot || strcmp(d.variant, var))
             continue;
         Slot &s = g_slots[slot];
-        g_orig[slot] = origId(slot);
-        rb_alias(klass, g_orig[slot], s.mid);
-        rb_funcall(klass, rb_intern("send"), 2, ID2SYM(rb_intern("private")), ID2SYM(g_orig[slot]));
-        rb_define_method(klass, mname, RUBY_METHOD_FUNC(d.entryFn), -1);
+        if (d.helper >= 0) {
+            Slot &b = g_slots[d.base], &h = g_slots[d.helper];
+            if (b.kind != SK_NATIVE || h.kind != SK_NONE)
+                return Qfalse;
+            VALUE um = instanceMethod(klass, h.mid);
+            h.kind = SK_NATIVE;
+            h.native = b.native;
+            h.superSlot = -1;
+            h.superFrom = b.superSlot >= 0 ? d.base : -1;
+            h.owner = rb_funcall(um, rb_intern("owner"), 0);
+            h.expect = instanceMethod(h.owner, h.mid);
+            rb_gc_register_mark_object(h.expect);
+            /* The script's own Ruby body, for the natives that fall back to it. */
+            g_orig[d.helper] = rb_intern((std::string("__nev_") + var + "_" + s.name).c_str());
+            rb_alias(klass, g_orig[d.helper], s.mid);
+            rb_funcall(klass, rb_intern("send"), 2, ID2SYM(rb_intern("private")), ID2SYM(g_orig[d.helper]));
+        } else {
+            g_orig[slot] = origId(slot);
+            rb_alias(klass, g_orig[slot], s.mid);
+            rb_funcall(klass, rb_intern("send"), 2, ID2SYM(rb_intern("private")), ID2SYM(g_orig[slot]));
+        }
+        rb_define_method(klass, mname, RUBY_METHOD_FUNC(g_entries[i]), -1);
         s.kind = SK_NATIVE;
         s.native = d.fn;
-        s.superSlot = d.superSlot;
-        g_arityLo[slot] = d.lo;
-        g_arityHi[slot] = d.hi;
+        if (d.superSlot != KEEP) {
+            s.superSlot = d.superSlot;
+            s.superAlt = d.superAlt;
+        }
         s.owner = klass;
         s.expect = instanceMethod(klass, s.mid);
         rb_gc_register_mark_object(s.expect);
-        if (slot == S_SC_update_position && !strcmp(var, "sp1")) {
-            /* The name SP1 calls: the default (native) update_position it aliased. */
-            Slot &h = g_slots[S_SC_sp1_orig];
-            h.kind = SK_NATIVE;
-            h.native = sc_update_position_jp;
-            h.superSlot = -1;
-            h.owner = klass;
-            h.expect = instanceMethod(klass, h.mid);
-            rb_gc_register_mark_object(h.expect);
-        }
         g_epoch++;
         return Qtrue;
     }
@@ -1260,6 +1555,17 @@ void nativeEventsInit(int rgssVersion) {
     I(iv_balloon_id, "@balloon_id"); I(iv_character_sprites, "@character_sprites"); I(iv_map_id, "@map_id");
     I(cv_ani_checker, "@@ani_checker"); I(cv_ani_spr_checker, "@@ani_spr_checker");
     I(gv_game_map, "$game_map"); I(gv_data_animations, "$data_animations");
+    I(iv_symbol_encount, "@symbol_encount"); I(iv_wait_count, "@wait_count");
+    I(iv_visibility_distance, "@visibility_distance"); I(iv_origin_opacity, "@origin_opacity");
+    I(iv_opacity, "@opacity"); I(iv_uninhibited_movement, "@uninhibited_movement");
+    I(iv_region_z_pos, "@region_z_pos"); I(iv_first_z_pos, "@first_z_pos"); I(iv_anti_lag, "@anti_lag");
+    I(iv_can_update, "@can_update"); I(iv_data, "@data");
+    I(id_update_symbol_reaction, "update_symbol_reaction"); I(id_update_symbol_movement, "update_symbol_movement");
+    I(id_zero, "zero?"); I(id_truncate, "truncate"); I(id_between, "between?");
+    I(id_reset_sprite_effects, "reset_sprite_effects"); I(id_is_a, "is_a?"); I(id_MOVE_CONTROL, "MOVE_CONTROL");
+    I(id_DASH_PLUS, "DASH_PLUS"); I(id_MOG_ANTI_LAG, "MOG_ANTI_LAG");
+    I(id_UPDATE_OUT_SCREEN_RANGE, "UPDATE_OUT_SCREEN_RANGE"); I(id_Game_Event, "Game_Event");
+    I(gv_game_variables, "$game_variables"); I(gv_game_system, "$game_system");
 #undef I
 
     slotDef(S_GCB_moving, "Game_CharacterBase", "moving?");
@@ -1335,7 +1641,33 @@ void nativeEventsInit(int rgssVersion) {
     slotDef(S_SC_set_character_bitmap, "Sprite_Character", "set_character_bitmap");
     slotDef(S_SC_start_animation, "Sprite_Character", "start_animation");
     slotDef(S_SC_start_balloon, "Sprite_Character", "start_balloon");
-    slotDef(S_SC_sp1_orig, "Sprite_Character", "vxace_sp1_update_position");
+    slotDef(S_SC_sp1_orig, "alias", "vxace_sp1_update_position");
+    slotDef(S_GC_update, "Game_Character", "update");
+    slotDef(S_GC_update_symbol_opacity, "Game_Character", "update_symbol_opacity");
+    slotDef(S_GE_update_symbol_opacity, "Game_Event", "update_symbol_opacity");
+    slotDef(S_GE_self_movable, "Game_Event", "self_movable?");
+    slotDef(S_GE_update_anti_lag, "Game_Event", "update_anti_lag");
+    slotDef(S_GE_anti_lag_on_screen, "Game_Event", "anti_lag_event_on_screen");
+    slotDef(S_GE_can_update, "Game_Event", "can_update");
+    slotDef(S_GV_aref, "Game_Variables", "[]");
+    slotDef(S_GS_anti_lag, "Game_System", "anti_lag");
+    slotDef(S_GM_display_x, "Game_Map", "display_x");
+    slotDef(S_GM_display_y, "Game_Map", "display_y");
+    slotDef(S_SC_check_can_update_sprite, "Sprite_Character", "check_can_update_sprite");
+    slotDef(S_SPR_visible, "Sprite", "visible");
+    /* alias names the wrappers call; "alias" is no class name, so replace/attr never pick them */
+    slotDef(S_H_GE_update_symbol, "alias", "_update_with_symbol");
+    slotDef(S_H_GE_update_mog, "alias", "mog_anti_lag_update");
+    slotDef(S_H_GC_update_symbol, "alias", "_symbol_opacity_update");
+    slotDef(S_H_GE_usm_symbol, "alias", "_update_self_movement_with_symbol");
+    slotDef(S_H_GCB_rms_8dir, "alias", "real_move_speed_8direction");
+    slotDef(S_H_SC_update_mog, "alias", "mog_anti_lag_update");
+    slotDef(S_ARY_aref, "Array", "[]");
+    slotDef(S_INT_zero, "Integer", "zero?");
+    slotDef(S_INT_truncate, "Integer", "truncate");
+    slotDef(S_FLO_truncate, "Float", "truncate");
+    slotDef(S_INT_between, "Integer", "between?");
+    slotDef(S_OBJ_is_a, "Object", "is_a?");
     slotDef(S_SM_update_characters, "Spriteset_Map", "update_characters");
     slotDef(S_SM_refresh_characters, "Spriteset_Map", "refresh_characters");
     slotDef(S_SPR_update, "Sprite", "update");
@@ -1507,7 +1839,7 @@ static VALUE initRuby(VALUE) {
     VALUE sprite = rb_path2class("Sprite");
     for (int id : {S_SPR_update, S_SPR_x, S_SPR_y, S_SPR_set_x, S_SPR_set_y, S_SPR_set_z,
                    S_SPR_set_opacity, S_SPR_set_blend_type, S_SPR_set_bush_depth, S_SPR_set_visible,
-                   S_SPR_src_rect})
+                   S_SPR_src_rect, S_SPR_visible})
         engineSlot(id, sprite);
     engineSlot(S_RECT_set, rb_path2class("Rect"));
     g_graphics = rb_path2class("Graphics");
@@ -1516,14 +1848,19 @@ static VALUE initRuby(VALUE) {
     g_slots[S_GFX_width].owner_name = g_slots[S_GFX_height].owner_name = "Graphics.";
     /* Builtins the native code does itself (Array#clear, String#==, String#!=): only while
      * they are not redefined, which the resolution check sees. */
-    for (int id : {S_ARY_clear, S_STR_eq, S_STR_neq}) {
-        Slot &s = g_slots[id];
-        /* String#!= is BasicObject#!=, which calls ==. */
-        VALUE k = id == S_ARY_clear ? rb_cArray : id == S_STR_neq ? rb_cBasicObject : rb_cString;
+    struct { int id; VALUE klass; } builtins[] = {
+        {S_ARY_clear, rb_cArray}, {S_STR_eq, rb_cString}, {S_STR_neq, rb_cString}, {S_ARY_aref, rb_cArray},
+        {S_INT_zero, rb_cInteger}, {S_INT_truncate, rb_cInteger}, {S_FLO_truncate, rb_cFloat},
+        {S_INT_between, rb_cInteger}, {S_OBJ_is_a, rb_cObject}};
+    for (auto &b : builtins) {
+        Slot &s = g_slots[b.id];
+        /* The method that class has now (String#!= is BasicObject#!=, which calls ==;
+         * Integer#between? is Comparable's; is_a? is Kernel's). */
+        VALUE um = instanceMethod(b.klass, s.mid);
         s.kind = SK_ENGINE; /* never called through .engine; only checked */
         s.engine = nullptr;
-        s.owner = k;
-        s.expect = instanceMethod(k, s.mid);
+        s.owner = rb_funcall(um, rb_intern("owner"), 0);
+        s.expect = instanceMethod(s.owner, s.mid); /* what resolves_to? compares with */
         rb_gc_register_mark_object(s.expect);
     }
     /* RPG data classes come from the engine's module_rpg3 (attr_accessors). */

@@ -35,21 +35,22 @@ module HardRPGNative
       strip_comment(line).strip.gsub(/[ \t]+/, ' ')
     end
 
-    # {"Class#meth" => [normalized text, def line]} for 2-space-indented defs in column-0 class bodies.
+    # {"Class#meth" => [normalized text, def line]} for defs indented by one or two spaces (or a tab)
+    # in column-0 class bodies; the def ends at an `end` with the same indent.
     def methods(src)
-      out = {}; cls = nil; cur = nil; body = nil; start = 0
+      out = {}; cls = nil; cur = nil; body = nil; start = 0; ind = nil
       src.each_line.with_index(1) do |raw, ln|
         line = raw.chomp
         if cur
-          if line =~ /\A  end\s*(#.*)?\z/
+          if line.start_with?(ind) && line[ind.size..] =~ /\Aend\s*(#.*)?\z/
             out["#{cls}##{cur}"] = [body.reject(&:empty?).join("\n"), start]; cur = nil
           else
             body << norm_line(line)
           end
         elsif line =~ /\Aclass (\w+)/ then cls = $1
         elsif line =~ /\Aend\b/ then cls = nil
-        elsif cls && line =~ /\A  def ([\w?!=]+)/
-          cur = $1; start = ln; body = [norm_line(line)]
+        elsif cls && line =~ /\A( {1,2}|\t)def ([\w?!=]+|\[\]=?)/
+          ind = $1; cur = $2; start = ln; body = [norm_line(line)]
         end
       end
       out
@@ -109,11 +110,48 @@ module HardRPGNative
     "Sprite_Character#setup_new_effect:2239552987:2721209269:254" => "",
     "Sprite_Character#move_animation:797681945:346371957:164" => "",
     "Spriteset_Map#update_characters:376579292:3236375906:121" => "",
+    "Game_Variables#[]:4203845366:1357909825:43" => "",
+    # Popular scripts, each matched by its exact text.
+    # symbol encounter (シンボルエンカウント補助)
+    "Game_Character#update:3213147346:1473975782:55" => "symbol",
+    "Game_Character#update_symbol_opacity:4173370896:2147224096:25" => "symbol",
+    "Game_Event#update:2022575935:3155700400:116" => "symbol",
+    "Game_Event#update_symbol_opacity:2314484639:1617837730:171" => "symbol",
+    "Game_Event#update_self_movement:3474066319:288505956:167" => "symbol",
+    # CACAO off-screen movement (画面外の自律移動)
+    "Game_Event#update_self_movement:1117636545:3755161254:147" => "cacao",
+    "Game_Event#self_movable?:74783559:55588901:146" => "cacao",
+    # 8-direction movement (星潟)
+    "Game_CharacterBase#real_move_speed:2922899733:1822573505:206" => "8dir",
+    # kure region pass (リージョン通行設定)
+    "Game_CharacterBase#screen_z:1222549236:3044551299:114" => "kure",
+    # MOG Anti Lag
+    "Game_Event#update:3893618193:2277843059:87" => "mog",
+    "Game_Event#update_anti_lag:1428368604:3564578511:103" => "mog",
+    "Game_Event#anti_lag_event_on_screen:1273155533:3668997825:349" => "mog",
+    "Sprite_Character#check_can_update_sprite:3303875333:3608359256:132" => "mog",
+    "Sprite_Character#update:3284189310:3276223833:143" => "mog",
   }.freeze
 
-  CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Map Sprite_Base Sprite_Character Spriteset_Map].freeze
+  # Wrapper variants: "Class#method/variant" => the alias the wrapper calls. The native wrapper
+  # calls the native that alias points to, so the alias must be a native (C) method of that name.
+  WRAPS = {
+    "Sprite_Character#update_position/sp1" => :vxace_sp1_update_position,
+    "Game_Character#update/symbol" => :_symbol_opacity_update,
+    "Game_Event#update/symbol" => :_update_with_symbol,
+    "Game_Event#update_self_movement/symbol" => :_update_self_movement_with_symbol,
+    "Game_CharacterBase#real_move_speed/8dir" => :real_move_speed_8direction,
+    "Game_Event#update/mog" => :mog_anti_lag_update,
+    "Sprite_Character#update/mog" => :mog_anti_lag_update,
+  }.freeze
+
+  CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Map Game_Variables Sprite_Base Sprite_Character
+               Spriteset_Map].freeze
   ATTRS = { 'Game_CharacterBase' => %i[tile_id character_name character_index pattern direction opacity blend_type
-                                       bush_depth transparent animation_id balloon_id] }.freeze
+                                       bush_depth transparent animation_id balloon_id],
+            'Game_Map' => %i[display_x display_y],
+            'Game_Event' => %i[can_update],
+            'Game_System' => %i[anti_lag] }.freeze
   @swapped = []
   @kept = []
 
@@ -127,7 +165,7 @@ module HardRPGNative
 
     def section_loaded(fname, src)
       return if $hardrpg_native_events == false
-      return unless CLASSES.any? { |c| src.include?("class #{c}") }
+      return unless (CLASSES + ATTRS.keys).any? { |c| src.include?("class #{c}") }
       Norm.methods(src).each do |key, (text, line)|
         cname, name = key.split('#', 2)
         next unless CLASSES.include?(cname)
@@ -137,9 +175,13 @@ module HardRPGNative
         um = (klass.instance_method(name) rescue nil)
         # The section must be what defined the method now in place, at that line.
         defined_here = um && um.owner.equal?(klass) && um.source_location == [fname.to_s, line]
-        # SP1 calls the method it aliased; native only when that is the native default.
-        variant = nil if variant == 'sp1' && !((@variant_of ||= {})[key] == 'jp' &&
-                                               (klass.instance_method(:vxace_sp1_update_position).source_location rescue 0).nil?)
+        # A wrapper calls the method it aliased: native only when that alias is still a native
+        # method of the same name (SP1 also needs the Japanese default under it).
+        if variant && (al = WRAPS["#{key}/#{variant}"])
+          am = (klass.instance_method(al) rescue nil)
+          variant = nil unless am && am.source_location.nil? && am.original_name == name.to_sym
+          variant = nil if variant == 'sp1' && (@variant_of ||= {})[key] != 'jp'
+        end
         if variant && defined_here && klass.public_method_defined?(name, false)
           if replace(klass, name.to_sym, variant)
             @swapped << key
