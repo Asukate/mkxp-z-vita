@@ -184,8 +184,12 @@ public:
 
 	static int maxSize();
 	static void reclaimMemory();
+	static void releaseRecreatableMemory();
 	static void frameTick();
 	static bool cpuPixelsNearBudget();
+	/* True once after a bitmap could not get graphics memory while drawing
+	 * and was skipped for that frame; the next Ruby safe point reclaims. */
+	static bool takeReclaimRequest();
 	static size_t cpuPixelBytes();
 
     void assumeRubyGC();

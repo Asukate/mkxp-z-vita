@@ -31,11 +31,78 @@
 #include <stdarg.h>
 #include <string.h>
 
+#ifdef __vita__
+#include "vita_error_report.h"
+
+/* The game's image cache (VX/VX Ace `Cache`, XP `RPG::Cache`) keeps every
+ * picture, face, battler and tileset it ever loaded, as live Bitmaps the
+ * collector cannot touch. On a PC that is harmless; here a long session
+ * fills graphics memory with images last shown an hour ago (issue 4: 144
+ * entries, then a 640x480 texture at a battle start had nowhere to go).
+ *
+ * Forget the cached references, as the games' own Cache.clear does (BLACK
+ * SOULS II calls it on every bonfire warp): bitmaps still in use stay alive
+ * through their sprites and windows, the rest become collectable, and the
+ * next request loads the file again. Bitmaps are never disposed here. The
+ * game's Cache.clear itself is not called, since some games redefine it to
+ * dispose. Returns the number of entries released. */
+static VALUE vitaReleaseImageCacheBody(VALUE)
+{
+  const ID cacheIvar = rb_intern("@cache");
+  VALUE owners[2] = {Qnil, Qnil};
+  if (rb_const_defined(rb_cObject, rb_intern("Cache")))
+    owners[0] = rb_const_get(rb_cObject, rb_intern("Cache"));
+  if (rb_const_defined(rb_cObject, rb_intern("RPG"))) {
+    VALUE rpg = rb_const_get(rb_cObject, rb_intern("RPG"));
+    if ((RB_TYPE_P(rpg, T_MODULE) || RB_TYPE_P(rpg, T_CLASS)) &&
+        rb_const_defined_at(rpg, rb_intern("Cache")))
+      owners[1] = rb_const_get_at(rpg, rb_intern("Cache"));
+  }
+  long released = 0;
+  for (VALUE owner : owners) {
+    if (!(RB_TYPE_P(owner, T_MODULE) || RB_TYPE_P(owner, T_CLASS)))
+      continue;
+    if (!RTEST(rb_ivar_defined(owner, cacheIvar)))
+      continue;
+    VALUE cache = rb_ivar_get(owner, cacheIvar);
+    if (!RB_TYPE_P(cache, T_HASH) || OBJ_FROZEN(cache))
+      continue;
+    released += RHASH_SIZE(cache);
+    rb_hash_clear(cache);
+  }
+  return LONG2NUM(released);
+}
+
+/* Same call rules as vitaGpuPressureSafePoint. Never raises. */
+long vitaReleaseGameImageCache()
+{
+  int state = 0;
+  VALUE released = rb_protect(vitaReleaseImageCacheBody, Qnil, &state);
+  if (state) {
+    rb_set_errinfo(Qnil);
+    return 0;
+  }
+  const long count = NUM2LONG(released);
+  if (count > 0)
+    vitaErrorMemoryEvent("image-cache-released", "Cache");
+  return count;
+}
+#endif
+
 #if defined(__vita__) && !defined(MKXPZ_VITA_DIAGNOSTICS)
 #include <vitaGL.h>
 #include <psp2/kernel/processmgr.h>
 
 static VALUE vitaPressureCollect(VALUE) { return rb_gc_start(); }
+static VALUE vitaPressureCollectDeep(VALUE)
+{
+  /* Not reclaimMemory: it moves CPU bitmaps onto the GPU, which is short. */
+  GFX_LOCK;
+  Bitmap::releaseRecreatableMemory();
+  GFX_UNLOCK;
+  vitaReleaseGameImageCache();
+  return rb_gc_start();
+}
 
 /* Graphics memory is invisible to Ruby's collector: a Bitmap is a few bytes
  * of Ruby heap holding megabytes of texture storage. Games routinely drop
@@ -56,6 +123,35 @@ void vitaGpuPressureSafePoint(const char *phase)
   static uint64_t lastUs = 0;
   static unsigned int frames = 0;
   if (collecting) return;
+  /* Last resort, used rarely: when a plain collection cannot lift the
+   * pools, release the game's image cache too (see above). Also right after
+   * a bitmap had to be skipped mid-draw for lack of memory. */
+  static const size_t cacheFloor = 12u * 1024 * 1024;
+  static uint64_t lastDeepUs = 0;
+  /* A game that simply needs most of the memory must not reload its cache
+   * every few seconds: each release that left the pools low doubles the
+   * wait, up to 80 s; pools well above the floor reset it. */
+  static uint64_t deepIntervalUs = 10000000;
+  const bool skipped = Bitmap::takeReclaimRequest();
+  if (skipped || (phase[0] == 'g' && !(frames & 7))) {
+    const size_t poolFree = vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
+    const uint64_t nowUs = sceKernelGetProcessTimeWide();
+    if (poolFree >= cacheFloor + step)
+      deepIntervalUs = 10000000;
+    if (skipped || (poolFree < cacheFloor && nowUs - lastDeepUs >= deepIntervalUs)) {
+      if (!skipped && lastDeepUs && deepIntervalUs < 80000000)
+        deepIntervalUs *= 2;
+      collecting = true;
+      int state = 0;
+      rb_protect(vitaPressureCollectDeep, Qnil, &state);
+      collecting = false;
+      lastDeepUs = lastUs = sceKernelGetProcessTimeWide();
+      ceiling = vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
+      creations = 0;
+      if (state) rb_jump_tag(state);
+      return;
+    }
+  }
   /* Reading the pool figures walks both allocators, so they are sampled on
    * every eighth frame and every fourth bitmap creation, not on each call. */
   if (phase[0] == 'b') {
@@ -461,6 +557,9 @@ static void *gvl_guard(void *args) {
 		return gvl_args->func(gvl_args->args);
 	} catch (const Exception &e) {
 		gvl_args->exc = new Exception(e);
+	} catch (const std::bad_alloc &) {
+		/* Must not unwind through Ruby's C frames: that terminates. */
+		gvl_args->exc = new Exception(Exception::MKXPError, MKXPZ_NATIVE_OOM_MESSAGE);
 	}
 	return 0;
 }

@@ -51,14 +51,16 @@ static bool vitaOutOfMemory(const Exception &error) {
            error.msg.find(": out of memory ") != std::string::npos;
 }
 
-// Cached textures have no active bitmap owner, and bitmaps a game dropped
-// without disposing keep their storage until Ruby collects them. Reclaim
-// both. Collect with the VM lock held, outside the graphics lock and catch;
+// Cached textures have no active bitmap owner, bitmaps a game dropped
+// without disposing keep their storage until Ruby collects them, and the
+// game's own image cache holds everything it ever loaded. Reclaim all
+// three. Collect with the VM lock held, outside the graphics lock and catch;
 // the explicit Ruby method also collects when a game disables auto GC.
 static void vitaReclaimImageMemory(const char *label) {
     vitaErrorMemoryEvent("before-cache-reclaim", label);
     GFX_GUARD_EXC(shState->texPool().clearCache(); Bitmap::reclaimMemory();)
     vitaErrorMemoryEvent("after-cache-reclaim", label);
+    vitaReleaseGameImageCache();
     VALUE gc = rb_const_get(rb_cObject, rb_intern("GC"));
     rb_funcall(gc, rb_intern("start"), 0);
 }

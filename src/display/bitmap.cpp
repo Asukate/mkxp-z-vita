@@ -49,6 +49,9 @@ extern unsigned long long vgl_upload_barrier_us;
 #include "quadarray.h"
 #include "transform.h"
 #include "vita_diagnostic.h"
+#ifdef __vita__
+#include "vita_error_report.h"
+#endif
 #include "exception.h"
 
 #include "sharedstate.h"
@@ -171,7 +174,8 @@ struct BitmapPrivate;
 static void clearArm(BitmapPrivate *p);
 static void clearRead(BitmapPrivate *p);
 static void clearFullOverwrite(BitmapPrivate *p);
-static void cpuSync(BitmapPrivate *p);
+static bool cpuSync(BitmapPrivate *p);
+static void bindDrawFallback();
 static void cpuPromote(BitmapPrivate *p);
 
 struct BitmapPrivate
@@ -414,8 +418,10 @@ struct BitmapPrivate
         }
         /* Sampling this bitmap as a texture observes its pixels. */
         clearRead(this);
-        cpuSync(this);
-        TEX::bind(gl.tex);
+        if (cpuSync(this))
+            TEX::bind(gl.tex);
+        else
+            bindDrawFallback();
         if (selfLores && substituteLoresSize) {
             shader.setTexSize(Vec2i(selfLores->width(), selfLores->height()));
         }
@@ -764,9 +770,12 @@ static void cpuUpload(BitmapPrivate *p, const IntRect &rect)
 {
     SDL_Surface *s = p->cpu;
     const uint8_t *first = (const uint8_t *)s->pixels + (size_t)rect.y * s->pitch;
-    if (rect.x == 0 && rect.w == s->w && s->pitch == s->w * 4)
+    /* Whole rows need no copy. A wide rectangle is sent as whole rows too:
+     * a few more bytes to the GPU instead of a temporary as large as the
+     * rectangle, which a long session's fragmented heap may not have. */
+    if (s->pitch == s->w * 4 && (rect.w == s->w || (size_t)rect.w * 2 >= (size_t)s->w))
     {
-        TEX::uploadSubImage(0, rect.y, rect.w, rect.h, first, GL_RGBA);
+        TEX::uploadSubImage(0, rect.y, s->w, rect.h, first, GL_RGBA);
         return;
     }
     static std::vector<uint8_t> rows;
@@ -777,13 +786,64 @@ static void cpuUpload(BitmapPrivate *p, const IntRect &rect)
     TEX::uploadSubImage(rect.x, rect.y, rect.w, rect.h, rows.data(), GL_RGBA);
 }
 
-/* Bring the sampling texture up to date; called just before it is bound. */
-static void cpuSync(BitmapPrivate *p)
+/* Set when a bitmap was skipped for lack of graphics memory; the next
+ * Ruby safe point (Graphics.update) collects harder before the retry. */
+static bool reclaimRequested = false;
+
+bool Bitmap::takeReclaimRequest()
+{
+    const bool requested = reclaimRequested;
+    reclaimRequested = false;
+    return requested;
+}
+
+/* One transparent texel, bound in place of a bitmap whose texture could not
+ * be allocated mid-draw: it shows as empty for that frame. Made on the first
+ * upload of any CPU bitmap, while memory is still available. */
+static TEX::ID drawFallbackTex = TEX::ID(0);
+
+static void ensureDrawFallback()
+{
+    if (drawFallbackTex != TEX::ID(0))
+        return;
+    TEX::ID id = TEX::gen();
+    TEX::bind(id);
+    TEX::setRepeat(false);
+    TEX::setSmooth(false);
+    const uint32_t clear = 0;
+    try
+    {
+        TEX::uploadImage(1, 1, &clear, GL_RGBA);
+    }
+    catch (const Exception &)
+    {
+        TEX::del(id);
+        return;
+    }
+    drawFallbackTex = id;
+}
+
+static void bindDrawFallback()
+{
+    TEX::bind(drawFallbackTex);
+}
+
+/* Bring the sampling texture up to date; called just before it is bound.
+ * False when the texture could not be allocated: this happens mid-draw
+ * (a frame, a transition), where the only way out used to be an exception
+ * that ended the game. The caller draws nothing for this bitmap instead,
+ * and the next frame tries again after the safe point has reclaimed. */
+static bool cpuSync(BitmapPrivate *p)
 {
     if (!p->cpu || (!p->cpuDirty && p->gl.tex != TEX::ID(0)))
-        return;
+        return p->gl.tex != TEX::ID(0) || !p->cpu;
     if (p->gl.tex == TEX::ID(0))
     {
+        /* A failure is pending reclamation: don't pay vitaGL's full
+         * collection cycle again on every frame of a transition. */
+        if (reclaimRequested)
+            return false;
+        ensureDrawFallback();
         p->gl.tex = TEX::gen();
         TEX::bind(p->gl.tex);
         TEX::setRepeat(false);
@@ -807,7 +867,12 @@ static void cpuSync(BitmapPrivate *p)
         {
             TEX::del(p->gl.tex);
             p->gl.tex = TEX::ID(0);
-            throw;
+#ifdef __vita__
+            if (!reclaimRequested)
+                vitaErrorMemoryEvent("draw-skipped", "CPU bitmap texture");
+#endif
+            reclaimRequested = true;
+            return false;
         }
         p->cpuDirty = true;
         p->cpuDirtyRect = IntRect(0, 0, p->cpu->w, p->cpu->h);
@@ -816,6 +881,7 @@ static void cpuSync(BitmapPrivate *p)
         TEX::bind(p->gl.tex);
     cpuUpload(p, p->cpuDirtyRect);
     p->cpuDirty = false;
+    return true;
 }
 
 /* vitaGL moves a texture to new storage when pixels are uploaded while the
@@ -4621,10 +4687,18 @@ void Bitmap::taintArea(const IntRect &rect)
 
 /* Called when an image could not be allocated: give back every pixel copy
  * that can be made again, and move CPU-composed bitmaps to the GPU. */
-void Bitmap::reclaimMemory()
+/* Copies that can all be made again: cached text, read-backs, and the
+ * prefetcher's decoded files (speed only). Uses no graphics memory. */
+void Bitmap::releaseRecreatableMemory()
 {
     textCacheClear();
     dropAllReadbacks();
+    AssetPrefetch::releaseMemory();
+}
+
+void Bitmap::reclaimMemory()
+{
+    releaseRecreatableMemory();
     try
     {
         while (!cpuBitmapList.empty())

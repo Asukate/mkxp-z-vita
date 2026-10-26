@@ -1220,3 +1220,46 @@ void alGetBufferi(unsigned int buffer, int param, int *value)
     (void)param;
     if (value) *value = 0;
 }
+
+/* Every failed C++ allocation names its size and caller once in the
+ * runtime log (issue 4: an uncaught std::bad_alloc closed BLACK SOULS II
+ * with no report). The caller is an address in this executable; the
+ * reference address lets it be matched to the ELF's symbols. Logging
+ * is rare by construction: it only runs when the heap is already full. */
+static void vitaNoteFailedNew(size_t size, void *caller)
+{
+    static unsigned logged = 0;
+    if (logged >= 8)
+        return;
+    ++logged;
+    char line[160];
+    snprintf(line, sizeof(line),
+             "C++ allocation failed: %u bytes, caller %p (reference vitaNoteFailedNew=%p)\n",
+             (unsigned)size, caller, (void *)&vitaNoteFailedNew);
+    fputs(line, stderr);
+}
+
+void *operator new(size_t size)
+{
+    if (size == 0)
+        size = 1;
+    if (void *p = malloc(size))
+        return p;
+    vitaNoteFailedNew(size, __builtin_return_address(0));
+    throw std::bad_alloc();
+}
+
+void *operator new[](size_t size)
+{
+    if (size == 0)
+        size = 1;
+    if (void *p = malloc(size))
+        return p;
+    vitaNoteFailedNew(size, __builtin_return_address(0));
+    throw std::bad_alloc();
+}
+
+void operator delete(void *p) noexcept { free(p); }
+void operator delete[](void *p) noexcept { free(p); }
+void operator delete(void *p, size_t) noexcept { free(p); }
+void operator delete[](void *p, size_t) noexcept { free(p); }

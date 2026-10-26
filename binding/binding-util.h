@@ -30,7 +30,20 @@
 #endif
 
 #include "exception.h"
+#include <new>
+
+/* A C++ allocation that failed inside the engine. Worded like the graphics
+ * and image errors (": out of memory "), so the Bitmap retry paths reclaim
+ * and try again, and anything else reaches Ruby and the error report: an
+ * uncaught std::bad_alloc ends the process with no report at all. */
+#define MKXPZ_NATIVE_OOM_MESSAGE "Native memory: out of memory in engine allocation"
 #include "vita_diagnostic.h"
+
+#ifdef __vita__
+/* Forget the game's image cache references (never disposes); Ruby
+ * safe points only. Returns the number of entries released. */
+long vitaReleaseGameImageCache();
+#endif
 
 #ifdef RUBY_API_VERSION_MAJOR
 #define RAPI_MAJOR RUBY_API_VERSION_MAJOR
@@ -382,6 +395,9 @@ exp                                                                      \
 vitaDiagLog("BINDING", "gfx_guard_exception function=%s", __func__);    \
 GFX_UNLOCK;                                                              \
 throw exc;                                                               \
+} catch (const std::bad_alloc &) {                                       \
+GFX_UNLOCK;                                                              \
+throw Exception(Exception::MKXPError, MKXPZ_NATIVE_OOM_MESSAGE);         \
 }                                                                        \
 vitaDiagLog("BINDING", "gfx_guard_done function=%s", __func__);         \
 GFX_UNLOCK;                                                              \
@@ -504,6 +520,8 @@ static inline VALUE rb_file_open_str(VALUE filename, const char *mode) {
 #define RB_METHOD_GUARD_END                     \
     } catch (const Exception &e) {              \
         exc = new Exception(e);                 \
+    } catch (const std::bad_alloc &) {          \
+        exc = new Exception(Exception::MKXPError, MKXPZ_NATIVE_OOM_MESSAGE); \
     }                                           \
     if (exc) {                                  \
         raiseRbExc(exc);                        \
