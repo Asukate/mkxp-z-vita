@@ -27,6 +27,7 @@
 #include <cmath>
 #include <chrono>
 #include "sprite.h"
+#include "viewport.h"
 #include "etc.h"
 #include "sharedstate.h"
 #include "graphics.h"
@@ -1456,6 +1457,15 @@ static VALUE nev_stats(VALUE) {
     }
     return h;
 }
+/* Timing tests only: HardRPGNative.set_option("viewport_same_skip", bool). */
+static VALUE nev_set_option(VALUE, VALUE name, VALUE val) {
+    std::string n = StringValueCStr(name);
+    if (n == "viewport_same_skip")
+        g_viewportSameSkip = RTEST(val);
+    else
+        rb_raise(rb_eArgError, "unknown option %s", n.c_str());
+    return val;
+}
 static VALUE nev_reset_stats(VALUE) {
     for (int i = 0; i < S_COUNT; ++i)
         g_slots[i].direct = g_slots[i].viaRuby = 0;
@@ -1831,6 +1841,7 @@ static VALUE initRuby(VALUE) {
     rb_define_singleton_method(g_module, "attr", RUBY_METHOD_FUNC(nev_attr), 2);
     rb_define_singleton_method(g_module, "stats", RUBY_METHOD_FUNC(nev_stats), 0);
     rb_define_singleton_method(g_module, "reset_stats", RUBY_METHOD_FUNC(nev_reset_stats), 0);
+    rb_define_singleton_method(g_module, "set_option", RUBY_METHOD_FUNC(nev_set_option), 2);
     rb_define_singleton_method(g_module, "epoch", RUBY_METHOD_FUNC(nev_epoch), 0);
     rb_define_singleton_method(g_module, "checks", RUBY_METHOD_FUNC(nev_checks), 0);
     rb_define_singleton_method(g_module, "cbench", RUBY_METHOD_FUNC(nev_cbench), 3);

@@ -242,6 +242,9 @@ Viewport *ViewportElement::getViewport() const
 	return m_viewport;
 }
 
+/* Off only for timing tests (HardRPGNative.viewport_same_skip = false). */
+bool g_viewportSameSkip = true;
+
 void ViewportElement::setViewport(Viewport *viewport)
 {
 	m_viewport = viewport;
@@ -250,7 +253,19 @@ void ViewportElement::setViewport(Viewport *viewport)
 	if (rgssVer == 1 && viewport)
 		viewportDispCon = viewport->wasDisposed.connect(&ViewportElement::viewportElementDisposal, this);
 	
-	setScene(viewport ? *viewport : *shState->screen());
+	Scene &target = viewport ? *viewport : *shState->screen();
+	if (g_viewportSameSkip && scene == &target && link.next)
+	{
+		/* Already in this scene. Its list is kept sorted by draw order (Z, then sprite Y,
+		 * then creation order, so no two elements tie), and removing and inserting again
+		 * would put the element back where it is. Some scripts set the same viewport on
+		 * every sprite every frame, and each insert walks the whole list. */
+		onGeometryChange(target.getGeometry());
+	}
+	else
+	{
+		setScene(target);
+	}
 	onViewportChange();
 	onGeometryChange(scene->getGeometry());
 }

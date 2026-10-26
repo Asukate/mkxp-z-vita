@@ -67,6 +67,8 @@ private:
 	IntruListLink<Scene> sceneLink;
 };
 
+extern bool g_viewportSameSkip;
+
 class ViewportElement : public SceneElement
 {
 public:
