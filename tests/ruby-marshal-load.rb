@@ -52,6 +52,24 @@ check('_load') { m[3].bytes == "\x00\x01raw".b && m[7].equal?(m[3]) }
 check('compat') { m[4] == Rational(3, 7) && m[5] == Complex(1, 2) }
 check('plain') { m[8] == 1.5 && m[9] == :sym && m[10] == 2**70 }
 
+# Class and ivar-name lookups are cached per load: several classes and ivar
+# names, Structs, subclasses of core types, and string encodings all still
+# come back as dumped.
+Pair = Struct.new(:left, :right)
+class TaggedArray < Array; end
+class TaggedString < String; end
+class Other; attr_accessor :code, :extra; end
+o = Other.new; o.code = 7; o.extra = 'x'
+strings = ['plain ascii', "utf8 café", 'sjis'.encode('Shift_JIS'), "bin\xff".b, 'ascii'.encode('US-ASCII')]
+tagged = TaggedArray.new([1, 2]); tstr = TaggedString.new('tag')
+c = Marshal.load(Marshal.dump([Command.new(1, 2, []), o, Command.new(3, 4, [o]), Pair.new(1, o),
+                               tagged, tstr, *strings, Pair.new(2, 3), Other.new]))
+check('ivars per class') { c[0].code == 1 && c[0].indent == 2 && c[1].code == 7 && c[1].extra == 'x' && c[2].parameters[0].equal?(c[1]) }
+check('struct') { c[3].is_a?(Pair) && c[3].right.equal?(c[1]) && c[11] == Pair.new(2, 3) }
+check('subclasses') { c[4].instance_of?(TaggedArray) && c[4] == [1, 2] && c[5].instance_of?(TaggedString) && c[5] == 'tag' }
+check('encodings') { c[6, 5].map(&:encoding) == strings.map(&:encoding) && c[6, 5] == strings }
+check('no ivars') { c[12].instance_of?(Other) && c[12].instance_variables.empty? }
+
 # The proc form sees every object, as mkxp's load_data wrapper relies on it.
 seen = 0
 p_loaded = Marshal.load(Marshal.dump([first, rows.first(100)]), proc { |o| seen += 1; o })

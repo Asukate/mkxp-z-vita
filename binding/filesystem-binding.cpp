@@ -167,15 +167,29 @@ RB_METHOD(fileIntPos) {
  * about 50 MB in memory). When it is loaded, the map loaded before it is
  * usually garbage already, but Ruby has not collected it yet and grows the
  * heap for the new objects first. On the Vita's fixed heap the two maps do
- * not fit together, so collect before loading. */
+ * not fit together, so collect before loading.
+ * Nearly everything the load creates stays alive, so collections during it
+ * only re-mark the growing map (about 2 of the 6 seconds that map 28 takes
+ * on the Vita). Pause the collector until the load is done. */
 static const Sint64 kLoadDataCollectBytes = 1024 * 1024;
 
-static VALUE fileIntLoad(VALUE port) {
-    if (getPrivateData<DataStream>(port)->remaining() >= kLoadDataCollectBytes)
-        rb_gc_start();
+static VALUE fileIntMarshalLoad(VALUE data) {
     VALUE marsh = rb_const_get(rb_cObject, rb_intern("Marshal"));
-    VALUE data = fileIntRead(0, nullptr, port);
     return rb_funcall2(marsh, rb_intern("load"), 1, &data);
+}
+static VALUE fileIntEnableGC(VALUE) {
+    rb_gc_enable();
+    return Qnil;
+}
+
+static VALUE fileIntLoad(VALUE port) {
+    bool big = getPrivateData<DataStream>(port)->remaining() >= kLoadDataCollectBytes;
+    if (big)
+        rb_gc_start();
+    VALUE data = fileIntRead(0, nullptr, port);
+    if (!big || RTEST(rb_gc_disable()))
+        return fileIntMarshalLoad(data);
+    return rb_ensure(fileIntMarshalLoad, data, fileIntEnableGC, Qnil);
 }
 static VALUE fileIntRaw(VALUE port) {
     return fileIntRead(0, nullptr, port);

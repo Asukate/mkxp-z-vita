@@ -414,7 +414,7 @@ index b8969e6..df52412 100644
  #endif
      "";
 diff --git a/marshal.c b/marshal.c
-index c5327fc..32ab1cc 100644
+index c5327fc..6749e5c 100644
 --- a/marshal.c
 +++ b/marshal.c
 @@ -1154,6 +1154,27 @@ rb_marshal_dump_limited(VALUE obj, VALUE port, int limit)
@@ -445,12 +445,18 @@ index c5327fc..32ab1cc 100644
  struct load_arg {
      VALUE src;
      char *buf;
-@@ -1161,13 +1182,68 @@ struct load_arg {
+@@ -1161,13 +1182,74 @@ struct load_arg {
      long readable;
      long offset;
      st_table *symbols;
 -    st_table *data;
 +    struct load_data_table data;
++    /* Per-load caches keyed by the symbol strings in `symbols`: the class a
++     * path names, and the ivar ID a name interns to (0 for the special names
++     * that set an encoding or flag). A map file names the same few classes
++     * and ivars hundreds of thousands of times. */
++    st_table *path_classes;
++    st_table *ivar_ids;
      st_table *partial_objects;
      VALUE proc;
      st_table *compat_tbl;
@@ -515,7 +521,7 @@ index c5327fc..32ab1cc 100644
  static VALUE
  check_load_arg(VALUE ret, struct load_arg *arg, const char *name)
  {
-@@ -1189,7 +1265,7 @@ mark_load_arg(void *ptr)
+@@ -1189,7 +1271,7 @@ mark_load_arg(void *ptr)
      if (!p->symbols)
          return;
      rb_mark_tbl(p->symbols);
@@ -524,7 +530,7 @@ index c5327fc..32ab1cc 100644
      rb_mark_tbl(p->partial_objects);
      rb_mark_hash(p->compat_tbl);
  }
-@@ -1213,7 +1289,7 @@ static const rb_data_type_t load_arg_data = {
+@@ -1213,7 +1295,7 @@ static const rb_data_type_t load_arg_data = {
      0, 0, RUBY_TYPED_FREE_IMMEDIATELY
  };
  
@@ -533,7 +539,7 @@ index c5327fc..32ab1cc 100644
  static VALUE r_object(struct load_arg *arg);
  static VALUE r_symbol(struct load_arg *arg);
  
-@@ -1227,9 +1303,9 @@ too_short(void)
+@@ -1227,9 +1309,9 @@ too_short(void)
  static st_index_t
  r_prepare(struct load_arg *arg)
  {
@@ -545,7 +551,7 @@ index c5327fc..32ab1cc 100644
      return idx;
  }
  
-@@ -1543,7 +1619,7 @@ r_entry0(VALUE v, st_index_t num, struct load_arg *arg)
+@@ -1543,7 +1625,7 @@ r_entry0(VALUE v, st_index_t num, struct load_arg *arg)
          /* real_obj is kept if not found */
          st_lookup(arg->compat_tbl, v, &real_obj);
      }
@@ -554,7 +560,56 @@ index c5327fc..32ab1cc 100644
      st_insert(arg->partial_objects, (st_data_t)real_obj, Qtrue);
      return v;
  }
-@@ -1740,10 +1816,9 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+@@ -1626,7 +1708,21 @@ r_ivar(VALUE obj, int *has_encoding, struct load_arg *arg)
+ 	do {
+ 	    VALUE sym = r_symbol(arg);
+ 	    VALUE val = r_object(arg);
+-	    int idx = sym2encidx(sym, val);
++	    st_data_t id;
++	    int idx;
++
++	    if (!arg->ivar_ids) arg->ivar_ids = rb_init_identtable();
++	    if (!st_lookup(arg->ivar_ids, (st_data_t)sym, &id)) {
++		id = (symname_equal(sym, "encoding", 8) ||
++		      symname_equal_lit(sym, name_s_encoding_short) ||
++		      symname_equal_lit(sym, name_s_ruby2_keywords_flag)) ? 0 : (st_data_t)rb_intern_str(sym);
++		st_insert(arg->ivar_ids, (st_data_t)sym, id);
++	    }
++	    if (id) {
++		rb_ivar_set(obj, (ID)id, val);
++		continue;
++	    }
++	    idx = sym2encidx(sym, val);
+ 	    if (idx >= 0) {
+                 if (rb_enc_capable(obj)) {
+                     rb_enc_associate_index(obj, idx);
+@@ -1696,10 +1792,24 @@ obj_alloc_by_klass(VALUE klass, struct load_arg *arg, VALUE *oldclass)
+     return rb_obj_alloc(klass);
+ }
+ 
++static VALUE
++r_path2class(VALUE path, struct load_arg *arg)
++{
++    st_data_t klass;
++
++    if (arg->path_classes && st_lookup(arg->path_classes, (st_data_t)path, &klass)) {
++        return (VALUE)klass;
++    }
++    klass = (st_data_t)path2class(path);
++    if (!arg->path_classes) arg->path_classes = rb_init_identtable();
++    st_insert(arg->path_classes, (st_data_t)path, klass);
++    return (VALUE)klass;
++}
++
+ static VALUE
+ obj_alloc_by_path(VALUE path, struct load_arg *arg)
+ {
+-    return obj_alloc_by_klass(path2class(path), arg, 0);
++    return obj_alloc_by_klass(r_path2class(path, arg), arg, 0);
+ }
+ 
+ static VALUE
+@@ -1740,10 +1850,9 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
      switch (type) {
        case TYPE_LINK:
  	id = r_long(arg);
@@ -566,17 +621,70 @@ index c5327fc..32ab1cc 100644
  	if (!st_lookup(arg->partial_objects, (st_data_t)v, &link)) {
  	    v = r_post_proc(v, arg);
  	}
-@@ -2194,8 +2269,7 @@ clear_load_arg(struct load_arg *arg)
+@@ -1796,7 +1905,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+ 
+       case TYPE_UCLASS:
+ 	{
+-	    VALUE c = path2class(r_unique(arg));
++	    VALUE c = r_path2class(r_unique(arg), arg);
+ 
+ 	    if (FL_TEST(c, FL_SINGLETON)) {
+ 		rb_raise(rb_eTypeError, "singleton can't be loaded");
+@@ -1976,7 +2085,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+ 	    long i;
+ 	    VALUE slot;
+ 	    st_index_t idx = r_prepare(arg);
+-	    VALUE klass = path2class(r_unique(arg));
++	    VALUE klass = r_path2class(r_unique(arg), arg);
+ 	    long len = r_long(arg);
+ 
+             v = rb_obj_alloc(klass);
+@@ -2026,7 +2135,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+       case TYPE_USERDEF:
+         {
+ 	    VALUE name = r_unique(arg);
+-	    VALUE klass = path2class(name);
++	    VALUE klass = r_path2class(name, arg);
+ 	    VALUE data;
+ 	    st_data_t d;
+ 
+@@ -2052,7 +2161,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+       case TYPE_USRMARSHAL:
+         {
+ 	    VALUE name = r_unique(arg);
+-	    VALUE klass = path2class(name);
++	    VALUE klass = r_path2class(name, arg);
+ 	    VALUE oldclass = 0;
+ 	    VALUE data;
+ 
+@@ -2094,7 +2203,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+       case TYPE_DATA:
+ 	{
+ 	    VALUE name = r_unique(arg);
+-	    VALUE klass = path2class(name);
++	    VALUE klass = r_path2class(name, arg);
+ 	    VALUE oldclass = 0;
+ 	    VALUE r;
+ 
+@@ -2194,8 +2303,15 @@ clear_load_arg(struct load_arg *arg)
      if (!arg->symbols) return;
      st_free_table(arg->symbols);
      arg->symbols = 0;
 -    st_free_table(arg->data);
 -    arg->data = 0;
 +    load_data_free(&arg->data);
++    if (arg->path_classes) {
++	st_free_table(arg->path_classes);
++	arg->path_classes = 0;
++    }
++    if (arg->ivar_ids) {
++	st_free_table(arg->ivar_ids);
++	arg->ivar_ids = 0;
++    }
      st_free_table(arg->partial_objects);
      arg->partial_objects = 0;
      if (arg->compat_tbl) {
-@@ -2226,7 +2300,6 @@ rb_marshal_load_with_proc(VALUE port, VALUE proc, bool freeze)
+@@ -2226,7 +2342,6 @@ rb_marshal_load_with_proc(VALUE port, VALUE proc, bool freeze)
      arg->src = port;
      arg->offset = 0;
      arg->symbols = st_init_numtable();

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that the patched Ruby keeps Marshal.load links in a chunked table.
+"""Check the patched Ruby's Marshal.load: chunked link table, class and ivar caches.
 
 Upstream keeps them in an st_table that needs two contiguous blocks of tens
 of MB for a large RPG Maker map; on the Vita's fragmented heap that fails
@@ -31,6 +31,7 @@ with tempfile.TemporaryDirectory(prefix='ruby-marshal-', dir=scratch) as directo
     assert 'struct load_data_table data;' in load, 'load_arg.data is not the chunked table'
     assert not re.search(r'st_\w+\(arg->data\b', load), 'Marshal.load still uses an st_table for links'
     assert 'LOAD_DATA_CHUNK_BITS 12' in source
+    assert 'r_path2class(r_unique(arg), arg)' in load and 'arg->ivar_ids' in load, 'class/ivar caches missing'
 if args.ruby:
     subprocess.run([str(args.ruby.resolve()), str(root / 'tests/ruby-marshal-load.rb')], check=True, timeout=120)
 print('Marshal.load chunked link table checks passed')
