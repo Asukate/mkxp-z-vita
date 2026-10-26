@@ -108,7 +108,8 @@ static inline VALUE ivFast(VALUE o, ID id, IvSite &s) {
     }
     return rb_ivar_get(o, id);
 }
-enum SlotKind { SK_NONE, SK_NATIVE, SK_ENGINE, SK_ATTR };
+/* SK_KNOWN: a script's own Ruby method whose text is known; only checked, always called through Ruby. */
+enum SlotKind { SK_NONE, SK_NATIVE, SK_ENGINE, SK_ATTR, SK_KNOWN };
 
 typedef VALUE (*NativeFn)(VALUE self, int argc, const VALUE *argv, bool fromRuby);
 
@@ -161,6 +162,12 @@ enum SlotId {
     S_GM_display_x, S_GM_display_y, S_SC_check_can_update_sprite, S_SPR_visible,
     S_H_GE_update_symbol, S_H_GE_update_mog, S_H_GC_update_symbol, S_H_GE_usm_symbol,
     S_H_GCB_rms_8dir, S_H_SC_update_mog,
+    /* CanariAlternate Multilayer, star aura effect */
+    S_SC_update_junction_sprite, S_SC_reset_sprite_origin, S_SC_dispose_junction_sprites,
+    S_SC_multi_viewport, S_SC_valid_x, S_SC_valid_y, S_GM_floor_xy, S_GM_round_x, S_GM_round_y,
+    S_GT_multi_viewport_accessor, S_GCB_current_floor, S_SPR_star_aura_effects_update,
+    S_GC_star_aura_effect_update, S_SAE_update_aura_effect, S_SAE_aura_effect_data,
+    S_SAE_aura_effect_data_delete_opacity_zero,
     /* Game_Map */
     S_GM_adjust_x, S_GM_adjust_y, S_GM_loop_horizontal, S_GM_loop_vertical, S_GM_width, S_GM_height,
     S_GM_screen_tile_x, S_GM_screen_tile_y, S_GM_update_events,
@@ -178,6 +185,8 @@ enum SlotId {
     /* engine */
     S_SPR_update, S_SPR_x, S_SPR_y, S_SPR_set_x, S_SPR_set_y, S_SPR_set_z, S_SPR_set_opacity,
     S_SPR_set_blend_type, S_SPR_set_bush_depth, S_SPR_set_visible, S_SPR_src_rect, S_RECT_set,
+    S_SPR_set_ox, S_SPR_set_oy, S_SPR_set_viewport, S_SPR_opacity, S_ARY_each, S_ARY_delete_if,
+    S_ARY_each_with_index,
     S_GFX_width, S_GFX_height, S_ARY_clear, S_STR_eq, S_STR_neq, S_ARY_aref, S_INT_zero,
     S_INT_truncate, S_FLO_truncate, S_INT_between, S_OBJ_is_a,
     S_COUNT
@@ -458,11 +467,13 @@ static ID iv_real_x, iv_real_y, iv_x, iv_y, iv_jump_count, iv_jump_peak, iv_move
     iv_ch, iv_balloon_duration, iv_balloon_sprite, iv_balloon_id, iv_character_sprites, iv_map_id,
     cv_ani_checker, cv_ani_spr_checker, iv_symbol_encount, iv_wait_count, iv_visibility_distance,
     iv_origin_opacity, iv_opacity, iv_uninhibited_movement, iv_region_z_pos, iv_first_z_pos,
-    iv_anti_lag, iv_can_update, iv_data;
+    iv_anti_lag, iv_can_update, iv_data, iv_sprites_cash_size, iv_sprites_cash, iv_star_aura_last_x,
+    iv_star_aura_last_y, iv_star_aura_effect_update, iv_star_aura_effect_keys, iv_star_aura_effect_sprites;
 static ID id_update_symbol_reaction, id_update_symbol_movement, id_zero, id_truncate, id_between,
     id_reset_sprite_effects, id_is_a, id_MOVE_CONTROL, id_DASH_PLUS, id_MOG_ANTI_LAG,
-    id_UPDATE_OUT_SCREEN_RANGE, id_Game_Event;
-static ID gv_game_map, gv_data_animations, gv_game_variables, gv_game_system;
+    id_UPDATE_OUT_SCREEN_RANGE, id_Game_Event, id_Calt, id_LAYER_UP_TILE, id_LAYER_DOWN_TILE,
+    id_star_aura_effect, id_star_aura_effect_update_set, id_nev_aura_tail;
+static ID gv_game_map, gv_data_animations, gv_game_variables, gv_game_system, gv_game_temp;
 static VALUE g_spriteBase = Qnil, g_graphics = Qnil;
 static VALUE g_float_256 = Qnil;
 
@@ -1247,6 +1258,111 @@ static VALUE sc_update_mog(VALUE self, int, const VALUE *, bool) {
     return call0(self, S_H_SC_update_mog);
 }
 
+/* -- CanariAlternate Multilayer -- */
+
+/* With Calt::LAYER_UP_TILE and LAYER_DOWN_TILE both nil, Game_Map#floor_xy returns the floor it
+ * is given, so update_junction_sprite never splits a sprite: after the screen checks it resets
+ * the origin, sets the viewport of the character's floor and disposes junction sprites. The
+ * rest of it only calls methods without side effects (floor_xy, round_x/y, display_x/y, valid_x?/y?,
+ * width, height) while they are the known ones, so it is left out then. */
+static bool mlShortOk(VALUE self) {
+    if (!rb_const_defined(rb_cObject, id_Calt))
+        return false;
+    VALUE calt = rb_const_get(rb_cObject, id_Calt);
+    if (!NIL_P(rb_const_get(calt, id_LAYER_UP_TILE)) || !NIL_P(rb_const_get(calt, id_LAYER_DOWN_TILE)))
+        return false;
+    VALUE gk = rb_class_of(gameMap());
+    for (int id : {S_GM_floor_xy, S_GM_round_x, S_GM_round_y, S_GM_display_x, S_GM_display_y, S_GM_width,
+                   S_GM_height})
+        if (!slotOk(g_slots[id], gk))
+            return false;
+    VALUE sk = rb_class_of(self);
+    return slotOk(g_slots[S_SC_valid_x], sk) && slotOk(g_slots[S_SC_valid_y], sk);
+}
+static VALUE sc_update_junction_sprite_ml(VALUE self, int argc, const VALUE *argv, bool) {
+    if (!mlShortOk(self))
+        return callOrig(self, S_SC_update_junction_sprite, argc, argv);
+    SETIV(self, sprites_cash_size, INT2FIX(0));
+    VALUE c = IV(self, character);
+    VALUE sx = call0(c, S_GCB_screen_x);
+    if (nLt(sx, nNeg(IV(self, cw))) || nLt(nAdd(call0(g_graphics, S_GFX_width), IV(self, cw)), sx))
+        return call0(self, S_SC_dispose_junction_sprites);
+    VALUE sy = call0(c, S_GCB_screen_y);
+    if (nLt(sy, INT2FIX(0)) || nLt(nAdd(call0(g_graphics, S_GFX_height), IV(self, ch)), sy))
+        return call0(self, S_SC_dispose_junction_sprites);
+    if (!RTEST(call0(self, S_SPR_visible)))
+        return call0(self, S_SC_dispose_junction_sprites);
+    call0(self, S_SC_reset_sprite_origin);
+    VALUE floor = call0(c, S_GCB_current_floor);
+    VALUE vps = call0(self, S_SC_multi_viewport);
+    VALUE vp = (RB_TYPE_P(vps, T_ARRAY) && rb_class_of(vps) == rb_cArray && FIXNUM_P(floor) &&
+                slotOk(g_slots[S_ARY_aref], rb_cArray))
+                   ? rb_ary_entry(vps, FIX2LONG(floor))
+                   : rb_funcall(vps, id_aref, 1, floor);
+    call1(self, S_SPR_set_viewport, vp);
+    return call0(self, S_SC_dispose_junction_sprites);
+}
+/* def reset_sprite_origin; self.ox = @cw / 2; self.oy = @ch; end */
+static VALUE sc_reset_sprite_origin_ml(VALUE self, int, const VALUE *, bool) {
+    call1(self, S_SPR_set_ox, nDiv(IV(self, cw), INT2FIX(2)));
+    VALUE ch = IV(self, ch);
+    call1(self, S_SPR_set_oy, ch);
+    return ch;
+}
+/* def dispose_junction_sprites; return unless @sprites_cash; ... */
+static VALUE sc_dispose_junction_sprites_ml(VALUE self, int argc, const VALUE *argv, bool) {
+    if (!RTEST(IV(self, sprites_cash)))
+        return Qnil;
+    return callOrig(self, S_SC_dispose_junction_sprites, argc, argv);
+}
+/* def multi_viewport; return $game_temp.multi_viewport_accessor; end */
+static VALUE sc_multi_viewport_ml(VALUE, int, const VALUE *, bool) {
+    return call0(rb_gvar_get(gv_game_temp), S_GT_multi_viewport_accessor);
+}
+
+/* -- star aura effect (Sprite#star_aura_effects_update) -- */
+
+/* The common case is a sprite with no aura: no effect keys, no effect sprites and no effect
+ * data. Then everything after the key update does nothing but create the target's empty data
+ * list, and the method returns the (empty) effect sprite list. Otherwise the rest runs in Ruby
+ * (__nev_aura_tail, the same text). */
+static inline bool emptyAry(VALUE v) {
+    return RB_TYPE_P(v, T_ARRAY) && rb_class_of(v) == rb_cArray && RARRAY_LEN(v) == 0;
+}
+static VALUE spr_star_aura_effects_update(VALUE self, int argc, const VALUE *argv, bool) {
+    checkArity(argc, 1, 1);
+    VALUE t = argv[0];
+    if (!RTEST(t))
+        return callOrig(self, S_SPR_star_aura_effects_update, argc, argv);
+    if (!RTEST(IV(self, star_aura_last_x)))
+        SETIV(self, star_aura_last_x, call0(self, S_SPR_x));
+    if (!RTEST(IV(self, star_aura_last_y)))
+        SETIV(self, star_aura_last_y, call0(self, S_SPR_y));
+    if (nNe(IV(self, star_aura_last_x), call0(self, S_SPR_x)) ||
+        nNe(IV(self, star_aura_last_y), call0(self, S_SPR_y))) {
+        SETIV(self, star_aura_last_x, call0(self, S_SPR_x));
+        SETIV(self, star_aura_last_y, call0(self, S_SPR_y));
+    }
+    if (RTEST(call0(t, S_GC_star_aura_effect_update)) || RTEST(IV(self, star_aura_effect_update))) {
+        VALUE e = rb_funcall(t, id_star_aura_effect, 0);
+        rb_funcall(t, id_star_aura_effect_update_set, 1, Qfalse);
+        SETIV(self, star_aura_effect_update, Qfalse);
+        SETIV(self, star_aura_effect_keys, e);
+    }
+    VALUE sprites = IV(self, star_aura_effect_sprites);
+    VALUE tk = rb_class_of(t), sk = rb_class_of(self);
+    bool quiet = emptyAry(IV(self, star_aura_effect_keys)) && emptyAry(sprites) &&
+                 slotOk(g_slots[S_SPR_visible], sk) && slotOk(g_slots[S_SPR_opacity], sk) &&
+                 slotOk(g_slots[S_ARY_each], rb_cArray) && slotOk(g_slots[S_ARY_each_with_index], rb_cArray) &&
+                 slotOk(g_slots[S_ARY_delete_if], rb_cArray) &&
+                 slotOk(g_slots[S_SAE_update_aura_effect], tk) &&
+                 slotOk(g_slots[S_SAE_aura_effect_data_delete_opacity_zero], tk);
+    /* aura_effect_data is `@star_aura_effects_data ||= []`: the first thing update_aura_effect does. */
+    if (quiet && emptyAry(call0(t, S_SAE_aura_effect_data)))
+        return sprites;
+    return rb_funcall(self, id_nev_aura_tail, 1, t);
+}
+
 /* ------------------------------------------------------------------ */
 /* Ruby-facing entry points                                            */
 
@@ -1341,6 +1457,13 @@ static const NativeDef g_natives[] = {
     ND(S_GE_anti_lag_on_screen, "mog", ge_anti_lag_event_on_screen, -1),
     ND(S_SC_check_can_update_sprite, "mog", sc_check_can_update_sprite, -1),
     NDW(S_SC_update, "mog", sc_update_mog, S_H_SC_update_mog, S_SC_update),
+    /* CanariAlternate Multilayer */
+    ND(S_SC_update_junction_sprite, "ml", sc_update_junction_sprite_ml, -1),
+    ND(S_SC_reset_sprite_origin, "ml", sc_reset_sprite_origin_ml, -1),
+    ND(S_SC_dispose_junction_sprites, "ml", sc_dispose_junction_sprites_ml, -1),
+    ND(S_SC_multi_viewport, "ml", sc_multi_viewport_ml, -1),
+    /* star aura effect */
+    NDA(S_SPR_star_aura_effects_update, "aura", spr_star_aura_effects_update, -1, 1, 1),
 };
 #undef ND
 #undef NDS
@@ -1451,11 +1574,26 @@ static VALUE nev_stats(VALUE) {
         if (!s.owner_name || (!s.direct && !s.viaRuby && s.kind == SK_NONE))
             continue;
         std::string k = std::string(s.owner_name) + "#" + s.name;
-        const char *kind = s.kind == SK_NATIVE ? "native" : s.kind == SK_ATTR ? "attr" : s.kind == SK_ENGINE ? "engine" : "ruby";
+        const char *kind = s.kind == SK_NATIVE ? "native" : s.kind == SK_ATTR ? "attr" : s.kind == SK_ENGINE ? "engine" : s.kind == SK_KNOWN ? "known" : "ruby";
         rb_hash_aset(h, rb_str_new_cstr(k.c_str()),
                      rb_ary_new_from_args(3, rb_str_new_cstr(kind), UINT2NUM(s.direct), UINT2NUM(s.viaRuby)));
     }
     return h;
+}
+/* HardRPGNative.known(klass, :name): a script method with known text, checked but run in Ruby. */
+static VALUE nev_known(VALUE, VALUE klass, VALUE name) {
+    int slot = slotByName(rb_class2name(klass), rb_id2name(SYM2ID(name)));
+    if (slot < 0)
+        return Qfalse;
+    Slot &s = g_slots[slot];
+    if (s.kind != SK_NONE)
+        return Qfalse;
+    s.kind = SK_KNOWN;
+    s.owner = klass;
+    s.expect = instanceMethod(klass, s.mid);
+    rb_gc_register_mark_object(s.expect);
+    g_epoch++;
+    return Qtrue;
 }
 /* Timing tests only: HardRPGNative.set_option("viewport_same_skip", bool). */
 static VALUE nev_set_option(VALUE, VALUE name, VALUE val) {
@@ -1569,7 +1707,13 @@ void nativeEventsInit(int rgssVersion) {
     I(iv_visibility_distance, "@visibility_distance"); I(iv_origin_opacity, "@origin_opacity");
     I(iv_opacity, "@opacity"); I(iv_uninhibited_movement, "@uninhibited_movement");
     I(iv_region_z_pos, "@region_z_pos"); I(iv_first_z_pos, "@first_z_pos"); I(iv_anti_lag, "@anti_lag");
-    I(iv_can_update, "@can_update"); I(iv_data, "@data");
+    I(iv_can_update, "@can_update"); I(iv_data, "@data"); I(iv_sprites_cash_size, "@sprites_cash_size");
+    I(iv_sprites_cash, "@sprites_cash"); I(iv_star_aura_last_x, "@star_aura_last_x");
+    I(iv_star_aura_last_y, "@star_aura_last_y"); I(iv_star_aura_effect_update, "@star_aura_effect_update");
+    I(iv_star_aura_effect_keys, "@star_aura_effect_keys"); I(iv_star_aura_effect_sprites, "@star_aura_effect_sprites");
+    I(id_Calt, "Calt"); I(id_LAYER_UP_TILE, "LAYER_UP_TILE"); I(id_LAYER_DOWN_TILE, "LAYER_DOWN_TILE");
+    I(id_star_aura_effect, "star_aura_effect"); I(id_star_aura_effect_update_set, "star_aura_effect_update=");
+    I(id_nev_aura_tail, "__nev_aura_tail"); I(gv_game_temp, "$game_temp");
     I(id_update_symbol_reaction, "update_symbol_reaction"); I(id_update_symbol_movement, "update_symbol_movement");
     I(id_zero, "zero?"); I(id_truncate, "truncate"); I(id_between, "between?");
     I(id_reset_sprite_effects, "reset_sprite_effects"); I(id_is_a, "is_a?"); I(id_MOVE_CONTROL, "MOVE_CONTROL");
@@ -1665,6 +1809,29 @@ void nativeEventsInit(int rgssVersion) {
     slotDef(S_GM_display_y, "Game_Map", "display_y");
     slotDef(S_SC_check_can_update_sprite, "Sprite_Character", "check_can_update_sprite");
     slotDef(S_SPR_visible, "Sprite", "visible");
+    slotDef(S_SC_update_junction_sprite, "Sprite_Character", "update_junction_sprite");
+    slotDef(S_SC_reset_sprite_origin, "Sprite_Character", "reset_sprite_origin");
+    slotDef(S_SC_dispose_junction_sprites, "Sprite_Character", "dispose_junction_sprites");
+    slotDef(S_SC_multi_viewport, "Sprite_Character", "multi_viewport");
+    slotDef(S_SC_valid_x, "Sprite_Character", "valid_x?");
+    slotDef(S_SC_valid_y, "Sprite_Character", "valid_y?");
+    slotDef(S_GM_floor_xy, "Game_Map", "floor_xy");
+    slotDef(S_GM_round_x, "Game_Map", "round_x");
+    slotDef(S_GM_round_y, "Game_Map", "round_y");
+    slotDef(S_GT_multi_viewport_accessor, "Game_Temp", "multi_viewport_accessor");
+    slotDef(S_GCB_current_floor, "Game_CharacterBase", "current_floor");
+    slotDef(S_SPR_star_aura_effects_update, "Sprite", "star_aura_effects_update");
+    slotDef(S_GC_star_aura_effect_update, "Game_Character", "star_aura_effect_update");
+    slotDef(S_SAE_update_aura_effect, "StarAuraEffect", "update_aura_effect");
+    slotDef(S_SAE_aura_effect_data, "StarAuraEffect", "aura_effect_data");
+    slotDef(S_SAE_aura_effect_data_delete_opacity_zero, "StarAuraEffect", "aura_effect_data_delete_opacity_zero");
+    slotDef(S_SPR_set_ox, "Sprite", "ox=");
+    slotDef(S_SPR_set_oy, "Sprite", "oy=");
+    slotDef(S_SPR_set_viewport, "Sprite", "viewport=");
+    slotDef(S_SPR_opacity, "Sprite", "opacity");
+    slotDef(S_ARY_each, "Array", "each");
+    slotDef(S_ARY_delete_if, "Array", "delete_if");
+    slotDef(S_ARY_each_with_index, "Array", "each_with_index");
     /* alias names the wrappers call; "alias" is no class name, so replace/attr never pick them */
     slotDef(S_H_GE_update_symbol, "alias", "_update_with_symbol");
     slotDef(S_H_GE_update_mog, "alias", "mog_anti_lag_update");
@@ -1842,6 +2009,7 @@ static VALUE initRuby(VALUE) {
     rb_define_singleton_method(g_module, "stats", RUBY_METHOD_FUNC(nev_stats), 0);
     rb_define_singleton_method(g_module, "reset_stats", RUBY_METHOD_FUNC(nev_reset_stats), 0);
     rb_define_singleton_method(g_module, "set_option", RUBY_METHOD_FUNC(nev_set_option), 2);
+    rb_define_singleton_method(g_module, "known", RUBY_METHOD_FUNC(nev_known), 2);
     rb_define_singleton_method(g_module, "epoch", RUBY_METHOD_FUNC(nev_epoch), 0);
     rb_define_singleton_method(g_module, "checks", RUBY_METHOD_FUNC(nev_checks), 0);
     rb_define_singleton_method(g_module, "cbench", RUBY_METHOD_FUNC(nev_cbench), 3);
@@ -1850,7 +2018,7 @@ static VALUE initRuby(VALUE) {
     VALUE sprite = rb_path2class("Sprite");
     for (int id : {S_SPR_update, S_SPR_x, S_SPR_y, S_SPR_set_x, S_SPR_set_y, S_SPR_set_z,
                    S_SPR_set_opacity, S_SPR_set_blend_type, S_SPR_set_bush_depth, S_SPR_set_visible,
-                   S_SPR_src_rect, S_SPR_visible})
+                   S_SPR_src_rect, S_SPR_visible, S_SPR_set_ox, S_SPR_set_oy, S_SPR_set_viewport, S_SPR_opacity})
         engineSlot(id, sprite);
     engineSlot(S_RECT_set, rb_path2class("Rect"));
     g_graphics = rb_path2class("Graphics");
@@ -1862,7 +2030,8 @@ static VALUE initRuby(VALUE) {
     struct { int id; VALUE klass; } builtins[] = {
         {S_ARY_clear, rb_cArray}, {S_STR_eq, rb_cString}, {S_STR_neq, rb_cString}, {S_ARY_aref, rb_cArray},
         {S_INT_zero, rb_cInteger}, {S_INT_truncate, rb_cInteger}, {S_FLO_truncate, rb_cFloat},
-        {S_INT_between, rb_cInteger}, {S_OBJ_is_a, rb_cObject}};
+        {S_INT_between, rb_cInteger}, {S_OBJ_is_a, rb_cObject}, {S_ARY_each, rb_cArray},
+        {S_ARY_delete_if, rb_cArray}, {S_ARY_each_with_index, rb_cArray}};
     for (auto &b : builtins) {
         Slot &s = g_slots[b.id];
         /* The method that class has now (String#!= is BasicObject#!=, which calls ==;

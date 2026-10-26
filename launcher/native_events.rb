@@ -47,7 +47,7 @@ module HardRPGNative
           else
             body << norm_line(line)
           end
-        elsif line =~ /\Aclass (\w+)/ then cls = $1
+        elsif line =~ /\A(?:class|module) (\w+)/ then cls = $1
         elsif line =~ /\Aend\b/ then cls = nil
         elsif cls && line =~ /\A( {1,2}|\t)def ([\w?!=]+|\[\]=?)/
           ind = $1; cur = $2; start = ln; body = [norm_line(line)]
@@ -131,7 +131,89 @@ module HardRPGNative
     "Game_Event#anti_lag_event_on_screen:1273155533:3668997825:349" => "mog",
     "Sprite_Character#check_can_update_sprite:3303875333:3608359256:132" => "mog",
     "Sprite_Character#update:3284189310:3276223833:143" => "mog",
+    # CanariAlternate Multilayer (natives, and the methods they check are still these)
+    "Sprite_Character#update_junction_sprite:2466122098:705765156:4402" => "ml",
+    "Sprite_Character#reset_sprite_origin:3137694480:825365155:55" => "ml",
+    "Sprite_Character#dispose_junction_sprites:2128924900:1886407892:205" => "ml",
+    "Sprite_Character#multi_viewport:3405174318:3420395489:60" => "ml",
+    "Sprite_Character#valid_x?:3170161718:3100512405:52" => "known",
+    "Sprite_Character#valid_y?:541466540:3386577138:53" => "known",
+    "Game_Map#floor_xy:969204233:977108497:383" => "known",
+    "Game_Map#round_x:3717177633:1181881102:57" => "known",
+    "Game_Map#round_y:2321096418:1017254612:57" => "known",
+    # star aura effect (星潟)
+    "Sprite#star_aura_effects_update:2583269496:1939184202:2488" => "aura",
+    "StarAuraEffect#update_aura_effect:65509816:2849013802:1804" => "known",
+    "StarAuraEffect#aura_effect_data:140744705:4159050543:51" => "known",
+    "StarAuraEffect#aura_effect_data_delete_opacity_zero:4197886861:4049481205:119" => "known",
   }.freeze
+
+  # Star aura effect (星潟): the part of Sprite#star_aura_effects_update after the effect keys are
+  # updated, the same text. The native runs it unless the sprite has no aura at all.
+  AURA_TAIL = <<~'RUBY'.freeze
+    def __nev_aura_tail(aura_target)
+        if self.visible && self.opacity > 0
+          aura_bitmap_type = nil
+          aura_bitmap_name = nil
+          aura_bitmap_hue = nil
+          aura_bitmap_src_rect = nil
+          @star_aura_effect_keys.each {|i|
+          if @star_aura_effects[i]
+            @star_aura_effects[i] += 1
+            @star_aura_effects[i] = 0 if @star_aura_effects[i] >= StarAuraEffect::P[i][:end]
+          else
+            @star_aura_effects[i] = 0
+          end
+          a = StarAuraEffect::P[i][:pattern][@star_aura_effects[i]]
+          if a
+            if !aura_bitmap_type
+              if self.is_a?(Sprite_Battler)
+                aura_bitmap_type = :b
+                aura_bitmap_name = aura_target.battler_name
+                aura_bitmap_hue  = aura_target.battler_hue
+                aura_bitmap_src_rect = self.src_rect
+              elsif self.is_a?(Sprite_Character)
+                aura_bitmap_type = :c
+                aura_bitmap_name = aura_target.character_name
+                aura_bitmap_hue  = 0
+                aura_bitmap_src_rect = self.src_rect
+              elsif self.is_a?(Sprite_Picture)
+                aura_bitmap_type = :p
+                aura_bitmap_name = aura_target.name
+                aura_bitmap_hue  = 0
+                aura_bitmap_src_rect = self.src_rect
+              end
+            end
+            if aura_bitmap_type != :c or aura_target.near_the_screen_for_aura?
+              if !aura_bitmap_name.empty?
+                a.each {|type|
+                effect_hash = aura_target.aura_effect_data_create(
+                type,self.zoom_x,self.zoom_y,self.ox,self.oy,
+                self.opacity,self.mirror,self.angle,
+                aura_bitmap_type,aura_bitmap_name,
+                aura_bitmap_hue,aura_bitmap_src_rect)
+                if effect_hash
+                  if aura_bitmap_type == :b && aura_target.actor?
+                    $game_party.aura_effect_actor_ids_add(aura_target.id)
+                  end
+                  aura_target.aura_effect_data_add(effect_hash)
+                end}
+              end
+            end
+          end}
+        end
+      aura_target.update_aura_effect(self)
+      aura_target.aura_effect_data.each_with_index {|effect_hash,i|
+      @star_aura_effect_sprites[i] ||= Sprite_StarAuraEffect.new(self,effect_hash)
+      @star_aura_effect_sprites[i].update_by_effect_hash(effect_hash)
+      }
+      aura_target.aura_effect_data_delete_opacity_zero
+      @star_aura_effect_sprites.delete_if {|s| 
+      s.dispose if s.opacity == 0
+      s.disposed?}
+    end
+    private :__nev_aura_tail
+  RUBY
 
   # Wrapper variants: "Class#method/variant" => the alias the wrapper calls. The native wrapper
   # calls the native that alias points to, so the alias must be a native (C) method of that name.
@@ -146,11 +228,13 @@ module HardRPGNative
   }.freeze
 
   CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Map Game_Variables Sprite_Base Sprite_Character
-               Spriteset_Map].freeze
+               Spriteset_Map Sprite StarAuraEffect].freeze
   ATTRS = { 'Game_CharacterBase' => %i[tile_id character_name character_index pattern direction opacity blend_type
-                                       bush_depth transparent animation_id balloon_id],
+                                       bush_depth transparent animation_id balloon_id current_floor],
             'Game_Map' => %i[display_x display_y],
             'Game_Event' => %i[can_update],
+            'Game_Character' => %i[star_aura_effect_update],
+            'Game_Temp' => %i[multi_viewport_accessor],
             'Game_System' => %i[anti_lag] }.freeze
   @swapped = []
   @kept = []
@@ -165,13 +249,13 @@ module HardRPGNative
 
     def section_loaded(fname, src)
       return if $hardrpg_native_events == false
-      return unless (CLASSES + ATTRS.keys).any? { |c| src.include?("class #{c}") }
+      return unless (CLASSES + ATTRS.keys).any? { |c| src.include?("class #{c}") || src.include?("module #{c}") }
       Norm.methods(src).each do |key, (text, line)|
         cname, name = key.split('#', 2)
         next unless CLASSES.include?(cname)
         variant = STOCK["#{key}:#{Zlib.crc32(text)}:#{Zlib.adler32(text)}:#{text.bytesize}"]
         klass = Object.const_defined?(cname) ? Object.const_get(cname) : nil
-        next unless klass.is_a?(Class)
+        next unless klass.is_a?(Module)
         um = (klass.instance_method(name) rescue nil)
         # The section must be what defined the method now in place, at that line.
         defined_here = um && um.owner.equal?(klass) && um.source_location == [fname.to_s, line]
@@ -182,7 +266,13 @@ module HardRPGNative
           variant = nil unless am && am.source_location.nil? && am.original_name == name.to_sym
           variant = nil if variant == 'sp1' && (@variant_of ||= {})[key] != 'jp'
         end
+        if variant == 'known'
+          # A script method the natives check is still in place (they never replace it).
+          known(klass, name.to_sym) if defined_here
+          next
+        end
         if variant && defined_here && klass.public_method_defined?(name, false)
+          klass.class_eval(AURA_TAIL, __FILE__, __LINE__) if variant == 'aura'
           if replace(klass, name.to_sym, variant)
             @swapped << key
             (@variant_of ||= {})[key] = variant
