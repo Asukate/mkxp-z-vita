@@ -1,4 +1,6 @@
 #include "asset_prefetch.h"
+
+#include <new>
 #include "filesystem/filesystem.h"
 
 #include <SDL_image.h>
@@ -77,6 +79,8 @@ struct State {
   };
   std::list<Kept> kept;
   size_t keptBytes = 0;
+  // Set by releaseMemory: nothing more is prepared or kept this session.
+  bool released = false;
 };
 
 size_t bytesOf(const SDL_Surface *s) { return size_t(s->h) * s->pitch; }
@@ -158,7 +162,12 @@ struct SoundHandler : FileSystem::OpenHandler {
     }
     uint32_t bytes = Sound_DecodeAll(sample);
     if (bytes && sample->buffer) {
-      out->pcm.assign(static_cast<uint8_t *>(sample->buffer), static_cast<uint8_t *>(sample->buffer) + bytes);
+      try {
+        out->pcm.assign(static_cast<uint8_t *>(sample->buffer), static_cast<uint8_t *>(sample->buffer) + bytes);
+      } catch (const std::bad_alloc &) {
+        Sound_FreeSample(sample); // the heap is full: give the decoded sound back
+        throw;
+      }
       out->format = sample->actual.format;
       out->channels = sample->actual.channels;
       out->rate = sample->actual.rate;
@@ -268,7 +277,7 @@ int runPlan(State &s) {
       // Wait while too much prepared data is waiting to be taken.
       while (!s.stopping && (e.kind == 'I' ? s.imageBytes >= imageBudget : s.soundBytes >= soundBudget))
         SDL_CondWait(s.changed, s.lock);
-      if (s.stopping)
+      if (s.stopping || s.released)
         break;
       if (s.seen.count(k) || s.images.count(k) || s.sounds.count(k))
         continue; // the game got there first
@@ -298,7 +307,7 @@ int runPlan(State &s) {
     }
     Lock hold(s.lock);
     s.busy.clear();
-    if (ok && !s.stopping && !s.seen.count(k)) {
+    if (ok && !s.stopping && !s.released && !s.seen.count(k)) {
       if (e.kind == 'I') {
         s.imageBytes += size_t(surface->w) * surface->h * 4;
         s.images[k] = {surface, e.ms};
@@ -461,10 +470,40 @@ bool takeSound(const std::string &name, Sound &out) {
 void keepImage(const std::string &name, SDL_Surface *surface, double ms) {
   if (!state || ms < keepMs || !surface || surface->format->format != SDL_PIXELFORMAT_ABGR8888)
     return;
+  {
+    Lock hold(state->lock);
+    if (state->released)
+      return;
+  }
   if (SDL_Surface *copy = copyOf(surface)) {
     Lock hold(state->lock);
-    keepLocked(*state, key(name), copy, ms);
+    if (state->released)
+      SDL_FreeSurface(copy);
+    else
+      keepLocked(*state, key(name), copy, ms);
   }
+}
+
+void releaseMemory() {
+  if (!state)
+    return;
+  {
+    Lock hold(state->lock);
+    if (state->released)
+      return;
+    state->released = true;
+    for (auto &i : state->images)
+      SDL_FreeSurface(i.second.surface);
+    state->images.clear();
+    state->imageBytes = 0;
+    state->sounds.clear();
+    state->soundBytes = 0;
+    for (auto &i : state->kept)
+      SDL_FreeSurface(i.surface);
+    state->kept.clear();
+    state->keptBytes = 0;
+  }
+  SDL_CondBroadcast(state->changed);
 }
 
 void noteImage(const std::string &name, double ms) {

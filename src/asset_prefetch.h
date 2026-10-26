@@ -45,6 +45,9 @@ void keepImage(const std::string &name, SDL_Surface *surface, double ms);
 void noteImage(const std::string &name, double ms);
 void noteSound(const std::string &name, double ms);
 
+// Memory is short: free everything prepared or kept (it can all be loaded
+// again) and prepare nothing more this session. Any thread.
+void releaseMemory();
 // Loads under this cost are not worth preparing.
 constexpr double worthMs = 15.0;
 } // namespace AssetPrefetch
