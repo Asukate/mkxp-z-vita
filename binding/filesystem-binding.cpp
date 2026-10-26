@@ -162,7 +162,17 @@ RB_METHOD(fileIntPos) {
 }
 #endif
 
+/* A big data file, such as an RPG Maker map with hundreds of events, turns
+ * into a million or more Ruby objects (Hylics map 28 is 7.5 MB on disk and
+ * about 50 MB in memory). When it is loaded, the map loaded before it is
+ * usually garbage already, but Ruby has not collected it yet and grows the
+ * heap for the new objects first. On the Vita's fixed heap the two maps do
+ * not fit together, so collect before loading. */
+static const Sint64 kLoadDataCollectBytes = 1024 * 1024;
+
 static VALUE fileIntLoad(VALUE port) {
+    if (getPrivateData<DataStream>(port)->remaining() >= kLoadDataCollectBytes)
+        rb_gc_start();
     VALUE marsh = rb_const_get(rb_cObject, rb_intern("Marshal"));
     VALUE data = fileIntRead(0, nullptr, port);
     return rb_funcall2(marsh, rb_intern("load"), 1, &data);

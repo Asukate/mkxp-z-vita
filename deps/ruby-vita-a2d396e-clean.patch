@@ -413,6 +413,177 @@ index b8969e6..df52412 100644
 +#endif
  #endif
      "";
+diff --git a/marshal.c b/marshal.c
+index c5327fc..32ab1cc 100644
+--- a/marshal.c
++++ b/marshal.c
+@@ -1154,6 +1154,27 @@ rb_marshal_dump_limited(VALUE obj, VALUE port, int limit)
+     return port;
+ }
+ 
++/*
++ * Index -> object table for links while loading. Upstream keeps it in an
++ * st_table, which for a large file (one RPG Maker map can hold over a
++ * million objects) grows into two blocks of tens of MB that must each be
++ * contiguous, plus the old blocks while it rehashes. On a small heap that
++ * has been fragmented by an earlier load, those blocks are not found and
++ * the load fails with NoMemoryError although plenty of memory is free.
++ * The indexes are dense (0, 1, 2, ...), so a plain array split into
++ * fixed-size chunks holds them in a quarter of the space, without any
++ * large allocation.
++ */
++#define LOAD_DATA_CHUNK_BITS 12
++#define LOAD_DATA_CHUNK_LEN (1L << LOAD_DATA_CHUNK_BITS)
++#define LOAD_DATA_CHUNK_MASK (LOAD_DATA_CHUNK_LEN - 1)
++
++struct load_data_table {
++    VALUE **chunks;
++    long chunk_capa;
++    long num_entries;
++};
++
+ struct load_arg {
+     VALUE src;
+     char *buf;
+@@ -1161,13 +1182,68 @@ struct load_arg {
+     long readable;
+     long offset;
+     st_table *symbols;
+-    st_table *data;
++    struct load_data_table data;
+     st_table *partial_objects;
+     VALUE proc;
+     st_table *compat_tbl;
+     bool freeze;
+ };
+ 
++static void
++load_data_store(struct load_data_table *t, long idx, VALUE v)
++{
++    while (idx >= t->num_entries) {
++        long n = t->num_entries;
++        long chunk = n >> LOAD_DATA_CHUNK_BITS;
++        long i;
++
++        if ((n & LOAD_DATA_CHUNK_MASK) == 0) {
++            if (chunk >= t->chunk_capa) {
++                long capa = t->chunk_capa ? t->chunk_capa * 2 : 16;
++                t->chunks = REALLOC_N(t->chunks, VALUE *, capa);
++                for (i = t->chunk_capa; i < capa; i++) t->chunks[i] = 0;
++                t->chunk_capa = capa;
++            }
++            if (!t->chunks[chunk]) {
++                t->chunks[chunk] = ALLOC_N(VALUE, LOAD_DATA_CHUNK_LEN);
++            }
++        }
++        t->chunks[chunk][n & LOAD_DATA_CHUNK_MASK] = Qundef;
++        t->num_entries = n + 1;
++    }
++    t->chunks[idx >> LOAD_DATA_CHUNK_BITS][idx & LOAD_DATA_CHUNK_MASK] = v;
++}
++
++static int
++load_data_lookup(const struct load_data_table *t, long idx, VALUE *v)
++{
++    if (idx < 0 || idx >= t->num_entries) return 0;
++    *v = t->chunks[idx >> LOAD_DATA_CHUNK_BITS][idx & LOAD_DATA_CHUNK_MASK];
++    return 1;
++}
++
++static void
++load_data_mark(const struct load_data_table *t)
++{
++    long i;
++    for (i = 0; i < t->num_entries; i++) {
++        rb_gc_mark(t->chunks[i >> LOAD_DATA_CHUNK_BITS][i & LOAD_DATA_CHUNK_MASK]);
++    }
++}
++
++static void
++load_data_free(struct load_data_table *t)
++{
++    long i;
++    for (i = 0; i < t->chunk_capa; i++) {
++        if (t->chunks[i]) xfree(t->chunks[i]);
++    }
++    if (t->chunks) xfree(t->chunks);
++    t->chunks = 0;
++    t->chunk_capa = 0;
++    t->num_entries = 0;
++}
++
+ static VALUE
+ check_load_arg(VALUE ret, struct load_arg *arg, const char *name)
+ {
+@@ -1189,7 +1265,7 @@ mark_load_arg(void *ptr)
+     if (!p->symbols)
+         return;
+     rb_mark_tbl(p->symbols);
+-    rb_mark_tbl(p->data);
++    load_data_mark(&p->data);
+     rb_mark_tbl(p->partial_objects);
+     rb_mark_hash(p->compat_tbl);
+ }
+@@ -1213,7 +1289,7 @@ static const rb_data_type_t load_arg_data = {
+     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+ };
+ 
+-#define r_entry(v, arg) r_entry0((v), (arg)->data->num_entries, (arg))
++#define r_entry(v, arg) r_entry0((v), (arg)->data.num_entries, (arg))
+ static VALUE r_object(struct load_arg *arg);
+ static VALUE r_symbol(struct load_arg *arg);
+ 
+@@ -1227,9 +1303,9 @@ too_short(void)
+ static st_index_t
+ r_prepare(struct load_arg *arg)
+ {
+-    st_index_t idx = arg->data->num_entries;
++    st_index_t idx = arg->data.num_entries;
+ 
+-    st_insert(arg->data, (st_data_t)idx, (st_data_t)Qundef);
++    load_data_store(&arg->data, (long)idx, Qundef);
+     return idx;
+ }
+ 
+@@ -1543,7 +1619,7 @@ r_entry0(VALUE v, st_index_t num, struct load_arg *arg)
+         /* real_obj is kept if not found */
+         st_lookup(arg->compat_tbl, v, &real_obj);
+     }
+-    st_insert(arg->data, num, real_obj);
++    load_data_store(&arg->data, (long)num, (VALUE)real_obj);
+     st_insert(arg->partial_objects, (st_data_t)real_obj, Qtrue);
+     return v;
+ }
+@@ -1740,10 +1816,9 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+     switch (type) {
+       case TYPE_LINK:
+ 	id = r_long(arg);
+-	if (!st_lookup(arg->data, (st_data_t)id, &link)) {
++	if (!load_data_lookup(&arg->data, id, &v)) {
+ 	    rb_raise(rb_eArgError, "dump format error (unlinked)");
+ 	}
+-	v = (VALUE)link;
+ 	if (!st_lookup(arg->partial_objects, (st_data_t)v, &link)) {
+ 	    v = r_post_proc(v, arg);
+ 	}
+@@ -2194,8 +2269,7 @@ clear_load_arg(struct load_arg *arg)
+     if (!arg->symbols) return;
+     st_free_table(arg->symbols);
+     arg->symbols = 0;
+-    st_free_table(arg->data);
+-    arg->data = 0;
++    load_data_free(&arg->data);
+     st_free_table(arg->partial_objects);
+     arg->partial_objects = 0;
+     if (arg->compat_tbl) {
+@@ -2226,7 +2300,6 @@ rb_marshal_load_with_proc(VALUE port, VALUE proc, bool freeze)
+     arg->src = port;
+     arg->offset = 0;
+     arg->symbols = st_init_numtable();
+-    arg->data    = rb_init_identtable();
+     arg->partial_objects = rb_init_identtable();
+     arg->compat_tbl = 0;
+     arg->proc = 0;
 diff --git a/ruby.c b/ruby.c
 index f63cecd..5b8fd73 100644
 --- a/ruby.c
