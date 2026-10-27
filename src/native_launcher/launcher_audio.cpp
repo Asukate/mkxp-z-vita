@@ -301,6 +301,7 @@ std::unique_ptr<Decoder> decoderFor(const std::string &ext, std::unique_ptr<Inpu
 struct Stream {
   std::unique_ptr<Decoder> decoder;
   std::vector<int16_t> buffer; // stereo frames
+  std::vector<int16_t> raw;    // one decoder read
   double at = 0, step = 1;
   bool looping = false, ended = false;
   float volume = 1;
@@ -313,9 +314,10 @@ struct Stream {
       buffer.erase(buffer.begin(), buffer.begin() + std::ptrdiff_t(std::min(drop * 2, buffer.size())));
       at -= double(drop);
     }
-    int16_t raw[2048 * 2];
+    // On the heap: the mixer thread's stack is small (64 KiB on the Vita).
+    raw.resize(2048 * 2);
     for (int attempt = 0; attempt < 2; ++attempt) {
-      long n = decoder->read(raw, 2048);
+      long n = decoder->read(raw.data(), 2048);
       if (n > 0) {
         for (long i = 0; i < n; ++i) {
           int16_t l = raw[i * decoder->channels];
@@ -434,8 +436,11 @@ struct LauncherAudio::Impl {
   // the handover of a new track; the music itself is decoded outside it, so a
   // slow decode (a track starting, a stream read from the card) never holds
   // up the screen thread, which takes the lock for every button sound.
+  // The mixer's working blocks, kept here rather than on its small stack.
+  int32_t sum[blockFrames * 2], part[blockFrames * 2];
+  int16_t block[blockFrames * 2];
   void mix(int16_t *out, int frames) {
-    int32_t sum[blockFrames * 2] = {};
+    std::fill(sum, sum + blockFrames * 2, 0);
     Stream *current = nullptr;
     float level = 0, from = 0, to = 0;
     {
@@ -470,7 +475,7 @@ struct LauncherAudio::Impl {
     }
     if (current) {
       // Only this thread replaces or releases `music`, so it stays valid here.
-      int32_t part[blockFrames * 2] = {};
+      std::fill(part, part + blockFrames * 2, 0);
       current->mix(part, frames, 1.0f);
       for (int i = 0; i < frames; ++i) {
         float g = (from + (to - from) * float(i) / float(frames)) * level;
@@ -489,7 +494,6 @@ struct LauncherAudio::Impl {
   }
 
   void mixLoop() {
-    int16_t block[blockFrames * 2];
     while (!quit) {
       mix(block, blockFrames);
 #ifdef __vita__
@@ -662,11 +666,10 @@ struct LauncherAudio::Impl {
       auto s = openStream(std::make_shared<const std::string>(readWhole(folder + "/" + soundName(Sound(i)) + ".ogg")), ".ogg");
       if (!s)
         continue;
-      int32_t block[blockFrames * 2];
       for (int guard = 0; guard < 2000 && !s->ended; ++guard) {
-        std::fill(block, block + blockFrames * 2, 0);
-        s->mix(block, blockFrames, 1.0f);
-        for (auto v : block)
+        std::fill(sum, sum + blockFrames * 2, 0);
+        s->mix(sum, blockFrames, 1.0f);
+        for (auto v : sum)
           effects[i].push_back(int16_t(std::max(-32768, std::min(32767, v))));
       }
       any = true;
@@ -693,7 +696,9 @@ bool LauncherAudio::start(const std::string &folder) {
   }
   Impl *self = impl.get();
   // The mixer runs on core 1, above the interface; the loader on core 2.
-  impl->mixer = sceKernelCreateThread("hardrpg_audio_mix", Impl::mixerEntry, 64, 64 * 1024, 0,
+  // The mixer's stack has room for the deepest decoder (Vorbis, MP3) with
+  // a wide margin: its working blocks live in Impl.
+  impl->mixer = sceKernelCreateThread("hardrpg_audio_mix", Impl::mixerEntry, 64, 128 * 1024, 0,
                                       SCE_KERNEL_CPU_MASK_USER_1, nullptr);
   // Below the interface and the art loader: finding tracks can wait.
   impl->loader = sceKernelCreateThread("hardrpg_audio_load", Impl::loaderEntry, 0x10000100 + 20, 256 * 1024, 0,
