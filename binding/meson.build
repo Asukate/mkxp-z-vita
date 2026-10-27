@@ -34,7 +34,8 @@ binding_source = [files(
     'windowvx-binding.cpp',
     'tilemapvx-binding.cpp',
     'http-binding.cpp',
-    'native-events.cpp'
+    'native-events.cpp',
+    'hardrpg-prof.cpp'
 )]
 
 if miniffi == true

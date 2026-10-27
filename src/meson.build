@@ -172,6 +172,7 @@ main_source = files(
 if host_system == 'vita'
     main_source += files('vita_stubs.cpp', 'vita_posix_compat.c', 'vita_pthread_once.c', 'vita_livearea.cpp', 'input/vita_input.cpp', 'vita_error_report.cpp', 'vita_resume.cpp', 'vita_runtime_log.c', 'asset_prefetch.cpp')
     global_link_args += '-Wl,--wrap=_write_r'
+    global_link_args += '-Wl,--wrap=select'
     if get_option('proto_launcher')
         main_source += files('vita_proto_launcher.cpp')
         global_args += '-DMKXPZ_PROTO_LAUNCHER'

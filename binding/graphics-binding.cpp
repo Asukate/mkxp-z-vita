@@ -1086,8 +1086,17 @@ static inline void s42lBindingMark(const char *) {}
 void vitaTapToWalkTick();
 #endif
 
+/* HardRPGProf: samples asked for during a frame call count as frame time. */
+#include <atomic>
+extern std::atomic<int> g_profInFrame;
+struct ProfFrameScope {
+    ProfFrameScope() { g_profInFrame.fetch_add(1, std::memory_order_relaxed); }
+    ~ProfFrameScope() { g_profInFrame.fetch_sub(1, std::memory_order_relaxed); }
+};
+
 RB_METHOD_GUARD(graphicsUpdate)
 {
+    ProfFrameScope profFrame_;
     vitaGpuPressureSafePoint("graphics_update");
 #ifdef __vita__
     vitaTapToWalkTick();
@@ -1196,6 +1205,7 @@ typedef struct {
 
 RB_METHOD_GUARD(graphicsTransition)
 {
+    ProfFrameScope profFrame_;
     RB_UNUSED_PARAM;
     
     int duration = 8;
@@ -1315,6 +1325,7 @@ RB_METHOD(graphicsDisplayHeight)
 
 RB_METHOD_GUARD(graphicsWait)
 {
+    ProfFrameScope profFrame_;
     RB_UNUSED_PARAM;
     
     int duration;
@@ -1333,6 +1344,7 @@ RB_METHOD_GUARD_END
 
 RB_METHOD_GUARD(graphicsFadeout)
 {
+    ProfFrameScope profFrame_;
     RB_UNUSED_PARAM;
     
     int duration;
@@ -1353,6 +1365,7 @@ RB_METHOD_GUARD_END
 
 RB_METHOD_GUARD(graphicsFadein)
 {
+    ProfFrameScope profFrame_;
     RB_UNUSED_PARAM;
     
     int duration;

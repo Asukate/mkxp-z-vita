@@ -181,3 +181,39 @@ int execv(const char *path, char *const argv[])
     errno = ENOSYS;
     return -1;
 }
+
+/* select() on the Vita: newlib's version uses the SceNet epoll calls for every fd, and the
+ * game never loads SceNet, so any select() with an fd jumps to address 0. Ruby calls it on
+ * a file when a flush or read is cut short by a pending interrupt (another Ruby thread, a
+ * signal, a profiler sample) and it waits for the file to become ready. Files and ttys are
+ * always ready, so answer for them here; sockets still go to newlib. */
+#include <sys/select.h>
+#include <sys/stat.h>
+
+int __real_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
+                  struct timeval *timeout);
+
+int __wrap_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
+                  struct timeval *timeout)
+{
+    int ready = 0;
+    for (int fd = 0; fd < nfds; ++fd) {
+        int inR = readfds && FD_ISSET(fd, readfds);
+        int inW = writefds && FD_ISSET(fd, writefds);
+        int inE = exceptfds && FD_ISSET(fd, exceptfds);
+        if (!inR && !inW && !inE)
+            continue;
+        struct stat st;
+        if (fstat(fd, &st) != 0 || S_ISSOCK(st.st_mode))
+            return __real_select(nfds, readfds, writefds, exceptfds, timeout);
+    }
+    for (int fd = 0; fd < nfds; ++fd) {
+        if (readfds && FD_ISSET(fd, readfds))
+            ready++;
+        if (writefds && FD_ISSET(fd, writefds))
+            ready++;
+        if (exceptfds && FD_ISSET(fd, exceptfds))
+            FD_CLR(fd, exceptfds);
+    }
+    return ready;
+}
