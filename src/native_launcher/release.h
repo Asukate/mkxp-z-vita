@@ -1,12 +1,23 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.4.0 Alpha"
-#define HARDRPG_VERSION_TAG "v0.4.0-alpha"
-#define HARDRPG_APP_VER "00.40"
-#define HARDRPG_RELEASE_UTC "2026-10-23"
+#define HARDRPG_VERSION "0.4.5 Alpha"
+#define HARDRPG_VERSION_TAG "v0.4.5-alpha"
+#define HARDRPG_APP_VER "00.45"
+#define HARDRPG_RELEASE_UTC "2026-10-27"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.4.0 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.4.5 Alpha - " HARDRPG_RELEASE_UTC,
+    "- Crash rescue: resume where the game stopped",
+    "- BLACK SOULS II long sessions: no out of memory (#4)",
+    "- Hylics Crystal Beach no longer runs out of memory",
+    "- Faster VX Ace maps with default and popular scripts",
+    "- Large maps load faster",
+    "- List view; choose the view the library opens in",
+    "- The library opens at once from the last saved list",
+    "- MV/MZ games listed as coming soon",
+    "- Fixed rare launcher and file-write crashes",
+    "",
+    "0.4.0 Alpha - 2026-10-23",
     "- New library: covers, details, screenshots, search",
     "- Game info downloaded automatically",
     "- Each game's title music in the library",

@@ -38,6 +38,7 @@ loaded = Marshal.load(Marshal.dump([first, rows, shared]))
 check('first back-link') { loaded[1].each_with_index.all? { |c, i| i % 3 == 0 || c.parameters[2].equal?(loaded[0]) } }
 check('shared array') { loaded[1].each_with_index.all? { |c, i| i % 3 != 0 || c.parameters.equal?(loaded[0].parameters) } }
 check('shared string') { loaded[1][1].parameters[1].equal?(loaded[2]) && loaded[2] == shared }
+check('binary string') { s = '618b80d52574b77700347504a54315b37b93acdc0aff0d0500a730b712c632be'.b; Marshal.load(Marshal.dump(s)) == s }
 check('values') { loaded[1][19_999].code == 19_999 % 400 && loaded[1][19_999].parameters[3] == '19999' }
 
 # Cycles, user-defined dump formats, and compat loaders (Rational, Complex).

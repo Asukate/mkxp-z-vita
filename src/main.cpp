@@ -74,6 +74,10 @@ extern "C" int vglInitWithCustomThreshold(int pool_size, int width, int height,
                                           int cdram_threshold,
                                           int phycont_threshold,
                                           int cdlg_threshold, int msaa);
+#ifndef HARDRPG_BUILD_ID
+#define HARDRPG_BUILD_ID "08884db322143124a22eda178283158201f47bdc1bb101e01c8c9af7ee762f1b"
+#endif
+extern "C" __attribute__((used)) const char hardrpg_build_id[] = HARDRPG_BUILD_ID;
 #endif
 
 #if defined(__WIN32__)
