@@ -31,6 +31,7 @@ public:
     float alpha = 1, bright = 1, radius = 0;
     std::array<int, 3> color{{0, 0, 0}};
     int clipTop = 0, clipBottom = height; // rows outside are not drawn
+    int clipLeft = 0, clipRight = width;  // and columns
   };
   std::vector<Quad> scene;
   // The in-game performance overlay: a small rounded panel with a headline
@@ -49,6 +50,8 @@ public:
   bool coversToMake = false; // generated covers still to draw, one a frame
   // Ends a running crossfade at once (snapshots and tests).
   void settle() { fading = false; }
+  // Whether the picture loader is running (the list view stops it).
+  bool artLoaderActive() const { return bool(loader); }
 
 private:
   using Color = std::array<int, 3>;
@@ -139,6 +142,27 @@ private:
   std::map<std::string, Layer> welcomeCache;
   std::map<std::string, int> welcomeExtra; // where a slide's moving part sits
   void homePanels(const UI &, const std::vector<size_t> &list);
+  // The list view: each game's name as a small layer, made when its row is
+  // first shown and forgotten once many rows have scrolled away.
+  struct ListRow {
+    Layer layer;
+    uint64_t used = 0;
+    bool cut = false; // the name did not fit and ends in "..."
+  };
+  // The selected row's name, when cut, slides along to show the rest: the
+  // whole name as one layer, and when that row was selected.
+  Layer marqueeLayer;
+  std::string marqueeId;
+  std::chrono::steady_clock::time_point marqueeStart;
+  bool marqueeMoving = false;
+  uint64_t marqueeFrame = 0; // the last frame that showed it
+  std::map<std::string, ListRow> listNames;
+  Layer listAddLayer, listTagLayers[formatMZ + 1];
+  void buildList(const UI &, const std::vector<size_t> &list, int target);
+  template <class AddQuad>
+  bool marquee(const std::string &id, const std::string &name, int maxW, int x, double y, int h, AddQuad &&quad);
+  // Forgets every picture and stops the picture loader (the list view).
+  void dropArt();
   void homeHints(const UI &, const std::vector<size_t> &list);
   struct Glyph {
     int left, top, advance, width, height;

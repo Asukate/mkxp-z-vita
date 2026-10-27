@@ -346,10 +346,11 @@ class NativeLauncher(unittest.TestCase):
         state=self.ui('up,left,left,left,cross,down,down,down,right')
         self.assertTrue(state['homeGrid'])
         self.assertEqual(state['homeTarget'],11)
-        # The view is kept between starts, so tapping the button now goes back.
-        self.assertFalse(self.ui('touch:39:91')['homeGrid'])
-        self.assertTrue(self.ui('touch:39:91')['homeGrid'])
-        self.assertFalse(self.ui('touch:39:91')['homeGrid'])
+        # The view is kept between starts; the button goes on to the list,
+        # then back to the carousel.
+        self.assertEqual(self.ui('touch:39:91')['homeView'], 2)
+        self.assertEqual(self.ui('touch:39:91')['homeView'], 0)
+        self.assertEqual(self.ui('touch:39:91')['homeView'], 1)
         # Filter panel: favourites only, with no favourites, shows nothing.
         state=self.ui('up,cross,down,down,down,down,cross')
         self.assertEqual(state['homePanel'],1)
@@ -401,7 +402,7 @@ class NativeLauncher(unittest.TestCase):
     def test_language_setting_switches_at_once_and_is_kept(self):
         self.game(self.games/'Ace', 3, 'Ace')
         prefs = self.root/'launcher-preferences.json'
-        language = SETTINGS+',down'*7    # Settings: Language is row 7
+        language = SETTINGS+',down'*8    # Settings: Language is row 8
         self.assertEqual(self.ui(language)['language'], 'en')
         # Right (or Cross) moves to the next language and saves it at once.
         state = self.ui(language+',right')
@@ -471,6 +472,11 @@ class NativeLauncher(unittest.TestCase):
         self.assertIs(json.loads(prefs.read_text())['homeGrid'], True)
         self.assertEqual(guide('cross,cross,cross,left,cross')['welcomeSlide'], 4)
         self.assertFalse(json.loads(prefs.read_text())['homeGrid'])
+        # A second Right is the list; it stops there.
+        state = guide('cross,cross,cross,right,right,right')
+        self.assertEqual((state['welcomeSlide'], state['homeView']), (3, 2))
+        self.assertEqual(json.loads(prefs.read_text())['homeView'], 'list')
+        self.assertEqual(guide('cross,cross,cross,left,left')['homeView'], 0)
         # Down on the language slide switches the language at once.
         state = guide('down')
         self.assertEqual((state['language'], state['welcomeSlide']), ('es', 0))
@@ -484,11 +490,11 @@ class NativeLauncher(unittest.TestCase):
         self.assertIs(saved['welcomeSeen'], True)
         self.assertEqual(saved['language'], 'es')
         self.assertFalse(guide()['welcomeActive'])
-        # Settings, Welcome guide (row 8) shows it again; Start skips it.
-        state = guide(SETTINGS+',down'*8+',cross')
+        # Settings, Welcome guide (row 9) shows it again; Start skips it.
+        state = guide(SETTINGS+',down'*9+',cross')
         self.assertTrue(state['welcomeActive'])
         self.assertEqual(state['welcomeSlide'], 0)
-        state = guide(SETTINGS+',down'*8+',cross,start')
+        state = guide(SETTINGS+',down'*9+',cross,start')
         self.assertFalse(state['welcomeActive'])
         self.assertEqual(state['focus'], 1)   # back on Settings
         # Start on the first start skips it too, and that counts as seen.
@@ -506,14 +512,133 @@ class NativeLauncher(unittest.TestCase):
     def test_library_view_is_kept_between_starts(self):
         self.game(self.games/'Ace', 3, 'Ace')
         prefs = self.root/'launcher-preferences.json'
-        self.assertFalse(self.ui()['homeGrid'])
-        # The toolbar's first button switches the view; the next start keeps it.
+        self.assertEqual(self.ui()['homeView'], 0)
+        # The toolbar's first button switches the view: carousel, grid, list,
+        # and round again. The next start keeps the one used last.
         view = 'up,left,left,left,cross'
         self.assertTrue(self.ui(view)['homeGrid'])
         self.assertIs(json.loads(prefs.read_text())['homeGrid'], True)
         self.assertTrue(self.ui()['homeGrid'])
-        self.assertFalse(self.ui(view)['homeGrid'])
-        self.assertFalse(self.ui()['homeGrid'])
+        self.assertEqual(self.ui(view)['homeView'], 2)
+        self.assertEqual(json.loads(prefs.read_text())['homeView'], 'list')
+        self.assertEqual(self.ui()['homeView'], 2)
+        self.assertEqual(self.ui(view)['homeView'], 0)
+        self.assertEqual(self.ui()['homeView'], 0)
+        # 0.4.0 saved only "homeGrid".
+        prefs.write_text('{"homeGrid": true}')
+        self.assertEqual(self.ui()['homeView'], 1)
+
+    def test_settings_choose_the_view_the_library_opens_in(self):
+        self.game(self.games/'Ace', 3, 'Ace')
+        prefs = self.root/'launcher-preferences.json'
+        row = SETTINGS+',down'*7    # Settings: Library opens in is row 7
+        self.assertEqual(self.ui(row)['startView'], -1)   # last used
+        # Right (or Cross) steps: last used, carousel, grid, list. A view
+        # chosen here shows at once.
+        state = self.ui(row+',right,right,right')
+        self.assertEqual((state['startView'], state['homeView']), (2, 2))
+        self.assertEqual(json.loads(prefs.read_text())['homeStartView'], 'list')
+        # It opens in the list even after the toolbar switched away.
+        self.assertEqual(self.ui('up,left,left,left,cross')['homeView'], 0)
+        self.assertEqual(self.ui()['homeView'], 2)
+        # Left goes back (each start keeps the choice); the ends wrap round.
+        self.assertEqual(self.ui(row+',left')['startView'], 1)
+        self.assertEqual(self.ui(row+',left')['startView'], 0)
+        self.assertEqual(self.ui(row+',left')['startView'], -1)
+        self.assertEqual(json.loads(prefs.read_text())['homeStartView'], 'last')
+        self.assertEqual(self.ui(row+',left')['startView'], 2)
+        self.assertEqual(self.ui(row+',cross')['startView'], -1)
+        # Last used: the view shown last, the list chosen just above.
+        self.assertEqual(self.ui()['homeView'], 2)
+
+    def test_mv_and_mz_games_are_found_and_explained(self):
+        # MV for Windows keeps the game under www/; MZ (and MV for the web)
+        # keeps js/ at the top beside index.html.
+        mv = self.games/'Mv Game'
+        (mv/'www/js').mkdir(parents=True)
+        (mv/'www/js/rpg_core.js').write_text('//')
+        (mv/'www/index.html').write_text('<html>')
+        (mv/'package.json').write_text('{"name": "", "window": {"title": "Bunny Quest"}}')
+        mz = self.games/'MzGame'
+        (mz/'js').mkdir(parents=True)
+        (mz/'js/rmmz_core.js').write_text('//')
+        (mz/'index.html').write_text('<html>')
+        (mz/'package.json').write_text('{"name": "rmmz-game"}')
+        # A web folder without RPG Maker's core script is not a game.
+        other = self.games/'Website'
+        (other/'js').mkdir(parents=True)
+        (other/'js/app.js').write_text('//')
+        (other/'index.html').write_text('<html>')
+        self.zip(self.games/'Packed.zip', inner='')
+        with zipfile.ZipFile(self.games/'MvZip.zip', 'w') as z:
+            z.writestr('Wrapper/www/js/rpg_core.js', '//')
+            z.writestr('Wrapper/package.json', '{}')
+        self.game(self.games/'Ace', 3, 'Ace')
+        (self.root/'launcher-preferences.json').write_text('{"homeView": "list", "welcomeSeen": true}')
+        state = self.ui()
+        found = {e['name']: (e['kind'], e.get('format')) for e in state['homeEntries']}
+        self.assertEqual(found['Bunny Quest'], ('game', 5))
+        self.assertEqual(found['MzGame'], ('game', 6))   # no window title: the folder name
+        self.assertEqual(found['MvZip.zip'], ('zip', 5))
+        self.assertEqual(found['Website/'], ('folder', None))
+        # Cross says what it is instead of starting anything; so do its settings.
+        names = [e['name'] for e in state['homeEntries']]
+        state = self.ui('down,'*names.index('Bunny Quest') + 'cross')
+        self.assertFalse(state['launchRequested'])
+        self.assertEqual(state['launchingName'], '')
+        self.assertEqual(state['message'], 'RPG Maker MV game detected. HardRPG cannot run MV or MZ games yet: '
+                                           'support is coming in a future version.')
+        self.assertIn('MZ game detected', self.ui('down,'*names.index('MzGame') + 'cross')['message'])
+        self.assertIn('MV game detected', self.ui('down,'*names.index('MvZip.zip') + 'cross')['message'])
+        self.assertIn('MV game detected', self.ui('down,'*names.index('Bunny Quest') + GAME)['message'])
+        self.assertFalse(self.ui('down,'*names.index('Bunny Quest') + GAME)['gameOptions'])
+        # Every view draws them.
+        for view in ['list', 'carousel', 'grid']:
+            (self.root/'launcher-preferences.json').write_text('{"homeView": "%s", "welcomeSeen": true}' % view)
+            shot = self.storage/f'mv-{view}.png'
+            self.ui('', shot)
+            self.assertGreater(shot.stat().st_size, 10000)
+
+    def test_list_view(self):
+        for i in range(14): self.game(self.games/f'{i:02}',title=f'Game {i:02}')
+        (self.root/'launcher-preferences.json').write_text('{"homeView": "list", "welcomeSeen": true}')
+        state = self.ui()
+        self.assertEqual(state['homeView'], 2)
+        # No title music in the list, even with music on.
+        self.assertTrue(state['themeMusic'])
+        self.assertEqual(state['themeFolder'], '')
+        # Down and Up a row, Right and Left a page of ten; the Add games row
+        # ends the list. Up from the first row goes to the toolbar.
+        self.assertEqual(self.ui('down,down,down,up')['homeTarget'], 2)
+        self.assertEqual(self.ui('right')['homeTarget'], 10)
+        self.assertEqual(self.ui('right,right')['homeTarget'], 14)
+        self.assertEqual(self.ui('right,right,left')['homeTarget'], 4)
+        self.assertEqual(self.ui('up')['homeZone'], 1)
+        # The list scrolls to keep the selection in view.
+        self.assertEqual(self.ui()['listScroll'], 0)
+        self.assertEqual(self.ui(','.join(['down']*12))['listScroll'], 3*37)
+        # Cross plays at once: there are no details.
+        state = self.ui('down,cross')
+        self.assertTrue(state['launchRequested'])
+        self.assertEqual(state['launchingName'], 'Game 01')
+        self.assertTrue(self.ui('right,right,cross')['browserOpen'])
+        # A tap picks a row; a tap on the picked row plays it.
+        state = self.ui('touch:300:218')
+        self.assertEqual(state['homeTarget'], 2)
+        self.assertFalse(state['launchRequested'])
+        state = self.ui('touch:300:218,touch:300:218')
+        self.assertEqual(state['launchingName'], 'Game 02')
+        # A drag scrolls; it stops at the last row.
+        self.assertGreater(self.ui('vdrag:300:400:200')['listScroll'], 100)
+        self.assertEqual(self.ui('vdrag:300:480:130,vdrag:300:480:130')['listScroll'], 5*37)
+        # Triangle still opens a game's options; filters still apply.
+        self.assertEqual(self.ui('triangle')['homePanel'], 2)
+        self.assertEqual(self.ui('up,cross,down,down,down,down,cross')['homeEntries'], [])
+        # It draws, and draws no pictures.
+        shot = self.storage/'list.png'
+        self.ui('down,down', shot)
+        self.assertGreater(shot.stat().st_size, 10000)
+        self.assertFalse((self.root/'cache/art').exists() and any((self.root/'cache/art').iterdir()))
 
     def test_interface_sounds_follow_what_an_input_did(self):
         self.game(self.games/'One',3,'One')
@@ -535,7 +660,7 @@ class NativeLauncher(unittest.TestCase):
     def test_sound_settings(self):
         self.game(self.games/'One',3,'One')
         prefs=self.root/'launcher-preferences.json'
-        sound=SETTINGS+',down'*9+',cross'    # Settings: Sound is row 9
+        sound=SETTINGS+',down'*10+',cross'    # Settings: Sound is row 10
         state=self.ui(sound)
         self.assertEqual(state['page'],13)
         self.assertEqual((state['menuSounds'],state['menuSoundVolume'],state['themeMusic'],state['musicVolume']),
@@ -590,7 +715,7 @@ class NativeLauncher(unittest.TestCase):
         self.assertTrue(self.ui()['autoGameInfo'])
         info=page+',down'
 
-        self.assertTrue(self.ui(SETTINGS+',down'*10+',cross')['exitRequested'])
+        self.assertTrue(self.ui(SETTINGS+',down'*11+',cross')['exitRequested'])
         # The blur starts off; an old file's "blurAdult": true is not read.
         prefs.write_text('{"blurAdult": true}')
         self.assertFalse(self.ui()['blurAdult'])

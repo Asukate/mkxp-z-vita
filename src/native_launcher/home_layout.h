@@ -20,6 +20,9 @@ constexpr int captionY = 457;
 // Grid.
 constexpr int gridCols = 5, gridGapX = 22, gridGapY = 16, gridTop = 132, gridLabel = 22;
 constexpr int gridX = (960 - (gridCols * cardW + (gridCols - 1) * gridGapX)) / 2;
+// List: one row per game, names only.
+constexpr int listX = 36, listW = 960 - 2 * listX, listTop = 126, listRowH = 37, listRows = 10;
+constexpr int listBottom = listTop + listRowH * listRows;
 // Details panel; its Play and Options buttons sit under the cover.
 constexpr int detailsX = 344, detailsY = 70, detailsBottom = 494;
 constexpr int playX = 33, playY = 434, playW = 129, optionsX = 170, optionsW = 161, buttonH = 51;

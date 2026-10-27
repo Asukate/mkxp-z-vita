@@ -9,8 +9,8 @@ constexpr int langTop = 150, langRowH = 52, langBox = 46;
 constexpr int dotsY = 486;
 // Example folder lists (games, RTP): a header row, then rows that drop in.
 constexpr int treeHeaderH = 36, treeRowH = 28, treeIndent = 34;
-// Library view slide: carousel on the left, grid on the right, a label under each.
-constexpr int viewTop = 110, viewW = 340, viewH = 180, viewLabelH = 44, viewGap = 20;
+// Library view slide: carousel, grid and list side by side, a label under each.
+constexpr int viewTop = 110, viewW = 220, viewH = 180, viewLabelH = 44, viewGap = 20;
 constexpr int viewX(int i) { return textX + i * (viewW + viewGap); }
 } // namespace welcomeLayout
 } // namespace hardrpg

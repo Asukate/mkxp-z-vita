@@ -71,12 +71,12 @@ std::string lastPlayed(int64_t when) {
 }
 // Short names for the engine tabs, so more engines fit in the toolbar.
 const char *engineTab(int version) {
-  static const char *names[] = {"All", "XP", "VX", "Ace", "2k/2k3"};
-  return version >= 0 && version <= 4 ? tr(names[version]) : "?";
+  static const char *names[] = {"All", "XP", "VX", "Ace", "2k/2k3", "MV", "MZ"};
+  return version >= 0 && version <= formatMZ ? tr(names[version]) : "?";
 }
 const char *engineName(int version) {
-  static const char *names[] = {"Collection", "XP", "VX", "VX Ace", "2000/2003"};
-  return tr(version >= 0 && version <= 4 ? names[version] : "Game");
+  static const char *names[] = {"Collection", "XP", "VX", "VX Ace", "2000/2003", "MV", "MZ"};
+  return tr(version >= 0 && version <= formatMZ ? names[version] : "Game");
 }
 inline void over(uint8_t *d, int r, int g, int b, int a) {
   // Premultiplied source over a premultiplied destination (opaque or not).
@@ -104,7 +104,7 @@ Image strip(int w, int h, const std::function<std::array<int, 4>(double)> &at) {
 // a reason: the screen is drawn again when a picture is ready, so it does
 // not redraw every frame while covers and backgrounds load.
 bool View::animating() const {
-  return coversToMake || (loader && loader->ready()) ||
+  return marqueeMoving || coversToMake || (loader && loader->ready()) ||
          (fading && std::chrono::steady_clock::now() - fadeStart < std::chrono::milliseconds(320));
 }
 
@@ -481,21 +481,39 @@ void View::endLayer() {
   surfaceH = height;
 }
 
+void View::dropArt() {
+  art.clear();
+  heroOrder.clear();
+  heroShown = heroFading = nullptr;
+  heroKey.clear();
+  fading = false;
+  loader.reset();
+}
+
 void View::buildHome(const UI &u) {
   scene.clear();
-  if (!loader)
-    loader.reset(new ArtLoader);
   ++frameNumber;
-  loader->beginFrame();
-  receiveArt(u);
+  marqueeMoving = false;
+  // The list view draws no pictures: none are kept, and nothing loads them.
+  const bool simple = u.home.list();
+  if (simple) {
+    if (loader || !art.empty())
+      dropArt();
+  } else {
+    if (!loader)
+      loader.reset(new ArtLoader);
+    loader->beginFrame();
+    receiveArt(u);
+  }
   // The blur preference changed: load every picture again.
-  if (blurShown != u.blurAdult) {
+  if (!simple && blurShown != u.blurAdult) {
     blurShown = u.blurAdult;
     for (auto &kv : art)
       u.artUpdated.push_back(kv.first);
   }
-  // Downloaded art: forget what was decoded so the new pictures load.
-  for (auto &k : u.artUpdated) {
+  // Downloaded art: forget what was decoded so the new pictures load. The
+  // list keeps the names for when another view is shown.
+  for (auto &k : simple ? std::vector<std::string>{} : u.artUpdated) {
     auto found = art.find(k);
     if (found != art.end()) {
       if (&found->second.hero == heroShown || &found->second.hero == heroFading) {
@@ -507,7 +525,8 @@ void View::buildHome(const UI &u) {
     }
     loader->rescan(k);
   }
-  u.artUpdated.clear();
+  if (!simple)
+    u.artUpdated.clear();
   loadBudget = 1;
   pendingLoads = coversToMake = false;
   auto list = u.homeList();
@@ -515,7 +534,7 @@ void View::buildHome(const UI &u) {
   int target = std::min(u.home.target, count);
   const Entry *current = target < count ? &u.model.list[list[target]] : nullptr;
   bool settled = std::fabs(u.home.position - u.home.target) < 0.05 && !u.home.dragging;
-  double details = u.home.grid ? 0 : u.home.detailsAmount, side = u.home.sideAmount;
+  double details = u.home.view != Home::Carousel ? 0 : u.home.detailsAmount, side = u.home.sideAmount;
   auto quad = [&](const Image *img, double x, double y, double w, double h, double alpha = 1, double bright = 1, double radius = 0) {
     Quad q;
     q.image = img;
@@ -541,8 +560,8 @@ void View::buildHome(const UI &u) {
   // art covers the whole screen.
   size_t inkAt = scene.size();
   solid(ink, 0, 0, width, height, 1);
-  std::string wantHero = u.home.grid || !current ? "" : u.entryKey(*current);
-  if (settled && wantHero != heroKey) {
+  std::string wantHero = u.home.view != Home::Carousel || !current ? "" : u.entryKey(*current);
+  if (!simple && settled && wantHero != heroKey) {
     const Image *next = nullptr;
     bool ready = true;
     if (!wantHero.empty()) {
@@ -575,16 +594,20 @@ void View::buildHome(const UI &u) {
     quad(&glow, 0, 0, width, height * 0.75, 1 - (heroShown ? fade : 0));
   if (heroShown)
     quad(heroShown, 0, 0, width, height, fade);
-  if (u.home.grid)
+  if (u.home.grid())
     solid(ink, 0, 0, width, height, 0.82);
-  else {
+  else if (simple) {
+    // Nothing: the plain colour and the glow are the whole background.
+  } else {
     quad(&scrimV, 0, 0, width, height, 1 - details);
     quad(&scrimH, 0, 0, width, height, details);
   }
   quad(&tintTop, 0, 0, width, 70, 1);
   quad(&tintBottom, 0, height - 56, width, 56, 1);
 
-  if (!u.home.grid) {
+  if (simple) {
+    buildList(u, list, target);
+  } else if (!u.home.grid()) {
     // Carousel: farther cards first so nearer ones overlap them.
     std::vector<std::pair<double, int>> order;
     for (int i = std::max(0, int(std::floor(u.home.position)) - 4); i <= std::min(count, int(std::ceil(u.home.position)) + 4); ++i)
@@ -628,7 +651,9 @@ void View::buildHome(const UI &u) {
       std::string sub = tr("Scan a folder on your memory card");
       if (current) {
         auto a = u.activity.find(u.entryKey(*current));
-        sub = current->kind == Kind::Folder ? tr("Collection") : playtime(a == u.activity.end() ? 0 : a->second.seconds);
+        sub = current->kind == Kind::Folder ? tr("Collection")
+              : comingSoon(current->version) ? trf("RPG Maker {}: support is coming soon", {engineName(current->version)})
+                                             : playtime(a == u.activity.end() ? 0 : a->second.seconds);
       }
       int maxW = side > 0.5 ? 440 : 860;
       // The layer is only as wide as its text: less to draw and upload.
@@ -844,7 +869,7 @@ void View::buildHome(const UI &u) {
   if (details < 0.99) {
     auto tabs = u.engineTabs();
     bool filtered = u.home.hiddenEngines || u.home.favouritesOnly || u.home.unplayedOnly || u.home.sort != Home::Recent || u.home.direction != 1;
-    std::string key = std::string(languageCode(language())) + "|" + std::to_string(u.home.grid) + "|" + std::to_string(u.engineFilter) + "|" + std::to_string(int(u.home.zone)) + "|" +
+    std::string key = std::string(languageCode(language())) + "|" + std::to_string(u.home.view) + "|" + std::to_string(u.engineFilter) + "|" + std::to_string(int(u.home.zone)) + "|" +
                       std::to_string(u.home.toolbarFocus) + "|" + std::to_string(filtered) + "|" + std::to_string(u.home.panel);
     for (int t : tabs)
       key += "," + std::to_string(t);
@@ -852,7 +877,9 @@ void View::buildHome(const UI &u) {
       auto bar = [&](int item) { return u.home.zone == Home::Toolbar && u.home.toolbarFocus == item; };
       if (bar(0))
         rect(viewX, 0, barIcon, barH, white, 40, 25);
-      blit(icon(u.home.grid ? "view-carousel-31" : "view-grid-31"), viewX + 10, 10);
+      // The view the button switches to: carousel, grid, list, round again.
+      static const char *const nextIcon[] = {"view-grid-31", "view-list-31", "view-carousel-31"};
+      blit(icon(nextIcon[u.home.view]), viewX + 10, 10);
       rect(addX, 0, addW, barH, white, bar(1) ? 56 : 28, 25);
       blit(icon("plus-31"), addX + 13, 10);
       // The button holds "Add games"; a language too long for it says "Add".
@@ -985,8 +1012,134 @@ void View::buildHome(const UI &u) {
       solid(ruby, 280, 318, 400 * std::min(1.0, u.preparationFraction), 6, 1, 3);
     }
   }
-  pendingLoads = pendingLoads || loader->busy();
-  trimArt();
+  if (loader) {
+    pendingLoads = pendingLoads || loader->busy();
+    trimArt();
+  }
+}
+
+// The selected name slides left after a second, holds at its end, then goes
+// back; three times, then it rests cut, so an idle screen stops redrawing.
+// Only the quad moves: the whole name is drawn once. Returns false while the
+// cut name is shown instead.
+template <class AddQuad>
+bool View::marquee(const std::string &id, const std::string &name, int maxW, int x, double y, int h, AddQuad &&quad) {
+  const double delay = 1.0, speed = 45, hold = 1.5, rest = 0.8;
+  auto now = std::chrono::steady_clock::now();
+  // Selected again (or anew): it starts over.
+  if (marqueeId != id || marqueeFrame + 1 != frameNumber) {
+    marqueeId = id;
+    marqueeStart = now;
+  }
+  marqueeFrame = frameNumber;
+  std::string key = name + "|" + languageCode(language());
+  if (marqueeLayer.key != key) {
+    int full = std::min(2040, measure(name, 19));
+    beginLayer(marqueeLayer, key, full + 4, h);
+    label(0, 2, name, 19, white, 255, false, -1, full + 4);
+    endLayer();
+  }
+  double travel = std::max(0, marqueeLayer.image.width - 4 - maxW);
+  double cycle = delay + travel / speed + hold + rest;
+  double t = std::chrono::duration<double>(now - marqueeStart).count();
+  marqueeMoving = t < 3 * cycle;
+  if (!marqueeMoving)
+    return false;
+  t = std::fmod(t, cycle);
+  if (t < delay || t >= cycle - rest)
+    return false;
+  double offset = std::min(travel, (t - delay) * speed);
+  auto *q = quad(&marqueeLayer.image, x - offset, y, marqueeLayer.image.width, h, 1, 1);
+  q->clipLeft = x;
+  q->clipRight = x + maxW;
+  return true;
+}
+
+void View::buildList(const UI &u, const std::vector<size_t> &list, int target) {
+  // Rows are quads: moving the selection only moves a highlight, and a name
+  // is drawn once, when its row first shows.
+  int count = int(list.size()), total = count + 1; // the last row adds games
+  int maxScroll = std::max(0, (total - listRows) * listRowH);
+  // The UI keeps the selection in view (UI::followList); a drag scrolls freely.
+  u.listScroll = std::max(0, std::min(u.listScroll, maxScroll));
+  auto quad = [&](const Image *img, double x, double y, double w, double h, double alpha = 1, double bright = 1, double radius = 0) {
+    Quad q;
+    q.image = img;
+    q.x = float(x), q.y = float(y), q.w = float(w), q.h = float(h);
+    q.alpha = float(alpha), q.bright = float(bright), q.radius = float(radius);
+    q.clipTop = listTop;
+    q.clipBottom = listBottom;
+    scene.push_back(q);
+    return &scene.back();
+  };
+  const int nameX = listX + 16, tagRight = listX + listW - 14, nameH = 26;
+  const std::string lang = languageCode(language());
+  int first = u.listScroll / listRowH, last = std::min(total - 1, (u.listScroll + listRows * listRowH) / listRowH);
+  for (int i = first; i <= last; ++i) {
+    double y = listTop + i * listRowH - u.listScroll;
+    bool sel = i == target;
+    if (sel) {
+      quad(nullptr, listX, y + 2, listW, listRowH - 4, 0.1, 1, 6)->color = white;
+      quad(nullptr, listX, y + 8, 3, listRowH - 16, 1)->color = ruby;
+    }
+    if (i == count) {
+      if (beginLayer(listAddLayer, "add|" + lang, 300, nameH)) {
+        blitScaled(icon("plus-31"), 0, 3, 20, 20);
+        label(30, 2, tr("Add games"), 19, white);
+        endLayer();
+      }
+      quad(&listAddLayer.image, nameX, y + (listRowH - nameH) / 2.0, listAddLayer.image.width, nameH, 1, sel ? 1 : 0.7);
+      continue;
+    }
+    auto &e = u.model.list[list[size_t(i)]];
+    auto id = u.entryKey(e);
+    bool fav = u.favourites.count(id);
+    // The engine, small and right-aligned, from five shared layers.
+    int v = e.version >= 0 && e.version <= formatMZ ? e.version : 0;
+    Layer &tag = listTagLayers[v];
+    // MV and MZ games say they cannot run yet.
+    std::string tagText = !v ? std::string(tr("Collection"))
+                        : comingSoon(v) ? trf("{}, coming soon", {engineName(v)})
+                                        : std::string(engineName(v));
+    if (beginLayer(tag, lang, measure(tagText, 14) + 4, 20)) {
+      label(0, 1, tagText, 14, comingSoon(v) ? rubyHi : faint);
+      endLayer();
+    }
+    quad(&tag.image, tagRight - tag.image.width, y + (listRowH - 20) / 2.0, tag.image.width, 20);
+    // A favourite's star sits in the margin left of the row, so every name
+    // starts in the same place.
+    if (fav) {
+      const Image &star = icon("star-24:ruby");
+      quad(&star, listX - 24, y + (listRowH - 18) / 2.0, 18, 18);
+    }
+    // The name.
+    int maxW = listW - 16 - 150;
+    auto &row = listNames[id];
+    row.used = frameNumber;
+    std::string key = e.name + "|" + lang;
+    if (row.layer.key != key) {
+      int full = measure(e.name, 19);
+      row.cut = full > maxW;
+      beginLayer(row.layer, key, std::min(maxW, full) + 4, nameH);
+      label(0, 2, e.name, 19, white, 255, false, -1, maxW);
+      endLayer();
+    }
+    double ny = y + (listRowH - nameH) / 2.0;
+    if (sel && row.cut && marquee(id, e.name, maxW, nameX, ny, nameH, quad))
+      continue;
+    quad(&row.layer.image, nameX, ny, row.layer.image.width, nameH, 1, sel ? 1 : 0.72);
+  }
+  // A thin scroll bar when there are more rows than fit.
+  if (total > listRows) {
+    double trackH = listRows * listRowH, thumbH = std::max(24.0, trackH * listRows / total);
+    double thumbY = listTop + (trackH - thumbH) * u.listScroll / std::max(1, maxScroll);
+    quad(nullptr, listX + listW + 10, listTop, 3, trackH, 0.08, 1, 1)->color = white;
+    quad(nullptr, listX + listW + 10, thumbY, 3, thumbH, 0.45, 1, 1)->color = white;
+  }
+  // Names not drawn this frame are forgotten once there are many.
+  if (listNames.size() > 60)
+    for (auto it = listNames.begin(); it != listNames.end();)
+      it = it->second.used == frameNumber ? std::next(it) : listNames.erase(it);
 }
 
 void View::homePanels(const UI &u, const std::vector<size_t> &list) {
@@ -1201,7 +1354,7 @@ void View::homeHints(const UI &u, const std::vector<size_t> &list) {
     left = {{"btn-cross-26", tr("Play"), Button::Cross}, {"btn-circle-26", tr("Back"), Button::Circle}, {"btn-triangle-26", tr("Options"), Button::Triangle}};
     right = {{nullptr, tr(u.shotsShown ? "Down: screenshots" : "Other games"), Button::None}};
   } else {
-    left = {{"btn-cross-26", tr(add ? "Add games" : u.home.grid ? "Play" : "Details"), Button::Cross}};
+    left = {{"btn-cross-26", tr(add ? "Add games" : u.home.view != Home::Carousel ? "Play" : "Details"), Button::Cross}};
     if (!add)
       left.push_back({"btn-triangle-26", tr("Options"), Button::Triangle});
     right = {{"L R", tr("Engine"), Button::R}, {"SELECT", tr("Search"), Button::Select}};
@@ -1358,11 +1511,26 @@ void View::composite() {
       continue;
     surface = pixels.data() + size_t(top) * width * 4;
     surfaceH = bottom - top;
+    // Columns outside the clip are put back as they were after drawing.
+    int left = std::max(0, q.clipLeft), right = std::min(width, q.clipRight);
+    if (left >= right)
+      continue;
+    std::vector<uint8_t> keep;
+    bool columns = left > 0 || right < width;
+    if (columns)
+      keep.assign(surface, surface + size_t(surfaceH) * width * 4);
     if (q.image)
       blitScaled(*q.image, q.x, q.y - top, q.w, q.h, int(q.alpha * 255 + 0.5f), int(q.bright * 256 + 0.5f), int(q.radius));
     else
       rect(int(std::lround(q.x)), int(std::lround(q.y)) - top, int(std::lround(q.w)), int(std::lround(q.h)), q.color,
            int(q.alpha * 255 + 0.5f), int(q.radius));
+    if (columns)
+      for (int row = 0; row < surfaceH; ++row) {
+        uint8_t *d = surface + size_t(row) * width * 4;
+        const uint8_t *s = keep.data() + size_t(row) * width * 4;
+        std::copy(s, s + left * 4, d);
+        std::copy(s + right * 4, s + width * 4, d + right * 4);
+      }
   }
   surface = pixels.data();
   surfaceH = height;

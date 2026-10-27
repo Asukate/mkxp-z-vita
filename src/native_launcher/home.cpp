@@ -15,7 +15,51 @@ using namespace homeLayout;
 namespace {
 constexpr int engineCount = 4; // formats 1..4: XP, VX, VX Ace, 2000/2003
 constexpr int optionCount = 5; // favourite, artwork, all artwork, game settings, rename
+const char *const viewNames[] = {"carousel", "grid", "list"};
+int viewFromName(const std::string &name, int otherwise) {
+  for (int v = 0; v < Home::ViewCount; ++v)
+    if (name == viewNames[v])
+      return v;
+  return otherwise;
+}
 } // namespace
+
+void UI::setView(int view, bool remember) {
+  home.view = view;
+  home.details = false;
+  home.shotFocus = home.viewing = -1;
+  home.position = home.target;
+  if (remember) {
+    lastView = view;
+    savePreferences();
+  }
+}
+void UI::followList() {
+  if (!home.list())
+    return;
+  int total = int(homeList().size()) + 1, y = home.target * listRowH;
+  if (y < listScroll)
+    listScroll = y;
+  else if (y + listRowH > listScroll + listRows * listRowH)
+    listScroll = y + listRowH - listRows * listRowH;
+  listScroll = std::max(0, std::min(listScroll, (total - listRows) * listRowH));
+}
+namespace {
+// Runs followList when the input handler it guards returns, however it does.
+struct FollowList {
+  UI &ui;
+  ~FollowList() { ui.followList(); }
+};
+} // namespace
+
+void UI::changeStartView(int step) {
+  // -1 (last used), then each view, round and round.
+  startView = (startView + 1 + step + Home::ViewCount + 1) % (Home::ViewCount + 1) - 1;
+  if (startView >= 0)
+    setView(startView, true);
+  else
+    savePreferences();
+}
 
 std::vector<std::string> UI::artFolders(const Entry &e) const {
   // Art lives in art/<name>/ under any of these names; the slug spellings
@@ -196,8 +240,16 @@ void UI::loadHome() {
         welcomeSeen = o.at("welcomeSeen").as_boolean();
       if (o.count("autoGameInfo") && o.at("autoGameInfo").is_boolean())
         autoGameInfo = o.at("autoGameInfo").as_boolean();
-      if (o.count("homeGrid") && o.at("homeGrid").is_boolean())
-        home.grid = o.at("homeGrid").as_boolean();
+      // The view used last ("homeView"; before the list view, "homeGrid"),
+      // and the one chosen in Settings to open in, if any.
+      lastView = Home::Carousel;
+      if (o.count("homeView") && o.at("homeView").is_string())
+        lastView = viewFromName(o.at("homeView").as_string(), Home::Carousel);
+      else if (o.count("homeGrid") && o.at("homeGrid").is_boolean() && o.at("homeGrid").as_boolean())
+        lastView = Home::Grid;
+      startView = -1;
+      if (o.count("homeStartView") && o.at("homeStartView").is_string())
+        startView = viewFromName(o.at("homeStartView").as_string(), -1);
       if (o.count("menuSounds") && o.at("menuSounds").is_boolean())
         menuSounds = o.at("menuSounds").as_boolean();
       if (o.count("themeMusic") && o.at("themeMusic").is_boolean())
@@ -212,6 +264,7 @@ void UI::loadHome() {
   } catch (...) {
     // A damaged file only loses the preferences.
   }
+  home.view = startView >= 0 ? startView : lastView;
   setLanguage(lang >= 0 ? lang : systemLanguage());
   if (!welcomeSeen && !welcome.active)
     openWelcome();
@@ -222,7 +275,9 @@ void UI::savePreferences() {
   o["blurAdultArtwork"] = blurAdult;
   o["language"] = std::string(languageCode(language()));
   o["welcomeSeen"] = welcomeSeen;
-  o["homeGrid"] = home.grid;
+  o["homeView"] = std::string(viewNames[lastView]);
+  o["homeStartView"] = std::string(startView >= 0 ? viewNames[startView] : "last");
+  o["homeGrid"] = lastView == Home::Grid; // read by 0.4.0
   o["autoGameInfo"] = autoGameInfo;
   o["menuSounds"] = menuSounds;
   o["menuSoundVolume"] = Json::integer_type(effectsVolume);
@@ -375,6 +430,7 @@ void clampTarget(Home &h, int count) {
 } // namespace
 
 void UI::homeAction(Button b) {
+  FollowList follow{*this};
   auto list = homeList();
   int count = int(list.size());
   auto tabs = engineTabs();
@@ -488,7 +544,7 @@ void UI::homeAction(Button b) {
     return;
   }
   // The details panel's screenshot row: Down goes to it, Up leaves it.
-  if (home.details && home.zone == Home::Shelf && !home.grid) {
+  if (home.details && home.zone == Home::Shelf && home.view == Home::Carousel) {
     if (home.shotFocus >= 0) {
       int n = shotsShown;
       if (n <= 0)
@@ -539,11 +595,9 @@ void UI::homeAction(Button b) {
     else if (b == Button::L || b == Button::R)
       switchTab(b == Button::L ? -1 : 1);
     else if (b == Button::Cross) {
-      if (home.toolbarFocus == 0) {
-        home.grid = !home.grid;
-        home.details = false;
-        savePreferences(); // the library opens in this view from now on
-      } else if (home.toolbarFocus == 1)
+      if (home.toolbarFocus == 0)
+        setView((home.view + 1) % Home::ViewCount, true); // carousel, grid, list
+      else if (home.toolbarFocus == 1)
         openBrowser(BrowseMode::Games);
       else if (home.toolbarFocus == 2)
         runSearch();
@@ -555,21 +609,23 @@ void UI::homeAction(Button b) {
     return;
   }
 
-  // Shelf.
-  int cols = home.grid ? gridCols : 1;
+  // Shelf. In the list Up and Down go a row, Left and Right a page.
+  bool carousel = home.view == Home::Carousel;
+  int cols = home.grid() ? gridCols : 1;
+  int sideStep = home.list() ? listRows : 1;
   switch (b) {
   case Button::Left:
-    home.target = std::max(0, home.target - 1);
+    home.target = std::max(0, home.target - sideStep);
     break;
   case Button::Right:
-    home.target = std::min(count, home.target + 1);
+    home.target = std::min(count, home.target + sideStep);
     break;
   case Button::Down:
-    if (home.grid)
+    if (!carousel)
       home.target = std::min(count, home.target + cols);
     break;
   case Button::Up:
-    if (home.grid && home.target >= cols)
+    if (!carousel && home.target >= cols)
       home.target -= cols;
     else if (!home.details) {
       home.zone = Home::Toolbar;
@@ -578,15 +634,15 @@ void UI::homeAction(Button b) {
     break;
   case Button::Cross:
     // In the carousel the first press shows the game's details, the second
-    // plays it, as tapping does. The grid has no details and a collection
-    // has none to show: those open at once.
-    if (!home.grid && home.target < count && !home.details && model.list[list[home.target]].kind != Kind::Folder)
+    // plays it, as tapping does. The grid and the list have no details and
+    // a collection has none to show: those open at once.
+    if (carousel && home.target < count && !home.details && model.list[list[home.target]].kind != Kind::Folder)
       home.details = true;
     else
       launchTarget();
     break;
   case Button::Square:
-    if (!home.grid && home.target < count)
+    if (carousel && home.target < count)
       home.details = !home.details;
     break;
   case Button::Triangle:
@@ -624,11 +680,12 @@ void UI::homeAction(Button b) {
   clampTarget(home, count);
   if (!home.details)
     home.shotFocus = home.viewing = -1;
-  if (home.grid)
+  if (!carousel)
     home.position = home.target;
 }
 
 void UI::homeTap(int x, int y) {
+  FollowList follow{*this};
   if (home.viewing >= 0) {
     if (y < hintsY && x < 160)
       homeAction(Button::Left);
@@ -728,7 +785,19 @@ void UI::homeTap(int x, int y) {
       }
     return;
   }
-  if (home.grid) {
+  if (home.list()) {
+    if (x < listX || x >= listX + listW || y < listTop || y >= listBottom)
+      return;
+    int i = (y - listTop + listScroll) / listRowH;
+    if (i > count)
+      return;
+    if (i == home.target)
+      homeAction(Button::Cross);
+    else
+      home.target = home.position = i;
+    return;
+  }
+  if (home.grid()) {
     int col = (x - gridX) / (cardW + gridGapX), row = (y - gridTop + gridScroll) / (cardH + gridLabel + gridGapY);
     if (x < gridX || col >= gridCols || y < gridTop)
       return;
@@ -796,15 +865,20 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
     return false;
   bool shelfDrag = home.panel == Home::NoPanel && home.viewing < 0 && home.pressY >= barY + barH && home.pressY < hintsY;
   if (state == 1) {
-    if (!home.dragging && shelfDrag && std::abs(x - home.pressX) > 10 && !home.grid)
+    bool carousel = home.view == Home::Carousel;
+    if (!home.dragging && shelfDrag && std::abs(x - home.pressX) > 10 && carousel)
       home.dragging = true;
-    if (!home.dragging && shelfDrag && home.grid && std::abs(y - home.pressY) > 10)
+    if (!home.dragging && shelfDrag && !carousel && std::abs(y - home.pressY) > 10)
       home.dragging = true;
     if (!home.dragging)
       return false;
     double dt = std::max(1u, ms - home.lastMove) / 1000.0;
-    if (home.grid) {
-      gridScroll = std::max(0, gridScroll - (y - home.pressY));
+    if (!carousel) {
+      // The list stops at its last row; the view clamps the grid.
+      int &scroll = home.list() ? listScroll : gridScroll;
+      scroll = std::max(0, scroll - (y - home.pressY));
+      if (home.list())
+        scroll = std::min(scroll, std::max(0, (count + 1 - listRows) * listRowH));
       home.pressY = y;
       return true;
     }
@@ -828,7 +902,7 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
   home.pressed = false;
   if (home.dragging) {
     home.dragging = false;
-    if (!home.grid) {
+    if (home.view == Home::Carousel) {
       int before = home.target;
       home.target = int(std::lround(home.position + home.velocity * 0.18));
       clampTarget(home, count);

@@ -19,6 +19,7 @@ ICONS = {
     'filter': f'<path d="M2.5 5h19M6 12h12M9.5 19h5" {S} stroke-width="2.4"/>',
     'view-carousel': f'<rect x="7.2" y="3.5" width="9.6" height="17" rx="1.8" fill="{W}"/><rect x="1.2" y="6" width="4.2" height="12" rx="1.2" fill="{W}" opacity=".55"/><rect x="18.6" y="6" width="4.2" height="12" rx="1.2" fill="{W}" opacity=".55"/>',
     'view-grid': ''.join(f'<rect x="{x}" y="{y}" width="8.4" height="8.4" rx="1.8" fill="{W}"/>' for y in (2.4, 13.2) for x in (2.4, 13.2)),
+    'view-list': ''.join(f'<rect x="2.4" y="{y}" width="3.6" height="3.6" rx="1" fill="{W}"/><rect x="8.4" y="{y}" width="13.2" height="3.6" rx="1" fill="{W}"/>' for y in (3.6, 10.2, 16.8)),
     'plus': f'<path d="M12 3.5v17M3.5 12h17" {S} stroke-width="2.6"/>',
     'folder': f'<path d="M3 6.5A1.5 1.5 0 014.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0121 8.7v9.8a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 18.5z" {S} stroke-width="1.7"/>',
     'memcard': f'<path d="M6.5 2.5h8l4.5 4.5v13.5a1 1 0 01-1 1h-11.5a1 1 0 01-1-1v-17a1 1 0 011-1z" {S} stroke-width="1.7"/><path d="M9.5 6v3.5M12.5 6v3.5" {S} stroke-width="1.6"/>',

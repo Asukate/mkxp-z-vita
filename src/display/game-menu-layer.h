@@ -241,13 +241,13 @@ public:
         for (auto &q : view.scene) {
             if (q.w <= 0 || q.h <= 0 || q.alpha <= 0.002f || (q.image && q.image->empty()))
                 continue;
-            bool clip = q.clipTop > 0 || q.clipBottom < 544;
+            bool clip = q.clipTop > 0 || q.clipBottom < 544 || q.clipLeft > 0 || q.clipRight < 960;
             if (clip != clipping) {
                 glState.scissorTest.set(clip);
                 clipping = clip;
             }
             if (clip)
-                glState.scissorBox.set(IntRect(0, 544 - q.clipBottom, 960, q.clipBottom - q.clipTop));
+                glState.scissorBox.set(IntRect(q.clipLeft, 544 - q.clipBottom, q.clipRight - q.clipLeft, q.clipBottom - q.clipTop));
             if (q.image)
                 quad(q.x, q.y, q.w, q.h, q.bright, q.bright, q.bright, q.alpha, q.radius, q.image);
             else

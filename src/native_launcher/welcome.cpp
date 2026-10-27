@@ -27,6 +27,15 @@ void UI::finishWelcome() {
   // A release found while the guide was up waits in Release checks.
 }
 
+void UI::chooseWelcomeView(int view) {
+  if (home.view == view && (startView < 0 || startView == view))
+    return;
+  // A view chosen in Settings to open in follows the guide's choice.
+  if (startView >= 0)
+    startView = view;
+  setView(view, true);
+}
+
 void UI::welcomeAction(Button b) {
   auto go = [&](int step) {
     welcome.from = welcome.slide;
@@ -37,13 +46,10 @@ void UI::welcomeAction(Button b) {
   };
   int last = Welcome::SlideCount - 1;
   if (welcome.slide == Welcome::View && (b == Button::Left || b == Button::Right)) {
-    // Left is the carousel, Right the grid; the library opens in it from now on.
-    bool grid = b == Button::Right;
-    if (home.grid != grid) {
-      home.grid = grid;
-      home.details = false;
-      savePreferences();
-    }
+    // Left and Right step through carousel, grid and list; the library
+    // opens in it from now on.
+    int view = std::max(0, std::min(int(Home::ViewCount) - 1, home.view + (b == Button::Left ? -1 : 1)));
+    chooseWelcomeView(view);
   } else if (b == Button::Cross || b == Button::Right) {
     if (welcome.slide == last)
       finishWelcome();
@@ -78,9 +84,9 @@ void UI::welcomeTap(int x, int y) {
         return;
       }
   if (welcome.slide == Welcome::View)
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < Home::ViewCount; ++i)
       if (inside(x, y, slideX + welcomeLayout::viewX(i), slideY + viewTop, viewW, viewH + viewLabelH)) {
-        welcomeAction(i ? Button::Right : Button::Left);
+        chooseWelcomeView(i);
         return;
       }
 }

@@ -58,7 +58,7 @@ struct InputFeedback {
                u.setting, u.gameSetting, u.rtpSelected, u.browserSelected, u.engineFilter, u.aboutScroll,
                u.errorScroll, u.releaseScroll, u.artRow, u.controlPickKey, u.removeStep ? long(u.removeStep) : 0,
                u.welcome.slide, u.welcome.languageFocus};
-    s.values = {u.home.grid, u.home.sort, u.home.direction, u.home.favouritesOnly, u.home.unplayedOnly,
+    s.values = {u.home.view, u.startView, u.home.sort, u.home.direction, u.home.favouritesOnly, u.home.unplayedOnly,
                 long(u.home.hiddenEngines), u.blurAdult, u.automaticUpdates, long(u.favourites.size()),
                 u.artPick[0], u.artPick[1], u.artPick[2], u.menuSounds, u.themeMusic, u.effectsVolume,
                 u.musicVolume, long(u.query.size()), language()};
@@ -99,7 +99,8 @@ void UI::emit(Sound s) const {
     sound(s);
 }
 std::string UI::themeFolder() const {
-  if (!themeMusic || browser || !(focus == Focus::Home || gameOptions))
+  // The list view plays no title music: nothing is read for it.
+  if (!themeMusic || home.list() || browser || !(focus == Focus::Home || gameOptions))
     return "";
   auto *e = homeEntry();
   return e ? themeSource(*e) : "";
@@ -122,7 +123,7 @@ std::string UI::themeSource(const Entry &e) const {
 }
 std::vector<std::string> UI::themeSources() const {
   std::vector<std::string> out;
-  if (!themeMusic)
+  if (!themeMusic || home.list())
     return out;
   for (auto &e : model.list) {
     auto s = themeSource(e);
@@ -133,7 +134,7 @@ std::vector<std::string> UI::themeSources() const {
 }
 std::vector<std::string> UI::themeNearby() const {
   std::vector<std::string> out;
-  if (themeFolder().empty() || home.grid)
+  if (themeFolder().empty() || home.view != Home::Carousel)
     return out;
   auto list = homeList();
   for (int i : {home.target + 1, home.target - 1})
@@ -521,10 +522,18 @@ void UI::openControls() {
   controlsTestState.reset();
   message.clear();
 }
+namespace {
+std::string comingSoonMessage(int format) {
+  return trf("RPG Maker {} game detected. HardRPG cannot run MV or MZ games yet: support is coming in a future version.",
+             {format == formatMZ ? "MZ" : "MV"});
+}
+} // namespace
 void UI::openGameMenu(size_t index) {
   if (index >= model.list.size())
     return;
   auto source = model.list[index];
+  if (comingSoon(source.version))
+    throw std::runtime_error(comingSoonMessage(source.version));
   Entry entry;
   if (!configurableGame(source, entry))
     throw std::runtime_error(tr("Open this collection and highlight a game first."));
@@ -1357,18 +1366,22 @@ void UI::openSetting() {
       return;
     }
     if (setting == 7) {
-      changeLanguage(1);
+      changeStartView(1);
       return;
     }
     if (setting == 8) {
-      openWelcome();
+      changeLanguage(1);
       return;
     }
     if (setting == 9) {
-      openPage(Page::Sound);
+      openWelcome();
       return;
     }
     if (setting == 10) {
+      openPage(Page::Sound);
+      return;
+    }
+    if (setting == 11) {
       exitRequested = true;
       return;
     }
@@ -1481,6 +1494,8 @@ void UI::play(size_t index) {
     return;
   Entry chosen;
   auto e = model.list[index];
+  if (comingSoon(e.version))
+    throw std::runtime_error(comingSoonMessage(e.version));
   // A game with a crash rescue asks before anything starts.
   if (e.kind == Kind::Game && offerRescue(e, e, true))
     return;
@@ -1621,6 +1636,10 @@ void UI::action(Button b) {
       return;
     }
     if ((b == Button::Left || b == Button::Right) && page == Page::Home && setting == 7) {
+      changeStartView(b == Button::Left ? -1 : 1);
+      return;
+    }
+    if ((b == Button::Left || b == Button::Right) && page == Page::Home && setting == 8) {
       changeLanguage(b == Button::Left ? -1 : 1);
       return;
     }

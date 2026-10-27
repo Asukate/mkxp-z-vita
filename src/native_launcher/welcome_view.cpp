@@ -46,7 +46,7 @@ const Color coverColors[] = {{74, 38, 50}, {38, 52, 74}, {50, 66, 46}, {78, 62, 
 // kept in welcomeExtra.
 const Image &View::welcomeSlide(const UI &u, int slide) {
   std::string key = std::to_string(slide) + "|" + languageCode(language()) + "|" + std::to_string(u.welcome.languageFocus) + "|" +
-                    std::to_string(u.home.grid) + "|" + u.model.paths.root;
+                    std::to_string(u.home.view) + "|" + u.model.paths.root;
   auto &layer = welcomeCache[key];
   if (!layer.key.empty())
     return layer.image;
@@ -119,17 +119,18 @@ const Image &View::welcomeSlide(const UI &u, int slide) {
     heading("Library", "How your games are shown");
     paragraph(tr("Choose the view the library opens in."));
     // Under each preview: its icon and name, and a ruby dot on the chosen one.
-    const char *names[] = {"Carousel", "Grid"}, *icons[] = {"view-carousel-31", "view-grid-31"};
-    for (int i = 0; i < 2; ++i) {
+    const char *names[] = {"Carousel", "Grid", "List"}, *icons[] = {"view-carousel-31", "view-grid-31", "view-list-31"};
+    for (int i = 0; i < Home::ViewCount; ++i) {
       int x = viewX(i), ly = viewTop + viewH + 12;
-      bool chosen = u.home.grid == (i == 1);
+      bool chosen = u.home.view == i;
       blitScaled(icon(icons[i]), x + 4, ly, 24, 24, chosen ? 255 : 150);
       label(x + 38, ly, tr(names[i]), 20, chosen ? white : muted, 255, true);
       if (chosen)
         rect(x + viewW - 18, ly + 7, 12, 12, ruby, 255, 6);
     }
     y = viewTop + viewH + viewLabelH + 12;
-    paragraph(tr("You can switch any time with the first button on the library's toolbar; the library keeps the view you used last."),
+    paragraph(tr("List is the fastest: names only, with no pictures or music. Switch any time with the first button on the library's "
+                 "toolbar; Settings, Library opens in, picks the view it starts in."),
               15, muted);
     break;
   }
@@ -192,7 +193,7 @@ void View::welcomeMotion(const UI &u, int slide, double ox, double alpha, double
   double left = slideX + ox;
   if (int rows = treeRows(slide)) {
     std::string key = std::to_string(slide) + "|" + languageCode(language()) + "|" + std::to_string(u.welcome.languageFocus) + "|" +
-                      std::to_string(u.home.grid) + "|" + u.model.paths.root;
+                      std::to_string(u.home.view) + "|" + u.model.paths.root;
     double top = slideY + welcomeExtra[key];
     // Row i drops in after the one before it.
     auto shown = [&](int i) { return ease((clock - 0.25 - i * 0.12) / 0.3); };
@@ -230,11 +231,12 @@ void View::welcomeMotion(const UI &u, int slide, double ox, double alpha, double
   }
   if (slide != Welcome::View)
     return;
-  // The library view previews: a carousel that moves on a card at a time and
-  // a grid whose selection walks across it, as the library does.
-  for (int i = 0; i < 2; ++i) {
+  // The library view previews: a carousel that moves on a card at a time, a
+  // grid whose selection walks across it and a list stepping down, as the
+  // library does.
+  for (int i = 0; i < Home::ViewCount; ++i) {
     double px = left + viewX(i), py = slideY + viewTop;
-    bool chosen = u.home.grid == (i == 1);
+    bool chosen = u.home.view == i;
     if (behind) {
       if (chosen)
         solid(ruby, px - 3, py - 3, viewW + 6, viewH + 6, 1, 13);
@@ -253,11 +255,11 @@ void View::welcomeMotion(const UI &u, int slide, double ox, double alpha, double
       std::sort(order.rbegin(), order.rend());
       for (auto &o : order) {
         double d = o.second - pos, ad = std::fabs(d), near = std::max(0.0, 1 - ad);
-        double a = std::max(0.0, std::min(1.0, (2.5 - ad) / 0.6));
+        double a = std::max(0.0, std::min(1.0, (1.9 - ad) / 0.5));
         if (a <= 0)
           continue;
-        double s = 1 + 0.4 * near, w = 46 * s, h = 69 * s;
-        double x = cx + d * 58 + (d > 0 ? 1 : d < 0 ? -1 : 0) * std::min(ad, 1.0) * 14 - w / 2;
+        double s = 1 + 0.4 * near, w = 40 * s, h = 60 * s;
+        double x = cx + d * 46 + (d > 0 ? 1 : d < 0 ? -1 : 0) * std::min(ad, 1.0) * 12 - w / 2;
         double y = cy - h / 2 + (1 - near) * 4;
         auto &c = coverColors[((o.second % 7) + 7) % 7];
         solid(c, x, y, w, h, a, 5);
@@ -266,9 +268,9 @@ void View::welcomeMotion(const UI &u, int slide, double ox, double alpha, double
       solid(ruby, cx - 10, cy + 54, 20, 2, 1, 1);
       solid(white, cx - 34, cy + 64, 68, 6, 0.75, 3);
       solid(white, cx - 22, cy + 75, 44, 4, 0.3, 2);
-    } else {
-      // Grid: five columns, the selection moving every 0.8 s.
-      const int cols = 5, tw = 40, th = 58, gx = 12, gy = 16;
+    } else if (i == 1) {
+      // Grid: four columns, the selection moving every 0.8 s.
+      const int cols = 4, tw = 36, th = 54, gx = 12, gy = 16;
       double ox0 = px + (viewW - (cols * tw + (cols - 1) * gx)) / 2.0, oy0 = py + (viewH - (2 * th + gy)) / 2.0 - 4;
       int sel = int(clock / 0.8) % (cols * 2);
       for (int k = 0; k < cols * 2; ++k) {
@@ -278,6 +280,21 @@ void View::welcomeMotion(const UI &u, int slide, double ox, double alpha, double
         solid(coverColors[k % 7], x, y, w, h, here ? 1 : 0.8, 4);
         if (here)
           solid(ruby, ox0 + (k % cols) * (tw + gx), oy0 + (k / cols) * (th + gy) + th + 4, 14, 2, 1);
+      }
+    } else {
+      // List: names as bars, the selection stepping down every 0.6 s.
+      const int rows = 7, rh = 22;
+      double x0 = px + 16, y0 = py + (viewH - rows * rh) / 2.0, w = viewW - 32;
+      int sel = int(clock / 0.6) % rows;
+      static const int lengths[rows] = {120, 86, 140, 102, 72, 128, 94};
+      for (int k = 0; k < rows; ++k) {
+        double y = y0 + k * rh;
+        if (k == sel) {
+          solid(white, x0, y, w, rh - 2, 0.1, 4);
+          solid(ruby, x0, y, 3, rh - 2, 1);
+        }
+        solid(white, x0 + 12, y + 7, lengths[k], 6, k == sel ? 0.85 : 0.35, 3);
+        solid(white, x0 + w - 30, y + 8, 20, 4, 0.2, 2);
       }
     }
   }

@@ -46,12 +46,17 @@ enum class Page {
 };
 enum class BrowseMode { Games, Rtp, Folder };
 // The home screen: a centred cover carousel over the library, with an
-// in-place details panel, an options menu and a filter panel.
+// in-place details panel, an options menu and a filter panel. The grid shows
+// covers five across; the list shows names only, with no pictures, title
+// music or game info lookups, so it starts and moves the fastest.
 struct Home {
   enum Sort { Recent, Name, PlayTime, SortCount };
   enum Panel { NoPanel, Filter, Options, Artwork };
   enum Zone { Shelf, Toolbar, Top };
-  bool grid = false;
+  enum View { Carousel, Grid, List, ViewCount };
+  int view = Carousel;
+  bool grid() const { return view == Grid; }
+  bool list() const { return view == List; }
   int sort = Recent, direction = 1;
   bool favouritesOnly = false, unplayedOnly = false;
   unsigned hiddenEngines = 0; // bit n hides format n (1 XP ... 4 2000/2003)
@@ -189,6 +194,7 @@ public:
   void welcomeAction(Button);
   void welcomeTap(int x, int y);
   void finishWelcome();
+  void chooseWelcomeView(int view);
   // Filter rows: engines, favourites, unplayed, then sorts.
   int filterRows() const;
   void filterActivate(int row);
@@ -203,6 +209,17 @@ public:
   mutable int shotsShown = 0;
   mutable int shotHit[4][4] = {};
   mutable int gridScroll = 0;
+  // The list view's scroll, in pixels from its first row.
+  mutable int listScroll = 0;
+  // The view the library opens in: -1 the one used last, else a Home::View.
+  int startView = -1;
+  int lastView = Home::Carousel;
+  // Shows view (a Home::View) now; remember saves it as the one used last.
+  void setView(int view, bool remember);
+  // The settings row's choices, in order: last used, then each view.
+  void changeStartView(int step);
+  // Scrolls the list so its selection shows, after any input that moved it.
+  void followList();
   // Engine tab boxes, left edge and width, as last drawn.
   // Drawn engine tabs: left edge, width and engine, for touch.
   struct TabHit {
@@ -416,7 +433,7 @@ public:
   // Touch on the sheets (every screen but home).
   void sheetTouch(int x, int y);
   // Rows on the settings page; the last is Exit.
-  int settingsRows() const { return 11; }
+  int settingsRows() const { return 12; }
   // Rows on the Sound page.
   static constexpr int soundRows = 4;
   void changeSound(int step, bool reset = false);

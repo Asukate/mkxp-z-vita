@@ -25,8 +25,9 @@ std::string tail(const std::string &s, size_t limit) {
   return s.size() > limit ? "..." + s.substr(s.size() - (limit - 3)) : s;
 }
 const char *engineLong(int version) {
-  static const char *names[] = {"Unknown engine", "RPG Maker XP", "RPG Maker VX", "RPG Maker VX Ace", "RPG Maker 2000 / 2003"};
-  return tr(version >= 0 && version <= 4 ? names[version] : names[0]);
+  static const char *names[] = {"Unknown engine", "RPG Maker XP", "RPG Maker VX", "RPG Maker VX Ace", "RPG Maker 2000 / 2003",
+                                "RPG Maker MV", "RPG Maker MZ"};
+  return tr(version >= 0 && version <= formatMZ ? names[version] : names[0]);
 }
 // Upper case, including the accented letters of Latin-1 (á -> Á, ç -> Ç).
 std::string upper(std::string s) {
@@ -538,6 +539,10 @@ void View::buildSheet(const UI &u) {
       row(Row::Nav, "Release checks", u.automaticUpdates ? "At startup" : "Off");
       int keys = !u.readKey(0).empty() + (!u.readKey(1).empty() && !u.readKey(2).empty()) + !u.readKey(3).empty();
       row(Row::Nav, "Game info and artwork", trf("{} sources", {std::to_string(4 + keys)}));
+      {
+        const char *views[] = {"Last used", "Carousel", "Grid", "List"};
+        row(Row::Choice, "Library opens in", views[u.startView + 1]);
+      }
       row(Row::Choice, "Language", languageName(language()));
       row(Row::Nav, "Welcome guide");
       row(Row::Nav, "Sound", u.menuSounds && u.themeMusic ? "On"

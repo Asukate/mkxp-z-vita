@@ -18,5 +18,10 @@ inline const Engine *engineFor(int format) {
   return nullptr;
 }
 constexpr int engineFilterCount = 5; // All + the four format families.
+// RPG Maker MV and MZ (HTML5 games): found and listed so the player learns
+// that HardRPG cannot run them yet, instead of the folder looking empty or
+// broken. They have no engine (engineFor returns null) and no tab.
+constexpr int formatMV = 5, formatMZ = 6;
+inline bool comingSoon(int format) { return format == formatMV || format == formatMZ; }
 constexpr int rtpPackCount = 5;
 } // namespace hardrpg

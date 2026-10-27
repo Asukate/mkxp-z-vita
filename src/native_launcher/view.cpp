@@ -69,6 +69,7 @@ void View::draw(const UI &u) {
   surface = pixels.data();
   surfaceW = width;
   surfaceH = height;
+  marqueeMoving = false; // only the list's selected name moves
   // Every screen but home is a sheet in the home screen's style.
   if (u.welcome.active)
     buildWelcome(u);

@@ -707,9 +707,21 @@ const Text table[] = {
      "Escolha como a biblioteca abre."},
     {"Carousel", "Carrusel", "Carrossel"},
     {"Grid", "Cuadrícula", "Grade"},
-    {"You can switch any time with the first button on the library's toolbar; the library keeps the view you used last.",
-     "Puedes cambiarla cuando quieras con el primer botón de la barra de la biblioteca; se recuerda la última que usaste.",
-     "Você pode trocar quando quiser no primeiro botão da barra da biblioteca; a última usada fica salva."},
+    {"List", "Lista", "Lista"},
+    {"List is the fastest: names only, with no pictures or music. Switch any time with the first button on the library's "
+     "toolbar; Settings, Library opens in, picks the view it starts in.",
+     "La lista es la más rápida: solo nombres, sin imágenes ni música. Cambia cuando quieras con el primer botón de la barra de "
+     "la biblioteca; en Ajustes, La biblioteca abre en, eliges con cuál empieza.",
+     "A lista é a mais rápida: só nomes, sem imagens nem música. Troque quando quiser no primeiro botão da barra da biblioteca; "
+     "em Ajustes, A biblioteca abre em, escolha com qual ela começa."},
+    {"Library opens in", "La biblioteca abre en", "A biblioteca abre em"},
+    // RPG Maker MV and MZ games, listed but not playable yet.
+    {"RPG Maker {} game detected. HardRPG cannot run MV or MZ games yet: support is coming in a future version.",
+     "Juego de RPG Maker {} detectado. HardRPG aún no puede ejecutar juegos MV ni MZ: el soporte llegará en una versión futura.",
+     "Jogo de RPG Maker {} detectado. O HardRPG ainda não roda jogos MV nem MZ: o suporte chega numa versão futura."},
+    {"{}, coming soon", "{}, próximamente", "{}, em breve"},
+    {"RPG Maker {}: support is coming soon", "RPG Maker {}: soporte próximamente", "RPG Maker {}: suporte em breve"},
+    {"Last used", "La última usada", "A última usada"},
     {"Good to know", "Para saber", "Bom saber"},
     {"A few defaults", "Algunos ajustes de inicio", "Alguns ajustes padrão"},
     {"Screen", "Pantalla", "Tela"},

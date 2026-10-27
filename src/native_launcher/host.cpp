@@ -54,6 +54,8 @@ Json listing(const std::vector<Entry> &list, const Paths &paths) {
       o["format"] = e.version;
       o["backend"] = engineFor(e.version)->id;
     }
+    if (comingSoon(e.version))
+      o["format"] = e.version;
     out.as_array().push_back(item);
   }
   return out;
@@ -558,6 +560,15 @@ int main(int argc, char **argv) {
               ui.homePointer(1, x1 + (x2 - x1) * step / 10, y, step * 20);
             ui.homePointer(2, x2, y, 200);
           }
+        } else if (action.find("vdrag:") == 0) {
+          // vdrag:x:y1:y2  a vertical swipe on the front screen, 200 ms long.
+          int x, y1, y2;
+          if (std::sscanf(action.c_str(), "vdrag:%d:%d:%d", &x, &y1, &y2) == 3) {
+            ui.homePointer(0, x, y1, 0);
+            for (int step = 1; step <= 10; ++step)
+              ui.homePointer(1, x, y1 + (y2 - y1) * step / 10, step * 20);
+            ui.homePointer(2, x, y2, 200);
+          }
         } else if (action.find("sample:") == 0) {
           // sample:BUTTONS:LX:LY:RX:RY[:FX:FY]  what the controls test would read
           // from the Vita: a button bit mask, sticks, and one front touch.
@@ -570,6 +581,10 @@ int main(int argc, char **argv) {
             if (fx >= 0)
               ui.controlsSample.front = {{0, fx, fy}};
           }
+        } else if (action.find("sleep:") == 0) {
+          // sleep:MS  draw, then let MS of real time pass (timed animations).
+          view.draw(ui);
+          std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(action.c_str() + 6)));
         } else if (action == "wait-art") {
           // Let an artwork download finish (up to two minutes).
           for (int i = 0; i < 1200 && ui.artFetch && ui.artFetch->running() && ui.home.panel != Home::Artwork; ++i) {
@@ -637,7 +652,10 @@ int main(int argc, char **argv) {
       o["homeTarget"] = ui.home.target;
       o["homeZone"] = int(ui.home.zone);
       o["homePanel"] = int(ui.home.panel);
-      o["homeGrid"] = ui.home.grid;
+      o["homeGrid"] = ui.home.grid();
+      o["homeView"] = ui.home.view;
+      o["startView"] = ui.startView;
+      o["listScroll"] = ui.listScroll;
       o["homeDetails"] = ui.home.details;
       o["homeShotFocus"] = ui.home.shotFocus;
       o["homeViewing"] = ui.home.viewing;

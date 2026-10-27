@@ -553,6 +553,53 @@ Json parseGameIni(const std::string &text) {
   }
   return result;
 }
+// RPG Maker MV or MZ, from the files an HTML5 deployment always has: MV's
+// js/rpg_core.js or MZ's js/rmmz_core.js, at the top (MZ, and MV for the
+// web) or under www/ (MV for Windows and Mac). list gives a subfolder's files.
+int webGameVersion(const std::vector<File> &fs, const std::function<std::vector<File>(const std::string &)> &list) {
+  bool www = false, js = false, page = false;
+  for (const auto &f : fs) {
+    auto name = lower(f.name);
+    if (f.directory && name == "www")
+      www = true;
+    else if (f.directory && name == "js")
+      js = true;
+    else if (!f.directory && (name == "index.html" || name == "package.json"))
+      page = true;
+  }
+  if (!www && !(js && page))
+    return 0;
+  try {
+    for (const auto &f : list(www ? "www/js" : "js")) {
+      auto name = lower(f.name);
+      if (name == "rmmz_core.js")
+        return formatMZ;
+      if (name == "rpg_core.js")
+        return formatMV;
+    }
+  } catch (const std::exception &) {
+  }
+  return 0;
+}
+// The title an MV or MZ game gives its window in package.json, or "".
+std::string webGameTitle(const std::function<std::string(const std::string &)> &read) {
+  for (auto name : {"package.json", "www/package.json"})
+    try {
+      auto text = read(name);
+      if (text.empty())
+        continue;
+      auto json = json5pp::parse(text);
+      auto &o = json.as_object();
+      auto window = o.find("window");
+      if (window != o.end() && window->second.is_object()) {
+        auto title = jsonString(window->second, "title");
+        if (!title.empty())
+          return title;
+      }
+    } catch (const std::exception &) {
+    }
+  return "";
+}
 int gameVersion(const Json &v, const std::vector<File> &fs) {
   auto lib = lower(jsonString(v, "library"));
   auto scripts = lower(jsonString(v, "scripts"));
@@ -637,6 +684,8 @@ int zipGameVersion(const Node &node) {
       std::vector<std::string> folders;
       if (gameVersion(object(), fs) == 4)
         return 4;
+      if (int web = webGameVersion(fs, [&](const std::string &sub) { return archive.files(inner.empty() ? sub : join(inner, sub)); }))
+        return web;
       for (auto &f : fs) {
         if (f.name[0] == '.' || f.name == "__MACOSX")
           continue;
@@ -674,7 +723,7 @@ void loadZipScans() {
       if (f.size() != 6)
         continue;
       int version = std::atoi(f[5].c_str());
-      if (version >= 1 && version <= 4 && zipScans.size() < 512)
+      if (version >= 1 && version <= formatMZ && zipScans.size() < 512)
         zipScans[f[0] + "\t" + f[1]] = {std::atoll(f[2].c_str()), std::atoll(f[3].c_str()),
                                         std::atoll(f[4].c_str()), version};
     }
@@ -760,8 +809,27 @@ bool game(const Node &node, Entry &result) {
   }
   auto fs = node.files();
   auto ini = gameIniName(fs, [&](const std::string &name) { return node.read(name); });
-  if (ini.empty() && gameVersion(object(), fs) != 4)
-    return false;
+  if (ini.empty() && gameVersion(object(), fs) != 4) {
+    int web = webGameVersion(fs, [&](const std::string &sub) {
+      Node n = node;
+      for (auto &part : split(sub, '/'))
+        n = n.child(part);
+      return n.files();
+    });
+    if (!web)
+      return false;
+    auto title = scrubUtf8(webGameTitle([&](const std::string &name) {
+      try {
+        return node.read(name);
+      } catch (const std::exception &) {
+        return std::string();
+      }
+    }));
+    if (title.empty())
+      title = basename(node.inner.empty() ? node.path() : node.inner);
+    result = {title, Kind::Game, node, web};
+    return true;
+  }
   auto v = ini.empty() ? object() : parseGameIni(node.read(ini));
   int version = gameVersion(v, fs);
   if (!version)

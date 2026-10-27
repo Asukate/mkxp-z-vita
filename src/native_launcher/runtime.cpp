@@ -1,5 +1,6 @@
 #include "runtime.h"
 #include "launcher_audio.h"
+#include "launcher_bench.h"
 #include "text_input.h"
 #include "view.h"
 #include "vita_proto_launcher.h"
@@ -256,6 +257,9 @@ public:
       solidLocation = glGetUniformLocation(quadProgram, "solid");
       quadTextureLocation = glGetUniformLocation(quadProgram, "image");
       const GLfloat square[] = {0, 0, 0, 1, 1, 0, 1, 1};
+#ifdef __vita__
+      vitaStartupTimerMark("launcher_shaders_linked");
+#endif
       glGenBuffers(1, &unitSquare);
       glBindBuffer(GL_ARRAY_BUFFER, unitSquare);
       glBufferData(GL_ARRAY_BUFFER, sizeof(square), square, GL_STATIC_DRAW);
@@ -356,7 +360,7 @@ public:
     for (auto &q : v.scene) {
       if (q.w <= 0 || q.h <= 0 || q.alpha <= 0.002f)
         continue;
-      bool clip = q.clipTop > 0 || q.clipBottom < 544;
+      bool clip = q.clipTop > 0 || q.clipBottom < 544 || q.clipLeft > 0 || q.clipRight < 960;
       if (clip != scissor) {
         if (clip)
           glEnable(GL_SCISSOR_TEST);
@@ -365,7 +369,7 @@ public:
         scissor = clip;
       }
       if (clip)
-        glScissor(0, 544 - q.clipBottom, 960, q.clipBottom - q.clipTop);
+        glScissor(q.clipLeft, 544 - q.clipBottom, q.clipRight - q.clipLeft, q.clipBottom - q.clipTop);
       if (q.image) {
         if (q.image->empty())
           continue;
@@ -654,6 +658,7 @@ int runNativeLauncher(bool returning) {
     // worker thread while the screen starts and the splash is up. Until
     // loadHome() joins it, this thread touches no library state.
     UI ui({}, returning);
+    vitaStartupTimerMark("launcher_ui_built");
     struct LibraryScan {
       UI *ui;
       std::string error;
@@ -663,6 +668,7 @@ int runNativeLauncher(bool returning) {
         } catch (const std::exception &e) {
           error = e.what();
         }
+        vitaStartupTimerMark("launcher_scan_done");
       }
       static int run(SceSize, void *argument) {
         (*static_cast<LibraryScan **>(argument))->work();
@@ -685,11 +691,19 @@ int runNativeLauncher(bool returning) {
     UI ui;
 #endif
     UpdateCheck update;
+    bool releaseStarted = false;
+#ifdef HARDRPG_LAUNCHER_BENCH
+    LauncherBench bench;
+    bench.load();
+#endif
     // The library is read while the splash is up (a cold start) instead of
     // before the screen shows anything; the splash lasts only that long.
     // Returning from a game has no splash.
     bool homeLoaded = false;
     const bool startRelease = !returning;
+    // The list view starts nothing it does not show: its release check
+    // waits until the player has been idle a while (see the home loop).
+    bool releaseDeferred = false;
     auto loadHome = [&] {
 #ifdef __vita__
       if (scanThread >= 0) {
@@ -703,14 +717,24 @@ int runNativeLauncher(bool returning) {
       try {
         ui.model.settleActivity(returning);
         ui.loadHome();
+#ifdef HARDRPG_LAUNCHER_BENCH
+        bench.apply(ui);
+        bench.mark("library_ready");
+#endif
       } catch (const std::exception &e) {
         ui.message = e.what();
       }
 #ifdef __vita__
       vitaStartupTimerMark("launcher_library_ready");
 #endif
-      if (startRelease && ui.automaticUpdates)
-        update.start();
+      if (startRelease && ui.automaticUpdates) {
+        if (ui.home.list())
+          releaseDeferred = true;
+        else {
+          update.start();
+          releaseStarted = true;
+        }
+      }
 #ifdef __vita__
       ui.model.backendAvailable = [](const Engine &engine) {
         FILE *f = std::fopen(engine.executable, "rb");
@@ -748,6 +772,9 @@ int runNativeLauncher(bool returning) {
       Input input;
       {
         Presenter presenter;
+#ifdef __vita__
+        vitaStartupTimerMark("launcher_presenter_ready");
+#endif
 #ifdef __vita__
         // The keyboard is drawn over the screen each frame; every screen
         // is a GPU scene, redrawn as is under it.
@@ -809,6 +836,9 @@ int runNativeLauncher(bool returning) {
             // splash stays on screen.
             view.splash("app0:/stub/Graphics/Pictures/hardrpg-splash.png");
             presenter.show(view, true);
+#ifdef __vita__
+            vitaStartupTimerMark("launcher_splash_shown");
+#endif
             auto start = SDL_GetTicks();
             if (!homeLoaded)
               loadHome();
@@ -826,15 +856,6 @@ int runNativeLauncher(bool returning) {
         if (!homeLoaded)
           loadHome();
         returning = true;
-#ifdef __vita__
-        if (!audio.start("app0:/sfx"))
-          std::fprintf(stderr, "Launcher audio unavailable\n");
-#endif
-        audio.setLevels(ui.effectsVolume, ui.musicVolume);
-        // Found title tracks are kept in cache/themes; every listed game's is
-        // found in the background, so it is ready before it is highlighted.
-        audio.search(ui.model.paths.at("cache/themes"), ui.rtpFolders());
-        audio.prepare(ui.themeSources());
         // The title music follows the highlighted game once it has stayed
         // there a moment, so scrolling past games does not start each one.
         std::string themeWanted, themeAsked;
@@ -844,6 +865,25 @@ int runNativeLauncher(bool returning) {
         present(true);
 #ifdef __vita__
         vitaStartupTimerMark("launcher_list_shown");
+#endif
+#ifdef HARDRPG_LAUNCHER_BENCH
+        bench.shown();
+#endif
+        // Sounds are decoded and the music finder set up once the library
+        // shows, so they do not hold up its first frame.
+#ifdef __vita__
+        if (!audio.start("app0:/sfx"))
+          std::fprintf(stderr, "Launcher audio unavailable\n");
+#endif
+        audio.setLevels(ui.effectsVolume, ui.musicVolume);
+        // Found title tracks are kept in cache/themes; every listed game's is
+        // found in the background, so it is ready before it is highlighted.
+        // The list view plays none: themeSources() is empty there.
+        bool rtpSearched = !ui.home.list();
+        audio.search(ui.model.paths.at("cache/themes"), rtpSearched ? ui.rtpFolders() : std::vector<std::string>{});
+        audio.prepare(ui.themeSources());
+#ifdef HARDRPG_LAUNCHER_BENCH
+        bench.mark("audio_ready");
 #endif
         uint32_t progressAt = 0;
         ui.progressPump = [&] {
@@ -889,17 +929,32 @@ int runNativeLauncher(bool returning) {
         bool gameInfoStarted = false;
         while (!quit && !ui.exitRequested && !ui.launchRequested) {
           auto button = input.poll(quit);
+#ifdef HARDRPG_LAUNCHER_BENCH
+          if (button == Button::None)
+            button = bench.next(ui, view.artLoaderActive());
+          if (bench.done()) {
+            bench.report(ui, view, view.artLoaderActive(), releaseStarted, releaseDeferred, gameInfoStarted);
+            ui.exitRequested = true;
+            break;
+          }
+#endif
           bool touched = input.touch(ui);
           bool serviced = false;
           if (button != Button::None || touched)
             lastInputAt = SDL_GetTicks();
           // New games' game info, once the player has settled on the home
           // screen: a quiet lookup on another core (see UI::fetchArtAutomatically).
-          if (!gameInfoStarted && ui.homeActive() && !ui.welcome.active && SDL_GetTicks() - lastInputAt > 2000) {
+          // The list view shows none, so it looks nothing up.
+          if (!gameInfoStarted && ui.homeActive() && !ui.home.list() && !ui.welcome.active && SDL_GetTicks() - lastInputAt > 2000) {
             gameInfoStarted = true;
             ui.fetchArtAutomatically();
           }
-          if(ui.checkReleaseRequested) {update.start();ui.checkReleaseRequested=false;}
+          if (releaseDeferred && ui.homeActive() && SDL_GetTicks() - lastInputAt > 5000) {
+            releaseDeferred = false;
+            update.start();
+            releaseStarted = true;
+          }
+          if(ui.checkReleaseRequested) {releaseDeferred=false;update.start();ui.checkReleaseRequested=false;}
           ReleaseNotice notice;
           bool retrieved = false;
           if(update.poll(notice, &retrieved)) {
@@ -917,6 +972,9 @@ int runNativeLauncher(bool returning) {
 #endif
           if (button == Button::None && !touched)
             serviced = ui.service() || serviced;
+#ifdef HARDRPG_LAUNCHER_BENCH
+          serviced = bench.takeRedraw() || serviced;
+#endif
           serviced = ui.pollArt() || serviced;
           uint32_t now = SDL_GetTicks();
           double dt = std::min(0.05, (now - lastFrame) / 1000.0);
@@ -936,6 +994,11 @@ int runNativeLauncher(bool returning) {
           if (now - themeCheckedAt >= 100 || button != Button::None || touched) {
             themeCheckedAt = now;
             audio.setLevels(ui.effectsVolume, ui.musicVolume);
+            if (!rtpSearched && !ui.home.list()) {
+              // Left the list: the music finder gets the RTP folders now.
+              rtpSearched = true;
+              audio.search(ui.model.paths.at("cache/themes"), ui.rtpFolders());
+            }
             auto folder = ui.themeFolder();
             if (folder != themeWanted) {
               themeWanted = folder;
@@ -978,6 +1041,9 @@ int runNativeLauncher(bool returning) {
               auto shown = SDL_GetPerformanceCounter();
               double f = double(SDL_GetPerformanceFrequency()) / 1000;
               double total = (shown - actionStart) / f;
+#ifdef HARDRPG_LAUNCHER_BENCH
+              bench.frame(total, button != Button::None, view.pendingLoads);
+#endif
               if (total > 50 && slowLogged < 30) {
                 ++slowLogged;
                 std::fprintf(stderr, "Launcher slow frame: %.0f ms (input %.0f, draw %.0f, present %.0f) button=%d\n",
