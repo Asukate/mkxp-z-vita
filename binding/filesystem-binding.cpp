@@ -29,6 +29,10 @@
 #include "data-stream.h"
 #include <climits>
 
+#ifdef __vita__
+#include <psp2/kernel/sysmem.h>
+#endif
+
 #if RAPI_FULL > 187
 #include "ruby/encoding.h"
 #include "ruby/intern.h"
@@ -164,32 +168,100 @@ RB_METHOD(fileIntPos) {
 
 /* A big data file, such as an RPG Maker map with hundreds of events, turns
  * into a million or more Ruby objects (Hylics map 28 is 7.5 MB on disk and
- * about 50 MB in memory). When it is loaded, the map loaded before it is
- * usually garbage already, but Ruby has not collected it yet and grows the
- * heap for the new objects first. On the Vita's fixed heap the two maps do
- * not fit together, so collect before loading.
- * Nearly everything the load creates stays alive, so collections during it
- * only re-mark the growing map (about 2 of the 6 seconds that map 28 takes
- * on the Vita). Pause the collector until the load is done. */
+ * about 50 MB in memory). For such a file:
+ * - Collect first. The map loaded before it is usually garbage already, but
+ *   Ruby has not collected it yet and would grow the heap for the new
+ *   objects first; on the Vita's fixed heap the two maps do not fit together.
+ * - Pause the collector during the load. Nearly everything the load creates
+ *   stays alive, so collections only re-mark the growing map (about 2 of
+ *   the 6 seconds map 28 takes on the Vita).
+ * - On the Vita, read the file into a kernel memory block instead of a Ruby
+ *   string, so the heap never needs the whole file in one contiguous piece.
+ *   Marshal copies every string it keeps, so the block is freed right after
+ *   the load. */
 static const Sint64 kLoadDataCollectBytes = 1024 * 1024;
 
-static VALUE fileIntMarshalLoad(VALUE data) {
+struct BigLoad {
+    VALUE data;
+    bool gcPaused;
+#ifdef __vita__
+    SceUID block;
+#endif
+};
+
+static VALUE fileIntMarshalLoad(VALUE arg) {
+    VALUE data = reinterpret_cast<BigLoad *>(arg)->data;
     VALUE marsh = rb_const_get(rb_cObject, rb_intern("Marshal"));
     return rb_funcall2(marsh, rb_intern("load"), 1, &data);
 }
-static VALUE fileIntEnableGC(VALUE) {
-    rb_gc_enable();
+static VALUE fileIntEndBigLoad(VALUE arg) {
+    BigLoad *load = reinterpret_cast<BigLoad *>(arg);
+    if (load->gcPaused)
+        rb_gc_enable();
+#ifdef __vita__
+    if (load->block >= 0) {
+        /* Nothing may read the block once it is freed. */
+        rb_str_set_len(load->data, 0);
+        sceKernelFreeMemBlock(load->block);
+    }
+#endif
     return Qnil;
 }
 
+#ifdef __vita__
+static SceUID fileIntReadBlock(DataStream *stream, Sint64 size, VALUE *data) {
+    const SceSize whole = (SceSize(size) + 4095u) & ~4095u;
+    SceUID block = sceKernelAllocMemBlock("hardrpg_load_data", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, whole, NULL);
+    void *base = NULL;
+    if (block < 0)
+        return block;
+    if (sceKernelGetMemBlockBase(block, &base) < 0 || !base) {
+        sceKernelFreeMemBlock(block);
+        return -1;
+    }
+    /* Once reading has started, the plain path can no longer read the whole file. */
+    if (stream->read(base, size_t(size)) != size_t(size)) {
+        sceKernelFreeMemBlock(block);
+        rb_raise(rb_eIOError, "short read of a %lld byte data file", (long long)size);
+    }
+    VALUE args[2] = {reinterpret_cast<VALUE>(base), VALUE(size)};
+    int state = 0;
+    *data = rb_protect([](VALUE a) -> VALUE {
+        const VALUE *v = reinterpret_cast<const VALUE *>(a);
+        return rb_str_new_static(reinterpret_cast<const char *>(v[0]), long(v[1]));
+    }, reinterpret_cast<VALUE>(args), &state);
+    if (state) {
+        sceKernelFreeMemBlock(block);
+        rb_jump_tag(state);
+    }
+    return block;
+}
+#endif
+
 static VALUE fileIntLoad(VALUE port) {
-    bool big = getPrivateData<DataStream>(port)->remaining() >= kLoadDataCollectBytes;
-    if (big)
-        rb_gc_start();
-    VALUE data = fileIntRead(0, nullptr, port);
-    if (!big || RTEST(rb_gc_disable()))
-        return fileIntMarshalLoad(data);
-    return rb_ensure(fileIntMarshalLoad, data, fileIntEnableGC, Qnil);
+    DataStream *stream = getPrivateData<DataStream>(port);
+    Sint64 size = stream->remaining();
+    BigLoad load;
+    load.gcPaused = false;
+#ifdef __vita__
+    load.block = -1;
+#endif
+    if (size < kLoadDataCollectBytes) {
+        load.data = fileIntRead(0, nullptr, port);
+        return fileIntMarshalLoad(reinterpret_cast<VALUE>(&load));
+    }
+    rb_gc_start();
+#ifdef __vita__
+    if (size <= INT_MAX)
+        load.block = fileIntReadBlock(stream, size, &load.data);
+    if (load.block < 0)
+#endif
+        load.data = fileIntRead(0, nullptr, port);
+    load.gcPaused = !RTEST(rb_gc_disable());
+    VALUE result = rb_ensure(fileIntMarshalLoad, reinterpret_cast<VALUE>(&load),
+                             fileIntEndBigLoad, reinterpret_cast<VALUE>(&load));
+    RB_GC_GUARD(load.data);
+    return result;
 }
 static VALUE fileIntRaw(VALUE port) {
     return fileIntRead(0, nullptr, port);
