@@ -1,6 +1,6 @@
 # Game compatibility
 
-Results from testing on a real PS Vita with HardRPG **0.4.0 Alpha**. Games
+Results from testing on a real PS Vita with HardRPG **0.4.5 Alpha**. Games
 change between versions and editions, so your copy may behave differently.
 "Runs" means the game has been played on the Vita.
 
@@ -19,14 +19,14 @@ those games are still possible.
 | Game | Engine | Status | Notes |
 | --- | --- | --- | --- |
 | BLACK SOULS | VX Ace | ✅ Runs | |
-| BLACK SOULS II | VX Ace | ✅ Runs | |
+| BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). |
 | Ao Oni | XP | ✅ Runs | Played from start to finish. |
 | The Witch's House | VX | ✅ Runs | |
 | To the Moon | XP | ✅ Runs | Slowdowns in some areas. |
 | LISA: The Painful | VX Ace | ✅ Runs | Map W/A/S/D for combo attacks in Controls. |
 | FNaF b Final Mix | VX Ace | ✅ Runs | |
 | Red Hood's Woods | VX Ace | ✅ Runs | |
-| Hylics | VX Ace | ✅ Runs | Slowdowns in some areas. |
+| Hylics | VX Ace | ✅ Runs | Faster since 0.4.5, still slow in some areas. Crystal Beach takes about 13 seconds to load. |
 | Mogeko Castle (English VX Ace edition) | VX Ace | ✅ Runs | |
 | The Endless Empty | VX Ace | ✅ Runs | |
 | VorlorN | XP | ✅ Runs | |
@@ -46,7 +46,7 @@ These run through the bundled EasyRPG Player.
 
 > [!WARNING]
 > **Pokémon Essentials games are a work in progress** and are not playable in
-> 0.4.0. Development builds already open some of them; they still need
+> 0.4.5. Development builds already open some of them; they still need
 > performance work and game-specific fixes.
 
 | Game | Engine | Status | Notes |

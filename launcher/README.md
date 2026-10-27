@@ -1,6 +1,6 @@
 # HardRPG launcher
 
-The home screen is a carousel of the library's games. **HardRPG 0.4.0 Alpha**
+The home screen shows the library's games as a carousel, a grid or a list. **HardRPG 0.4.5 Alpha**
 uses a C++ launcher (`src/native_launcher/`); XP, VX and VX Ace games run in
 the RGSS engine and 2000/2003 games in EasyRPG. Starting a game restarts the
 engine into its folder. About (the i icon) shows the version, author,
@@ -69,7 +69,7 @@ always remains available. Extra paths persist in `game-folders.txt`; removing a
 reference with Square does not delete games or saves. Start's existing scan/add
 browser still adds references to individual games through `library-paths.txt`.
 
-ZIP games are listed, but 0.4.0 does not unpack them: on the Vita that took
+ZIP games are listed, but HardRPG (since 0.4.0) does not unpack them: on the Vita that took
 minutes even for a small game and doubled its space. Starting a ZIP game that
 has no unpacked copy asks for it to be unzipped first; a 2000/2003 RTP ZIP
 likewise. Copies unpacked by earlier versions keep working as described below

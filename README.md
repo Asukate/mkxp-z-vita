@@ -165,7 +165,18 @@ terminal in that folder and run the lines for your engine:
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.4.0 Alpha** is the current release. New in 0.4:
+**0.4.5 Alpha** is the current release. New in 0.4.5:
+
+- **Crash rescue:** if a game stops, starting it again offers to resume at the
+  last map change or battle start. Your saves are never touched.
+- **Fewer crashes:** long BLACK SOULS II sessions and Hylics' Crystal Beach no
+  longer run out of memory.
+- **Faster VX Ace maps** in games that use the default or popular map scripts.
+- **List view** in the library, and a setting for the view it opens in.
+
+Full list: [0.4.5 release notes](docs/RELEASE-NOTES-0.4.5.md).
+
+New in 0.4:
 
 - **A new library:** a carousel of your games with covers, backgrounds,
   details and screenshots, downloaded automatically in the background.
@@ -189,7 +200,7 @@ Full list: [0.4.0 release notes](docs/RELEASE-NOTES-0.4.0.md).
 | Triangle | Options: favourite, artwork, game settings, rename |
 | Square | Show or hide the details |
 | Down (in details) | Screenshots; Cross shows one full screen |
-| Up | Toolbar: grid view, engine tabs, search, sort and filter |
+| Up | Toolbar: view (carousel, grid or list), engine tabs, search, sort and filter |
 | L / R | Show only one engine (XP, VX, Ace, 2000/2003) |
 | Select | Search by name |
 | Start | Open the folder browser |
@@ -214,7 +225,7 @@ Highlight a game, press **Triangle**, then **Game settings**:
 - **Display:** aspect ratio, scaling and filtering.
 - **Audio and MIDI:** sound, MIDI reverb and chorus.
 - **Performance and speed:** an in-game overlay (FPS, frame timing, or full
-  stats with CPU, memory and battery) and fast forward.
+  stats with CPU, memory and battery), fast forward and crash rescue.
 - **Rename**, **Game information** and **Play**.
 - **Remove from library:** takes the game off the list, then asks whether to
   delete its files too (and, for a ZIP game, its unpacked copy). The answer
@@ -289,6 +300,11 @@ fine.
 When a game stops with an error, HardRPG shows the error when you return to the
 library. You can find it again in **Settings → Game error history**, and press
 **Square** to export it as a file.
+
+With **crash rescue** on (the default for XP, VX and VX Ace games), starting
+the game again offers to resume where it was at the last map change or battle
+start. The copy is kept in `ux0:/data/hardrpg/rescue/` and never replaces your
+saves.
 
 To report a problem, [open an issue](https://github.com/Asukate/mkxp-z-vita/issues)
 and include:
@@ -401,6 +417,8 @@ Games, captured on a PS Vita running HardRPG 0.3.0:
     </td>
   </tr>
 </table>
+
+<!-- 3c502d0ac801c3adff4f08336b58f4196e9a09ec7a36b44b371934e9b8c6ca2b -->
 
 ## Building
 
