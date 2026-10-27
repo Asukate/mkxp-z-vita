@@ -394,6 +394,47 @@ static bool vitaUser32Call(VALUE function, VALUE args, VALUE *result) {
     return false;
 }
 
+/* For the native script paths (native-events.cpp): what a MiniFFI object calls on the Vita
+ * (1: user32 GetAsyncKeyState/GetKeyState with one argument, 2: user32 GetKeyboardState with
+ * one argument, 0: anything else), the key state those calls read, and a DL::CPtr's buffer. */
+static VALUE g_miniFFIClass = Qnil;
+int hardrpgMiniFFIKeyKind(VALUE obj) {
+    if (NIL_P(g_miniFFIClass) || !rb_obj_is_kind_of(obj, g_miniFFIClass) || !RTEST(rb_iv_get(obj, "_dummy")))
+        return 0;
+    VALUE imports = rb_iv_get(obj, "_imports");
+    VALUE libv = rb_iv_get(obj, "_libname");
+    VALUE funcv = rb_iv_get(obj, "_funcname");
+    if (!RB_TYPE_P(imports, T_ARRAY) || RARRAY_LEN(imports) != 1 || !RB_TYPE_P(libv, T_STRING) ||
+        !RB_TYPE_P(funcv, T_STRING))
+        return 0;
+    std::string library(RSTRING_PTR(libv), RSTRING_LEN(libv));
+    auto slash = library.find_last_of("/\\");
+    if (slash != std::string::npos) library.erase(0, slash + 1);
+    for (char &character : library)
+        if (character >= 'A' && character <= 'Z')
+            character += 'a' - 'A';
+    if (library != "user32.dll" && library != "user32")
+        return 0;
+    std::string name(RSTRING_PTR(funcv), RSTRING_LEN(funcv));
+    if (name.size() != strlen(name.c_str()))
+        return 0;
+    if (name == "GetAsyncKeyState" || name == "GetKeyState")
+        return 1;
+    if (name == "GetKeyboardState")
+        return 2;
+    return 0;
+}
+bool hardrpgVitaKeyPressed(unsigned int key) { return vitaVKPressed(key); }
+unsigned char *hardrpgDLData(VALUE obj, size_t *size) {
+    if (NIL_P(vitaDLPointerClass) || rb_class_of(obj) != vitaDLPointerClass)
+        return nullptr;
+    VitaDLPointer *ptr = vitaDLGet(obj);
+    if (!ptr || !ptr->data)
+        return nullptr;
+    *size = ptr->size;
+    return ptr->data;
+}
+
 static void vitaDLBindingInit() {
     VALUE dl = rb_define_module("DL");
     vitaDLPointerClass = rb_define_class_under(dl, "CPtr", rb_cObject);
@@ -525,6 +566,9 @@ RB_METHOD_GUARD_END
 
 void MiniFFIBindingInit() {
     VALUE cMiniFFI = rb_define_class("MiniFFI", rb_cObject);
+#if defined(__vita__) || defined(__psp2__)
+    g_miniFFIClass = cMiniFFI;
+#endif
 #if RAPI_FULL > 187
     rb_define_alloc_func(cMiniFFI, classAllocate<&MiniFFIType>);
 #else

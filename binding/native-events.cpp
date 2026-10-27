@@ -173,6 +173,9 @@ enum SlotId {
     S_GM_screen_tile_x, S_GM_screen_tile_y, S_GM_update_events,
     /* Game_Map autorun scan, Game_Vehicle, RPG::CommonEvent (engine Ruby), Enumerable#find on Array */
     S_GM_setup_autorun_common_event, S_GVH_screen_y, S_GVH_altitude, S_CE_autorun, S_ENUM_find,
+    /* Galv's Region Effects wrappers, DMO screen_z wrapper (alias names), keyboard scripts on Input */
+    S_H_GM_ue_galv, S_H_SM_uc_galv, S_H_GCB_sz_dmo, S_IN_update_hime, S_IN_update_zale,
+    S_FFI_call, S_DL_aref, S_DL_to_i, S_HSH_aref, S_HSH_aset, S_HSH_each_value, S_ARY_any,
     /* RPG data attributes (engine Ruby module) */
     S_MAP_scroll_type, S_MAP_width, S_MAP_height, S_EVENT_id,
     /* Sprite_Base */
@@ -475,7 +478,9 @@ static ID id_update_symbol_reaction, id_update_symbol_movement, id_zero, id_trun
     id_reset_sprite_effects, id_is_a, id_MOVE_CONTROL, id_DASH_PLUS, id_MOG_ANTI_LAG,
     id_UPDATE_OUT_SCREEN_RANGE, id_Game_Event, id_Calt, id_LAYER_UP_TILE, id_LAYER_DOWN_TILE,
     id_star_aura_effect, id_star_aura_effect_update_set, id_nev_aura_tail, id_autorun, id_switch_id,
-    id_list;
+    id_list, id_each, id_each_value, id_GetKeyboardState, id_DOWN_STATE_MASK, id_Keys_To_Check,
+    id_th_update, id_Keys, id_AKEY, id_zale_update, iv_r_events, iv_region_sprites, iv_dmo_screen_z,
+    iv_state, iv_any_key_pressed, iv_pressed, iv_triggers, iv_released, iv_timer;
 static ID gv_game_map, gv_data_animations, gv_game_variables, gv_game_system, gv_game_temp,
     gv_data_common_events, gv_game_switches;
 static VALUE g_spriteBase = Qnil, g_graphics = Qnil;
@@ -998,6 +1003,137 @@ static VALUE ge_near_the_screen_yanfly(VALUE self, int argc, const VALUE *argv, 
     return rbool(nGe(ax, nNeg(dx)) && nLe(ax, dx) && nGe(ay, nNeg(dy)) && nLe(ay, dy));
 }
 
+/* LISA's Game_CharacterBase#shift_y: object_character? ? 0 : 0 */
+static VALUE gcb_shift_y_lisa(VALUE self, int, const VALUE *, bool) {
+    call0(self, S_GCB_object_character);
+    return INT2FIX(0);
+}
+
+/* DMO Parallax Animation's Game_CharacterBase#screen_z (alias dmo_al_screen_z):
+ *   return dmo_al_screen_z if !value && !@dmo_screen_z
+ *   @dmo_screen_z || (value && @dmo_screen_z = value)
+ *   return @dmo_screen_z                                               */
+static VALUE gcb_screen_z_dmo(VALUE self, int argc, const VALUE *argv, bool) {
+    checkArity(argc, 0, 1);
+    VALUE value = argc > 0 ? argv[0] : Qnil;
+    if (!RTEST(value) && !RTEST(IV(self, dmo_screen_z)))
+        return call0(self, S_H_GCB_sz_dmo);
+    if (!RTEST(IV(self, dmo_screen_z)) && RTEST(value))
+        SETIV(self, dmo_screen_z, value);
+    return IV(self, dmo_screen_z);
+}
+
+/* ------------------------------------------------------------------ */
+/* Keyboard scripts on Input (Vita: user32 key calls read SDL state)   */
+
+int hardrpgMiniFFIKeyKind(VALUE obj);
+bool hardrpgVitaKeyPressed(unsigned int key);
+unsigned char *hardrpgDLData(VALUE obj, size_t *size);
+
+static bool ffiKey(VALUE obj, int kind) {
+    return slotOk(g_slots[S_FFI_call], rb_class_of(obj)) && hardrpgMiniFFIKeyKind(obj) == kind;
+}
+static inline bool plainHash(VALUE h) { return RB_TYPE_P(h, T_HASH) && rb_class_of(h) == rb_cHash; }
+static inline bool plainArray(VALUE a) { return RB_TYPE_P(a, T_ARRAY) && rb_class_of(a) == rb_cArray; }
+/* a == b for true/false/nil/Integer as Ruby answers it (identity), else through Ruby. */
+static inline bool eqImm(VALUE a, VALUE b) {
+    return RB_SPECIAL_CONST_P(a) ? a == b : RTEST(rb_funcall(a, id_eq, 1, b));
+}
+
+/* Hime's Any Key Pressed Check, Input.update:
+ *   th_any_key_pressed_check_update
+ *   GetKeyboardState.call(@state.to_i)
+ *   @any_key_pressed = Keys_To_Check.any?{|key| @state[key] & DOWN_STATE_MASK == DOWN_STATE_MASK} */
+static VALUE in_update_hime(VALUE self, int, const VALUE *, bool) {
+    if (!(rb_const_defined_at(self, id_GetKeyboardState) && rb_const_defined_at(self, id_DOWN_STATE_MASK) &&
+          rb_const_defined_at(self, id_Keys_To_Check)))
+        return callOrig(self, S_IN_update_hime, 0, nullptr);
+    VALUE gks = rb_const_get_at(self, id_GetKeyboardState);
+    VALUE mask = rb_const_get_at(self, id_DOWN_STATE_MASK);
+    VALUE keys = rb_const_get_at(self, id_Keys_To_Check);
+    VALUE state = rb_ivar_get(self, iv_state);
+    size_t size = 0;
+    unsigned char *data = hardrpgDLData(state, &size);
+    bool ok = data && size >= 256 && FIXNUM_P(mask) && ffiKey(gks, 2) &&
+              slotOk(g_slots[S_DL_aref], rb_class_of(state)) && slotOk(g_slots[S_DL_to_i], rb_class_of(state)) &&
+              plainArray(keys) && slotOk(g_slots[S_ARY_any], rb_cArray);
+    for (long i = 0; ok && i < RARRAY_LEN(keys); ++i) {
+        VALUE k = RARRAY_AREF(keys, i);
+        ok = FIXNUM_P(k) && FIX2LONG(k) >= 0 && (size_t)FIX2LONG(k) < size;
+    }
+    if (!ok)
+        return callOrig(self, S_IN_update_hime, 0, nullptr);
+    rb_funcall(self, id_th_update, 0);
+    for (unsigned int k = 0; k < 256; ++k)
+        data[k] = hardrpgVitaKeyPressed(k) ? 0x80 : 0;
+    long m = FIX2LONG(mask);
+    bool any = false;
+    for (long i = 0; i < RARRAY_LEN(keys); ++i)
+        if (((long)data[FIX2LONG(RARRAY_AREF(keys, i))] & m) == m) {
+            any = true;
+            break;
+        }
+    VALUE r = rbool(any);
+    rb_ivar_set(self, iv_any_key_pressed, r);
+    return r;
+}
+
+/* Zale's Keyboard Manager, Input.update (class << self):
+ *   zale_keyman_input_update_CIO223cjcivoa
+ *   Keys.each_value{ |key|
+ *     @pressed[key]  == nil ? @pressed[key]  = false : nil   (and @triggers, @released; @timer = 30)
+ *     (@pressed[key] == false && AKEY.call(key) != 0) ? @triggers[key] = true : @triggers[key] = false
+ *     (AKEY.call(key) != 0) ? @pressed[key] = true : @pressed[key] = false
+ *     (@pressed[key] == true && AKEY.call(key) == 0) ? @released[key] = true : @released[key] = false
+ *   }
+ * AKEY reads the key state SDL keeps, which nothing changes during the loop. */
+struct ZaleKeys {
+    VALUE p, t, r, m;
+};
+static int zaleKey(VALUE, VALUE key, VALUE arg) {
+    ZaleKeys &z = *(ZaleKeys *)arg;
+    if (eqImm(rb_hash_aref(z.p, key), Qnil)) rb_hash_aset(z.p, key, Qfalse);
+    if (eqImm(rb_hash_aref(z.t, key), Qnil)) rb_hash_aset(z.t, key, Qfalse);
+    if (eqImm(rb_hash_aref(z.r, key), Qnil)) rb_hash_aset(z.r, key, Qfalse);
+    if (eqImm(rb_hash_aref(z.m, key), Qnil)) rb_hash_aset(z.m, key, INT2FIX(30));
+    bool down = hardrpgVitaKeyPressed((unsigned int)FIX2LONG(key));
+    bool wasUp = eqImm(rb_hash_aref(z.p, key), Qfalse);
+    rb_hash_aset(z.t, key, (wasUp && down) ? Qtrue : Qfalse);
+    rb_hash_aset(z.p, key, down ? Qtrue : Qfalse);
+    bool held = eqImm(rb_hash_aref(z.p, key), Qtrue);
+    rb_hash_aset(z.r, key, (held && !down) ? Qtrue : Qfalse);
+    return ST_CONTINUE;
+}
+static int zaleCheckKey(VALUE, VALUE key, VALUE arg) {
+    if (!(FIXNUM_P(key) && FIX2LONG(key) >= 0)) {
+        *(bool *)arg = false;
+        return ST_STOP;
+    }
+    return ST_CONTINUE;
+}
+static VALUE in_update_zale(VALUE self, int, const VALUE *, bool) {
+    VALUE sing = rb_singleton_class(self);
+    /* Constant lookup from `class << self` in module Input: the singleton class, Input, then the
+     * singleton class's ancestors (Zale::Keyboard_Manager is included there). */
+    if (rb_const_defined_at(sing, id_Keys) || rb_const_defined_at(self, id_Keys) || !rb_const_defined(sing, id_Keys) ||
+        rb_const_defined_at(sing, id_AKEY) || !rb_const_defined_at(self, id_AKEY))
+        return callOrig(self, S_IN_update_zale, 0, nullptr);
+    VALUE keys = rb_const_get(sing, id_Keys);
+    VALUE akey = rb_const_get_at(self, id_AKEY);
+    ZaleKeys z{rb_ivar_get(self, iv_pressed), rb_ivar_get(self, iv_triggers), rb_ivar_get(self, iv_released),
+               rb_ivar_get(self, iv_timer)};
+    bool ok = plainHash(keys) && plainHash(z.p) && plainHash(z.t) && plainHash(z.r) && plainHash(z.m) &&
+              slotOk(g_slots[S_HSH_each_value], rb_cHash) && slotOk(g_slots[S_HSH_aref], rb_cHash) &&
+              slotOk(g_slots[S_HSH_aset], rb_cHash) && ffiKey(akey, 1);
+    if (ok)
+        rb_hash_foreach(keys, zaleCheckKey, (VALUE)&ok);
+    if (!ok)
+        return callOrig(self, S_IN_update_zale, 0, nullptr);
+    rb_funcall(self, id_zale_update, 0);
+    rb_hash_foreach(keys, zaleKey, (VALUE)&z);
+    return keys;
+}
+
 /* ------------------------------------------------------------------ */
 /* Sprite_Base / Sprite_Character / Spriteset_Map                      */
 
@@ -1190,6 +1326,38 @@ static VALUE sm_update_characters(VALUE self, int, const VALUE *, bool) {
         return list;
     }
     return callOrig(self, S_SM_update_characters, 0, nullptr);
+}
+
+/* Galv's Region Effects wrappers:
+ *   Game_Map#update_events:       @r_events.each_value {|event| event.update }
+ *                                 galv_region_effects_gm_update_events
+ *   Spriteset_Map#update_characters: galv_region_effect_sm_sb_update_characters
+ *                                 @region_sprites.each { |sprite| sprite.update }    */
+static VALUE updateEventBlock(RB_BLOCK_CALL_FUNC_ARGLIST(ev, arg)) {
+    (void)arg;
+    return call0(ev, S_GE_update);
+}
+static VALUE updateSpriteBlock(RB_BLOCK_CALL_FUNC_ARGLIST(spr, arg)) {
+    (void)arg;
+    return call0(spr, S_SC_update);
+}
+static VALUE gm_update_events_galv(VALUE self, int, const VALUE *, bool) {
+    VALUE r = IV(self, r_events);
+    if (plainHash(r) && slotOk(g_slots[S_HSH_each_value], rb_cHash))
+        rb_hash_foreach(r, updateEachEvent, Qnil);
+    else
+        rb_block_call(r, id_each_value, 0, nullptr, updateEventBlock, Qnil);
+    return call0(self, S_H_GM_ue_galv);
+}
+static VALUE sm_update_characters_galv(VALUE self, int, const VALUE *, bool) {
+    call0(self, S_H_SM_uc_galv);
+    VALUE list = IV(self, region_sprites);
+    if (plainArray(list) && slotOk(g_slots[S_ARY_each], rb_cArray)) {
+        for (long i = 0; i < RARRAY_LEN(list); ++i)
+            call0(RARRAY_AREF(list, i), S_SC_update);
+        return list;
+    }
+    return rb_block_call(list, id_each, 0, nullptr, updateSpriteBlock, Qnil);
 }
 
 
@@ -1531,6 +1699,7 @@ enum { KEEP = -2 };
 #define NDS(slot, var, fn, sup, alt) {slot, var, fn, sup, alt, 0, 0, -1, -1}
 #define NDA(slot, var, fn, sup, lo, hi) {slot, var, fn, sup, -1, lo, hi, -1, -1}
 #define NDW(slot, var, fn, helper, base) {slot, var, fn, KEEP, -1, 0, 0, helper, base}
+#define NDWA(slot, var, fn, helper, base, lo, hi) {slot, var, fn, KEEP, -1, lo, hi, helper, base}
 static const NativeDef g_natives[] = {
     ND(S_GCB_moving, "", gcb_moving, -1),
     ND(S_GCB_jumping, "", gcb_jumping, -1),
@@ -1578,6 +1747,15 @@ static const NativeDef g_natives[] = {
     NDA(S_GM_adjust_y, "jitter", gm_adjust_y_jitter, -1, 1, 1),
     /* Yanfly Ace Core Engine */
     NDA(S_GE_near_the_screen, "yanfly", ge_near_the_screen_yanfly, -1, 0, 2),
+    /* LISA's shift_y; Galv's Region Effects */
+    ND(S_GCB_shift_y, "lisa", gcb_shift_y_lisa, -1),
+    NDW(S_GM_update_events, "galv", gm_update_events_galv, S_H_GM_ue_galv, S_GM_update_events),
+    NDW(S_SM_update_characters, "galv", sm_update_characters_galv, S_H_SM_uc_galv, S_SM_update_characters),
+    /* DMO Parallax Animation's screen_z wrapper */
+    NDWA(S_GCB_screen_z, "dmo", gcb_screen_z_dmo, S_H_GCB_sz_dmo, S_GCB_screen_z, 0, 1),
+    /* keyboard scripts (Hime's Any Key Pressed Check, Zale's Keyboard Manager) */
+    ND(S_IN_update_hime, "hime", in_update_hime, -1),
+    ND(S_IN_update_zale, "zale", in_update_zale, -1),
     ND(S_SB_update, "", sb_update, S_SPR_update),
     ND(S_SB_animation, "", sb_animation, -1),
     ND(S_SB_update_animation, "", sb_update_animation, -1),
@@ -1627,6 +1805,7 @@ static const NativeDef g_natives[] = {
 #undef NDS
 #undef NDA
 #undef NDW
+#undef NDWA
 static constexpr int N_NATIVES = sizeof(g_natives) / sizeof(g_natives[0]);
 
 /* The Ruby method of each native: bound to that native, so an alias a script makes of it
@@ -1656,18 +1835,19 @@ static VALUE instanceMethod(VALUE klass, ID mid) {
 
 /* HardRPGNative.replace(klass, :name, variant): swap in the native method. A wrapper variant
  * also takes the alias it calls (helper slot), which must point to the base slot's native. */
-static VALUE nev_replace(VALUE, VALUE klass, VALUE name, VALUE variant) {
-    const char *cname = rb_class2name(klass);
+static VALUE nev_replace(int argc, VALUE *argv, VALUE) {
+    checkArity(argc, 3, 4);
+    VALUE klass = argv[0], name = argv[1], variant = argv[2];
+    /* The owner's name as STOCK writes it ("Input.self" for Input's singleton class). */
+    const char *cname = argc > 3 && !NIL_P(argv[3]) ? StringValueCStr(argv[3]) : rb_class2name(klass);
     const char *mname = rb_id2name(SYM2ID(name));
     const char *var = StringValueCStr(variant);
-    int slot = slotByName(cname, mname);
-    if (slot < 0)
-        return Qfalse;
     for (int i = 0; i < N_NATIVES; ++i) {
         const NativeDef &d = g_natives[i];
-        if (d.slot != slot || strcmp(d.variant, var))
-            continue;
+        int slot = d.slot;
         Slot &s = g_slots[slot];
+        if (!s.owner_name || strcmp(s.owner_name, cname) || strcmp(s.name, mname) || strcmp(d.variant, var))
+            continue;
         if (d.helper >= 0) {
             Slot &b = g_slots[d.base], &h = g_slots[d.helper];
             if (b.kind != SK_NATIVE || h.kind != SK_NONE)
@@ -1685,7 +1865,8 @@ static VALUE nev_replace(VALUE, VALUE klass, VALUE name, VALUE variant) {
             rb_alias(klass, g_orig[d.helper], s.mid);
             rb_funcall(klass, rb_intern("send"), 2, ID2SYM(rb_intern("private")), ID2SYM(g_orig[d.helper]));
         } else {
-            g_orig[slot] = origId(slot);
+            /* A script variant keeps its own Ruby body apart from the default's. */
+            g_orig[slot] = *var ? rb_intern((std::string("__nev_orig_") + var + "_" + s.name).c_str()) : origId(slot);
             rb_alias(klass, g_orig[slot], s.mid);
             rb_funcall(klass, rb_intern("send"), 2, ID2SYM(rb_intern("private")), ID2SYM(g_orig[slot]));
         }
@@ -1873,6 +2054,13 @@ void nativeEventsInit(int rgssVersion) {
     I(id_star_aura_effect, "star_aura_effect"); I(id_star_aura_effect_update_set, "star_aura_effect_update=");
     I(id_nev_aura_tail, "__nev_aura_tail"); I(gv_game_temp, "$game_temp");
     I(id_autorun, "autorun?"); I(id_switch_id, "switch_id"); I(id_list, "list");
+    I(id_each, "each"); I(id_each_value, "each_value"); I(id_GetKeyboardState, "GetKeyboardState");
+    I(id_DOWN_STATE_MASK, "DOWN_STATE_MASK"); I(id_Keys_To_Check, "Keys_To_Check");
+    I(id_th_update, "th_any_key_pressed_check_update"); I(id_Keys, "Keys"); I(id_AKEY, "AKEY");
+    I(id_zale_update, "zale_keyman_input_update_CIO223cjcivoa"); I(iv_r_events, "@r_events");
+    I(iv_region_sprites, "@region_sprites"); I(iv_dmo_screen_z, "@dmo_screen_z"); I(iv_state, "@state");
+    I(iv_any_key_pressed, "@any_key_pressed"); I(iv_pressed, "@pressed"); I(iv_triggers, "@triggers");
+    I(iv_released, "@released"); I(iv_timer, "@timer");
     I(gv_data_common_events, "$data_common_events"); I(gv_game_switches, "$game_switches");
     I(id_update_symbol_reaction, "update_symbol_reaction"); I(id_update_symbol_movement, "update_symbol_movement");
     I(id_zero, "zero?"); I(id_truncate, "truncate"); I(id_between, "between?");
@@ -1971,6 +2159,18 @@ void nativeEventsInit(int rgssVersion) {
     slotDef(S_GVH_altitude, "Game_Vehicle", "altitude");
     slotDef(S_CE_autorun, "RPG::CommonEvent", "autorun?");
     slotDef(S_ENUM_find, "Enumerable", "find");
+    slotDef(S_H_GM_ue_galv, "alias", "galv_region_effects_gm_update_events");
+    slotDef(S_H_SM_uc_galv, "alias", "galv_region_effect_sm_sb_update_characters");
+    slotDef(S_H_GCB_sz_dmo, "alias", "dmo_al_screen_z");
+    slotDef(S_IN_update_hime, "Input.self", "update");
+    slotDef(S_IN_update_zale, "Input.self", "update");
+    slotDef(S_FFI_call, "MiniFFI", "call");
+    slotDef(S_DL_aref, "DL::CPtr", "[]");
+    slotDef(S_DL_to_i, "DL::CPtr", "to_i");
+    slotDef(S_HSH_aref, "Hash", "[]");
+    slotDef(S_HSH_aset, "Hash", "[]=");
+    slotDef(S_HSH_each_value, "Hash", "each_value");
+    slotDef(S_ARY_any, "Array", "any?");
     slotDef(S_GM_display_y, "Game_Map", "display_y");
     slotDef(S_SC_check_can_update_sprite, "Sprite_Character", "check_can_update_sprite");
     slotDef(S_SPR_visible, "Sprite", "visible");
@@ -2169,7 +2369,7 @@ static VALUE initRuby(VALUE) {
     g_module = rb_define_module("HardRPGNative");
     rb_define_singleton_method(g_module, "bump", RUBY_METHOD_FUNC(nev_bump), 0);
     rb_eval_string(kHelpers);
-    rb_define_singleton_method(g_module, "replace", RUBY_METHOD_FUNC(nev_replace), 3);
+    rb_define_singleton_method(g_module, "replace", RUBY_METHOD_FUNC(nev_replace), -1);
     rb_define_singleton_method(g_module, "attr", RUBY_METHOD_FUNC(nev_attr), 2);
     rb_define_singleton_method(g_module, "stats", RUBY_METHOD_FUNC(nev_stats), 0);
     rb_define_singleton_method(g_module, "reset_stats", RUBY_METHOD_FUNC(nev_reset_stats), 0);
@@ -2196,7 +2396,8 @@ static VALUE initRuby(VALUE) {
         {S_ARY_clear, rb_cArray}, {S_STR_eq, rb_cString}, {S_STR_neq, rb_cString}, {S_ARY_aref, rb_cArray},
         {S_INT_zero, rb_cInteger}, {S_INT_truncate, rb_cInteger}, {S_FLO_truncate, rb_cFloat},
         {S_INT_between, rb_cInteger}, {S_OBJ_is_a, rb_cObject}, {S_ARY_each, rb_cArray},
-        {S_ARY_delete_if, rb_cArray}, {S_ARY_each_with_index, rb_cArray}, {S_ENUM_find, rb_cArray}};
+        {S_ARY_delete_if, rb_cArray}, {S_ARY_each_with_index, rb_cArray}, {S_ENUM_find, rb_cArray},
+        {S_HSH_aref, rb_cHash}, {S_HSH_aset, rb_cHash}, {S_HSH_each_value, rb_cHash}, {S_ARY_any, rb_cArray}};
     for (auto &b : builtins) {
         Slot &s = g_slots[b.id];
         /* The method that class has now (String#!= is BasicObject#!=, which calls ==;
@@ -2220,6 +2421,22 @@ static VALUE initRuby(VALUE) {
         s.owner = rpgClass("RPG::CommonEvent");
         s.expect = instanceMethod(s.owner, s.mid);
         rb_gc_register_mark_object(s.expect);
+    }
+    /* MiniFFI#call and DL::CPtr#[] / #to_i (engine): checked, the key natives do their work. */
+    if (rb_const_defined(rb_cObject, rb_intern("MiniFFI"))) {
+        VALUE ffi = rb_path2class("MiniFFI");
+        VALUE dl = rb_const_defined(rb_cObject, rb_intern("DL")) ? rb_const_get(rb_cObject, rb_intern("DL")) : Qnil;
+        VALUE cptr = !NIL_P(dl) && rb_const_defined_at(dl, rb_intern("CPtr")) ? rb_const_get_at(dl, rb_intern("CPtr")) : Qnil;
+        struct { int id; VALUE klass; } known[] = {{S_FFI_call, ffi}, {S_DL_aref, cptr}, {S_DL_to_i, cptr}};
+        for (auto &k : known) {
+            if (NIL_P(k.klass))
+                continue;
+            Slot &s = g_slots[k.id];
+            s.kind = SK_KNOWN;
+            s.owner = k.klass;
+            s.expect = instanceMethod(k.klass, s.mid);
+            rb_gc_register_mark_object(s.expect);
+        }
     }
     id_src_rect_iv = rb_intern("src_rect");
     g_float_256 = DBL2NUM(256.0);

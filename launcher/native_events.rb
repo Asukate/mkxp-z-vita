@@ -39,20 +39,28 @@ module HardRPGNative
     # more than their class line; the def ends at an `end` with the same indent. Classes may be
     # indented (a whole script shifted right); the swap still needs the def to be the method in place.
     def methods(src)
-      out = {}; stack = []; cur = nil; body = nil; start = 0; ind = nil
+      out = {}; stack = []; cur = nil; body = nil; start = 0; ind = nil; single = false
       src.each_line.with_index(1) do |raw, ln|
         line = raw.chomp
         if cur
           if line.start_with?(ind) && line[ind.size..] =~ /\Aend\s*(#.*)?\z/
             out["#{stack.last[0]}##{cur}"] = [body.reject(&:empty?).join("\n"), start]; cur = nil
+            (stack.pop; single = false) if single
           else
             body << norm_line(line)
           end
+        elsif line =~ /\A(\s*)class << self\s*(#.*)?\z/ && !stack.empty?
+          # singleton methods of the enclosing class/module: "Input.self#update"
+          ci = $1; stack << ["#{stack.last[0].sub(/\.self\z/, '')}.self", ci]
         elsif line =~ /\A(\s*)(?:class|module) (\w+)/ then stack << [$2, $1]
         elsif !stack.empty? && line =~ /\A(\s*)end\b/ && $1 == stack.last[1] then stack.pop
         elsif !stack.empty? && line.start_with?(stack.last[1]) &&
-              line[stack.last[1].size..] =~ /\A( {1,2}|\t)def ([\w?!=]+|\[\]=?)/
-          ind = stack.last[1] + $1; cur = $2; start = ln; body = [norm_line(line)]
+              line[stack.last[1].size..] =~ /\A( {1,2}|\t)def (self\.)?([\w?!=]+|\[\]=?)/
+          if $2
+            next if stack.last[0].end_with?('.self')
+            stack << ["#{stack.last[0]}.self", stack.last[1]]; single = true
+          end
+          ind = stack.last[1] + $1; cur = $3; start = ln; body = [norm_line(line)]
         end
       end
       out
@@ -152,6 +160,15 @@ module HardRPGNative
     "Game_Map#adjust_y:2520378825:2320706593:132" => "jitter",
     # Yanfly Ace Core Engine
     "Game_Event#near_the_screen?:2967297709:769812868:342" => "yanfly",
+    # LISA: shift_y (object_character? ? 0 : 0), Galv's Region Effects update_events / update_characters
+    "Game_CharacterBase#shift_y:545188363:45878379:37" => "lisa",
+    "Game_Map#update_events:2662315626:2040473302:99" => "galv",
+    "Spriteset_Map#update_characters:571006071:3038915534:112" => "galv",
+    # DMO Parallax Animation screen_z(value = nil)
+    "Game_CharacterBase#screen_z:2091145282:150221887:147" => "dmo",
+    # Hime's Any Key Pressed Check, Zale's Keyboard Manager (Input.update)
+    "Input.self#update:2414362333:3074637570:176" => "hime",
+    "Input.self#update:1279336715:3637752558:537" => "zale",
     # star aura effect (星潟)
     "Sprite#star_aura_effects_update:2583269496:1939184202:2488" => "aura",
     "StarAuraEffect#update_aura_effect:65509816:2849013802:1804" => "known",
@@ -235,11 +252,14 @@ module HardRPGNative
     "Game_Event#update_self_movement/symbol" => :_update_self_movement_with_symbol,
     "Game_CharacterBase#real_move_speed/8dir" => :real_move_speed_8direction,
     "Game_Event#update/mog" => :mog_anti_lag_update,
+    "Game_Map#update_events/galv" => :galv_region_effects_gm_update_events,
+    "Spriteset_Map#update_characters/galv" => :galv_region_effect_sm_sb_update_characters,
+    "Game_CharacterBase#screen_z/dmo" => :dmo_al_screen_z,
     "Sprite_Character#update/mog" => :mog_anti_lag_update,
   }.freeze
 
   CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Map Game_Variables Game_Vehicle Sprite_Base
-               Sprite_Character Spriteset_Map Sprite StarAuraEffect].freeze
+               Sprite_Character Spriteset_Map Sprite StarAuraEffect Input.self].freeze
   ATTRS = { 'Game_CharacterBase' => %i[tile_id character_name character_index pattern direction opacity blend_type
                                        bush_depth transparent animation_id balloon_id current_floor],
             'Game_Map' => %i[display_x display_y],
@@ -261,13 +281,15 @@ module HardRPGNative
 
     def section_loaded(fname, src)
       return if $hardrpg_native_events == false
-      return unless (CLASSES + ATTRS.keys).any? { |c| src.include?("class #{c}") || src.include?("module #{c}") }
+      return unless (CLASSES + ATTRS.keys).any? { |c| c = c.sub(/\.self\z/, ''); src.include?("class #{c}") || src.include?("module #{c}") }
       Norm.methods(src).each do |key, (text, line)|
         cname, name = key.split('#', 2)
         next unless CLASSES.include?(cname)
         variant = STOCK["#{key}:#{Zlib.crc32(text)}:#{Zlib.adler32(text)}:#{text.bytesize}"]
-        klass = Object.const_defined?(cname) ? Object.const_get(cname) : nil
+        base = cname.sub(/\.self\z/, '')
+        klass = Object.const_defined?(base) ? Object.const_get(base) : nil
         next unless klass.is_a?(Module)
+        klass = klass.singleton_class if base != cname
         um = (klass.instance_method(name) rescue nil)
         # The section must be what defined the method now in place, at that line.
         defined_here = um && um.owner.equal?(klass) && um.source_location == [fname.to_s, line]
@@ -285,7 +307,7 @@ module HardRPGNative
         end
         if variant && defined_here && klass.public_method_defined?(name, false)
           klass.class_eval(AURA_TAIL, __FILE__, __LINE__) if variant == 'aura'
-          if replace(klass, name.to_sym, variant)
+          if replace(klass, name.to_sym, variant, cname)
             @swapped << key
             (@variant_of ||= {})[key] = variant
           else
