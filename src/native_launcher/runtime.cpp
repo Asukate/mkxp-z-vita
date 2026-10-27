@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <atomic>
 #include <memory>
 #include <ctime>
 #include <functional>
@@ -46,6 +47,13 @@ extern "C" GLboolean vglInitWithCustomSizes(int pool_size, int width, int height
 
 namespace {
 bool nativeKeyboardActive = false;
+#ifdef __vita__
+bool touchDown() {
+  SceTouchData data{};
+  sceTouchPeek(SCE_TOUCH_PORT_FRONT, &data, 1);
+  return data.reportNum > 0;
+}
+#endif
 }
 
 // The pinned vitaGL swap chain composites common dialogs into the displayed
@@ -216,7 +224,11 @@ public:
          * about 13 ms per MiB. Left to its defaults it takes all free main
          * memory; the menu draws a handful of textures, so give it a small
          * main-memory pool and all of video memory. vitaGL ignores SDL's own
-         * initialization after this one. Multisampling stays as before. */
+         * initialization after this one. Multisampling stays as before.
+         * 32 MiB is about 0.35 s of the start, but it holds vitaGL's
+         * per-frame vertex ring: with a smaller pool the ring lands in
+         * video memory or overflows, and carousel frames took 85 ms instead
+         * of 27 (measured on the Vita). */
         SceKernelFreeMemorySizeInfo info;
         info.size = sizeof(info);
         sceKernelGetFreeMemorySize(&info);
@@ -657,26 +669,61 @@ int runNativeLauncher(bool returning) {
     // A cold start reads the library (about 0.75 s with twenty games) on a
     // worker thread while the screen starts and the splash is up. Until
     // loadHome() joins it, this thread touches no library state.
-    UI ui({}, returning);
+    UI ui({}, false);
     vitaStartupTimerMark("launcher_ui_built");
+    // The library the last scan saw shows at once, and the card is read again
+    // on a worker thread into a model of its own, which the home loop takes
+    // in when it is done (UI::adoptScan). Without a saved library the scan
+    // comes first: under the splash on a cold start, before anything when
+    // returning from a game.
+    bool quick = false;
+    try {
+      ui.model.settleActivity(returning);
+      quick = ui.showSnapshot();
+    } catch (const std::exception &) {
+      quick = false;
+    }
+    vitaStartupTimerMark("launcher_snapshot_shown");
     struct LibraryScan {
       UI *ui;
+      Model *fresh;
       std::string error;
+      std::atomic<bool> done{false};
       void work() {
         try {
-          ui->scanLibrary();
+          if (fresh)
+            fresh->refresh();
+          else
+            ui->scanLibrary();
         } catch (const std::exception &e) {
           error = e.what();
         }
         vitaStartupTimerMark("launcher_scan_done");
+        done = true;
       }
       static int run(SceSize, void *argument) {
         (*static_cast<LibraryScan **>(argument))->work();
         return sceKernelExitThread(0);
       }
-    } scan{&ui, {}};
+    } scan{&ui, nullptr, {}};
+    std::unique_ptr<Model> fresh;
+    const unsigned scanFrom = ui.model.generation;
+    if (quick) {
+      fresh.reset(new Model(ui.model.paths, false));
+      scan.fresh = fresh.get();
+    }
     SceUID scanThread = -1;
-    if (!returning) {
+    // Whatever happens, the worker is done before the models it uses go.
+    struct ScanJoin {
+      SceUID &thread;
+      ~ScanJoin() {
+        if (thread >= 0) {
+          sceKernelWaitThreadEnd(thread, nullptr, nullptr);
+          sceKernelDeleteThread(thread);
+        }
+      }
+    } scanJoin{scanThread};
+    if (!returning || quick) {
       LibraryScan *argument = &scan;
       scanThread = sceKernelCreateThread("hardrpg_library_scan", LibraryScan::run, 0x10000100,
                                          256 * 1024, 0, 0, nullptr);
@@ -686,7 +733,27 @@ int runNativeLauncher(bool returning) {
       }
       if (scanThread < 0)
         scan.work();
-    }
+    } else
+      scan.work();
+    // Takes the worker's result in: when it is done, or, with wait, at once.
+    auto finishScan = [&](bool wait) {
+      if (scanThread < 0 && !fresh)
+        return false;
+      if (scanThread >= 0) {
+        if (!wait && !scan.done)
+          return false;
+        sceKernelWaitThreadEnd(scanThread, nullptr, nullptr);
+        sceKernelDeleteThread(scanThread);
+        scanThread = -1;
+      }
+      if (!scan.error.empty())
+        ui.message = scan.error;
+      if (fresh) {
+        ui.adoptScan(*fresh, scanFrom);
+        fresh.reset();
+      }
+      return true;
+    };
 #else
     UI ui;
 #endif
@@ -706,17 +773,16 @@ int runNativeLauncher(bool returning) {
     bool releaseDeferred = false;
     auto loadHome = [&] {
 #ifdef __vita__
-      if (scanThread >= 0) {
-        sceKernelWaitThreadEnd(scanThread, nullptr, nullptr);
-        sceKernelDeleteThread(scanThread);
-        scanThread = -1;
-      }
-      if (!scan.error.empty())
-        ui.message = scan.error;
-#endif
+      if (!quick)
+        finishScan(true);
+      try {
+        if (!quick)
+          ui.loadHome();
+#else
       try {
         ui.model.settleActivity(returning);
         ui.loadHome();
+#endif
 #ifdef HARDRPG_LAUNCHER_BENCH
         bench.apply(ui);
         bench.mark("library_ready");
@@ -746,8 +812,13 @@ int runNativeLauncher(bool returning) {
 #endif
       homeLoaded = true;
     };
+#ifdef __vita__
+    if (returning || quick)
+      loadHome();
+#else
     if (returning)
       loadHome();
+#endif
 #ifdef __vita__
     sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT,
                              SCE_TOUCH_SAMPLING_STATE_START);
@@ -827,7 +898,13 @@ int runNativeLauncher(bool returning) {
           view.draw(ui);
           present(true);
         };
-        if (!returning) {
+        // From a saved library the list view needs no splash: it is ready.
+#ifdef __vita__
+        const bool splash = !returning && !(quick && ui.home.list());
+#else
+        const bool splash = !returning;
+#endif
+        if (splash) {
           try {
             // The splash stays up while the library is read and the home
             // screen's first pictures are decoded, and no longer: the list
@@ -938,8 +1015,21 @@ int runNativeLauncher(bool returning) {
             break;
           }
 #endif
+#ifdef __vita__
+          // While the library is read again, only moving around uses the
+          // saved one; anything else waits for the scan (a second at most).
+          bool libraryChanged = false;
+          if (scanThread >= 0 || fresh) {
+            bool moving = button == Button::None || button == Button::Up || button == Button::Down ||
+                          button == Button::Left || button == Button::Right || button == Button::L ||
+                          button == Button::R;
+            libraryChanged = finishScan(!moving || touchDown());
+          }
+#else
+          bool libraryChanged = false;
+#endif
           bool touched = input.touch(ui);
-          bool serviced = false;
+          bool serviced = libraryChanged;
           if (button != Button::None || touched)
             lastInputAt = SDL_GetTicks();
           // New games' game info, once the player has settled on the home
@@ -1084,6 +1174,7 @@ int runNativeLauncher(bool returning) {
             SDL_Delay(12);
         }
 #ifdef __vita__
+        finishScan(true);
         // After an update, compile the engine's shaders here, on the
         // "Starting" screen, instead of during the game's first scenes.
         if (!quit && !ui.exitRequested && ui.launchRequested && engineFor(ui.launchFormat) &&

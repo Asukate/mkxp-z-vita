@@ -640,6 +640,47 @@ class NativeLauncher(unittest.TestCase):
         self.assertGreater(shot.stat().st_size, 10000)
         self.assertFalse((self.root/'cache/art').exists() and any((self.root/'cache/art').iterdir()))
 
+    def test_a_start_shows_the_saved_library_then_the_scan(self):
+        for name in ('Alpha', 'Beta', 'Gamma'): self.game(self.games/name, title=name)
+        (self.root/'launcher-preferences.json').write_text('{"homeView": "list", "welcomeSeen": true, "homeStartView": "list"}')
+        quick = lambda actions='': self.run_binary('--quick-start', 'yes', '--actions', actions)
+        saved = self.root/'library-snapshot.txt'
+        # The first start has nothing saved: it scans, and saves what it found.
+        saved.unlink(missing_ok=True)
+        state = quick()
+        self.assertFalse(state['fromSnapshot'])
+        self.assertTrue(saved.exists())
+        names = [e['name'] for e in state['homeEntries']]
+        self.assertEqual(sorted(names), ['Alpha', 'Beta', 'Gamma'])
+        # The next start shows the saved library, and leaves the file as it is
+        # when nothing changed.
+        stamp = saved.stat().st_mtime_ns
+        state = quick()
+        self.assertTrue(state['fromSnapshot'])
+        self.assertEqual([e['name'] for e in state['homeEntries']], names)
+        self.assertEqual(quick('adopt-scan')['homeEntries'], state['homeEntries'])
+        self.assertEqual(saved.stat().st_mtime_ns, stamp)
+        # A game added while the app was closed: the saved list lacks it until
+        # the scan is taken in, and the focused game stays focused.
+        self.game(self.games/'Delta', title='Delta')
+        focused = names[1]
+        state = quick('down')
+        self.assertNotIn('Delta', [e['name'] for e in state['homeEntries']])
+        self.assertEqual(state['homeEntries'][state['homeTarget']]['name'], focused)
+        state = quick('down,adopt-scan')
+        after = [e['name'] for e in state['homeEntries']]
+        self.assertIn('Delta', after)
+        self.assertEqual(after[state['homeTarget']], focused)
+        self.assertIn('Delta', saved.read_text())
+        # A renamed game shows its new name straight away.
+        self.cmd('rename', self.games/'Alpha', name='First')
+        self.assertIn('First', [e['name'] for e in quick()['homeEntries']])
+        # A damaged file is ignored: the start scans instead.
+        saved.write_text('not a library')
+        state = quick()
+        self.assertFalse(state['fromSnapshot'])
+        self.assertEqual(len(state['homeEntries']), 4)
+
     def test_interface_sounds_follow_what_an_input_did(self):
         self.game(self.games/'One',3,'One')
         self.game(self.games/'Two',3,'Two')

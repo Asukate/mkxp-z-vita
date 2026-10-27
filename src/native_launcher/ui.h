@@ -117,6 +117,12 @@ public:
   // launcher runs on a worker thread while the screen starts up.
   explicit UI(Paths paths = {}, bool scan = true);
   void scanLibrary();
+  // A cold start: the library as the last scan left it, shown at once while
+  // the card is read again. False when there is none.
+  bool showSnapshot();
+  // Takes the library that scan read on another thread, keeping the focused
+  // game. Ignored when this library was refreshed since the scan started.
+  void adoptScan(Model &scan, unsigned startedAt);
   Model model;
   // Home screen state (see home.cpp).
   Home home;

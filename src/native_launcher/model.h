@@ -107,6 +107,13 @@ public:
   bool unpackZips = false;
   const Node &current() const { return stack.back(); }
   void refresh();
+  // The library as the last full scan found it (library-snapshot.txt), so a
+  // start can show it at once while the card is read again. False when there
+  // is none. refresh() keeps the file current; it is written only when the
+  // library changed.
+  bool loadSnapshot();
+  // Counts refresh() calls, so a scan started earlier can tell it is stale.
+  unsigned generation = 0;
   void setDisplayName(const Entry &, const std::string &displayName);
   bool back();
   bool enter(const Entry &, Entry &selected);

@@ -402,7 +402,7 @@ int main(int argc, char **argv) {
     hardrpg::Paths paths;
     std::string font = "assets/liberation.ttf", sfx = "launcher/sfx", snapshot, script, actions, releaseFixture,
                 rename, search, text, inGame;
-    bool edit = false, settle = false, returning = false;
+    bool edit = false, settle = false, returning = false, quickStart = false;
     // The welcome guide shows only with "--welcome auto" (as on a first
     // start); other runs go straight to home without marking it seen.
     std::string welcome = "skip", languageArg;
@@ -483,6 +483,8 @@ int main(int argc, char **argv) {
         languageArg = value;
       else if (arg == "--strings")
         stringFonts.push_back(value);
+      else if (arg == "--quick-start")
+        quickStart = value == "yes"; // as the Vita: the saved library first
       else if (arg == "--returning") {
         settle = true;
         returning = value == "yes";
@@ -503,7 +505,14 @@ int main(int argc, char **argv) {
                 << "\n";
       return 0;
     }
-    hardrpg::UI ui(paths);
+    hardrpg::UI ui(paths, !quickStart);
+    bool fromSnapshot = false;
+    if (quickStart) {
+      fromSnapshot = ui.showSnapshot();
+      if (!fromSnapshot)
+        ui.scanLibrary();
+    }
+    const unsigned scanFrom = ui.model.generation;
     ui.model.unpackZips = !std::getenv("HARDRPG_NO_UNPACK");
     std::vector<std::string> sounds;
     ui.sound = [&](Sound s) { sounds.push_back(soundName(s)); };
@@ -581,6 +590,12 @@ int main(int argc, char **argv) {
             if (fx >= 0)
               ui.controlsSample.front = {{0, fx, fy}};
           }
+        } else if (action == "adopt-scan") {
+          // The Vita's background scan finishing: read the library again into
+          // a model of its own and hand it over.
+          hardrpg::Model fresh(ui.model.paths, false);
+          fresh.refresh();
+          ui.adoptScan(fresh, scanFrom);
         } else if (action.find("sleep:") == 0) {
           // sleep:MS  draw, then let MS of real time pass (timed animations).
           view.draw(ui);
@@ -718,6 +733,7 @@ int main(int argc, char **argv) {
     state.as_object()["focus"] = int(ui.focus);
     state.as_object()["errorScroll"] = ui.errorScroll;
     state.as_object()["errorLines"] = int(ui.errorReport.size());
+    state.as_object()["fromSnapshot"] = fromSnapshot;
     state.as_object()["exitRequested"] = ui.exitRequested;
     state.as_object()["browserOpen"] = bool(ui.browser);
     state.as_object()["browserPath"] = ui.browser ? ui.browser->path : "";

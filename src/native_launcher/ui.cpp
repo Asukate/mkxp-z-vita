@@ -174,6 +174,32 @@ void UI::scanLibrary() {
     model.takeError(true);
   loadHome();
 }
+bool UI::showSnapshot() {
+  if (!model.loadSnapshot())
+    return false;
+  errorReport = model.takeError();
+  if (errorReport.empty())
+    model.takeError(true);
+  loadHome();
+  return true;
+}
+void UI::adoptScan(Model &scan, unsigned startedAt) {
+  if (model.generation != startedAt)
+    return;
+  auto *current = homeEntry();
+  std::string keep = current ? entryKey(*current) : "";
+  model.list = std::move(scan.list);
+  if (!scan.error.empty())
+    message = scan.error;
+  themeSourceCache.clear();
+  auto list = homeList();
+  home.target = 0;
+  for (size_t i = 0; i < list.size(); ++i)
+    if (entryKey(model.list[list[i]]) == keep)
+      home.target = int(i);
+  home.position = home.target;
+  followList();
+}
 void UI::launchFailed(int code, const std::string &executable) {
   launchRequested = false;
   launchFormat = 0;

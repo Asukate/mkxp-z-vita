@@ -908,7 +908,59 @@ Model::Model(Paths p, bool scan) : paths(std::move(p)) {
   if (scan)
     refresh();
 }
+namespace {
+const char *snapshotHeader = "hardrpg-library 1\n";
+std::string snapshotText(const std::vector<Entry> &list) {
+  std::string text = snapshotHeader;
+  for (auto &e : list) {
+    const std::string *fields[] = {&e.node.root, &e.node.relative, &e.node.inner, &e.node.alias, &e.name};
+    for (auto *f : fields)
+      if (f->find_first_of("\t\n") != std::string::npos)
+        return ""; // cannot be kept: the next start scans first
+    text += std::to_string(int(e.kind)) + "\t" + std::to_string(e.version) + "\t" + (e.node.archive ? "1" : "0") +
+            "\t" + e.node.root + "\t" + e.node.relative + "\t" + e.node.inner + "\t" + e.node.alias + "\t" +
+            e.name + "\n";
+  }
+  return text;
+}
+} // namespace
+bool Model::loadSnapshot() {
+  std::string text;
+  try {
+    text = readFile(paths.at("library-snapshot.txt"), 1024 * 1024);
+  } catch (const std::exception &) {
+    return false;
+  }
+  if (text.compare(0, std::strlen(snapshotHeader), snapshotHeader) != 0)
+    return false;
+  std::vector<Entry> found;
+  auto lines = split(text.substr(std::strlen(snapshotHeader)), '\n');
+  for (auto &line : lines) {
+    if (line.empty())
+      continue;
+    auto f = split(line, '\t');
+    if (f.size() != 8)
+      return false;
+    int kind = std::atoi(f[0].c_str());
+    if (kind < int(Kind::Folder) || kind > int(Kind::Game))
+      return false;
+    Entry e;
+    e.kind = Kind(kind);
+    e.version = std::atoi(f[1].c_str());
+    e.node.archive = f[2] == "1";
+    e.node.root = f[3];
+    e.node.relative = f[4];
+    e.node.inner = f[5];
+    e.node.alias = f[6];
+    e.name = f[7];
+    found.push_back(std::move(e));
+  }
+  list = std::move(found);
+  applyNames(); // a game renamed since keeps its new name
+  return true;
+}
 void Model::refresh() {
+  ++generation;
   zipGames.clear();
   zipSources.clear();
   error.clear();
@@ -948,6 +1000,21 @@ void Model::refresh() {
                  list.end());
     saveZipScans();
     applyNames();
+    auto text = snapshotText(list);
+    auto file = paths.at("library-snapshot.txt");
+    try {
+      std::string old;
+      try {
+        old = readFile(file, 1024 * 1024);
+      } catch (const std::exception &) {
+      }
+      if (text.empty())
+        std::remove(file.c_str());
+      else if (text != old)
+        atomicWrite(file, text);
+    } catch (const std::exception &) {
+      // Only the quick start is lost: the next start scans first.
+    }
   } catch (const std::exception &e) {
     error = e.what();
     list.clear();
