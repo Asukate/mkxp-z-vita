@@ -658,6 +658,52 @@ class NativeLauncher(unittest.TestCase):
         self.assertGreater(state['errorLines'],0)
         self.assertIn('Saved:',state['message'])
         self.assertEqual(len(list((self.root/'errors').glob('*.txt'))),3)
+    def test_crash_rescue_asks_before_starting(self):
+        # A Ruby error left a rescue (written by the engine, .json last):
+        # Play asks first; Resume leaves a one-time request for crash_rescue.rb.
+        self.game(self.games/'Ace', 3, 'Ace')
+        rescue = self.root/'rescue'
+        def leave():
+            rescue.mkdir(exist_ok=True)
+            base = rescue/fnv('Ace')
+            base.with_suffix('.rescue').write_bytes(b'x')
+            base.with_suffix('.meta').write_bytes(b'x')
+            base.with_suffix('.json').write_text(json.dumps(dict(reason='battle', map_id=12, map_name='Desert',
+                error='NoMemoryError', age_s=40, playtime_s=2220, written_at=int(time.time()) - 120)))
+            return base
+        base = leave()
+        state = self.ui(PLAY)
+        self.assertEqual(state['page'], 14)
+        self.assertFalse((self.root/'selection.json').exists())
+        self.assertEqual(self.ui(PLAY+',circle')['page'], 0)
+        self.ui(PLAY+',cross')
+        self.assertTrue((self.root/'selection.json').exists())
+        self.assertTrue(base.with_suffix('.resume').exists())
+        # Start normally clears a request left over; the rescue stays offered.
+        (self.root/'selection.json').unlink()
+        self.ui(PLAY+',down,cross')
+        self.assertTrue((self.root/'selection.json').exists())
+        self.assertFalse(base.with_suffix('.resume').exists())
+        self.assertTrue(base.with_suffix('.json').exists())
+        # Discard removes every file and returns home; Play then just plays.
+        (self.root/'selection.json').unlink()
+        state = self.ui(PLAY+',down,down,cross')
+        self.assertEqual(state['page'], 0)
+        self.assertIn('discarded', state['message'])
+        self.assertEqual(list(rescue.iterdir()), [])
+        self.assertFalse((self.root/'selection.json').exists())
+        self.ui(PLAY)
+        self.assertTrue((self.root/'selection.json').exists())
+        # From the game's settings page, Play asks too; Circle goes back to it.
+        (self.root/'selection.json').unlink()
+        leave()
+        play_row = GAME+',down,down,down,down,down,down,down'
+        self.assertEqual(self.ui(play_row+',cross')['page'], 14)
+        self.assertEqual(self.ui(play_row+',cross,circle')['page'], 8)
+        # A copy the writer left when the game stopped without an error (power
+        # loss, closed app) is offered the same way.
+        base.with_suffix('.json').write_text(json.dumps(dict(reason='transfer', map_id=3, written_at=int(time.time()) - 60)))
+        self.assertEqual(self.ui(PLAY)['page'], 14)
     def test_error_from_another_app_is_kept_but_not_shown(self):
         # Every HardRPG app shares the data folder. A report written by another
         # app's game goes to the history; the launcher does not open it.
@@ -738,9 +784,14 @@ class NativeLauncher(unittest.TestCase):
         self.assertIs(config()['fastForward'], False)
         self.ui(speed + ',down,left,square')
         self.assertEqual(config(), dict(preloadScript=['keep.rb'], performanceMetrics=0, fastForward=True))
+        # Crash rescue: on unless switched off; Square puts it back on.
+        self.ui(speed + ',down,down,cross')
+        self.assertIs(config()['crashRescue'], False)
+        self.ui(speed + ',down,down,square')
+        self.assertIs(config()['crashRescue'], True)
         before = file.read_bytes()
         for key, invalid in [('SESourceCount', [7]), ('performanceMetrics', [-1, 4, True, 'FPS']),
-                             ('fastForward', [0, 1, 'on', None])]:
+                             ('fastForward', [0, 1, 'on', None]), ('crashRescue', [0, 'off', None])]:
             for value in invalid:
                 with self.subTest(key=key, value=value):
                     self.assertIn('error', self.cmd('set-display', key=key, value=value))

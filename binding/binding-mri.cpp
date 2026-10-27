@@ -75,12 +75,16 @@ extern "C" {
 #ifdef __vita__
 #include <cstdio>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include <SDL_cpuinfo.h>
 #include <SDL_filesystem.h>
 #include <SDL_loadso.h>
 #include <SDL_power.h>
+#include <SDL_mutex.h>
+#include <SDL_thread.h>
+#include <SDL_timer.h>
 
 extern const char module_rpg1[];
 extern const char module_rpg2[];
@@ -1335,6 +1339,373 @@ static void runCustomScript(const std::string &filename) {
 }
 
 #ifdef __vita__
+/* Crash rescue (launcher/crash_rescue.rb) keeps a copy of the game's own save
+ * data from the last map change or battle start. Its files for this game are
+ * ux0:/data/hardrpg/rescue/<name>.{rescue,meta,json}: games started from the
+ * launcher use their settings key (config/<key>.json, the key the launcher
+ * looks for), anything else a hash of the game folder.
+ *
+ * Each copy is handed to a writer thread (HardRPGRescueNative.flush), so a
+ * crash, a closed app or a power loss leaves the latest copy on the card
+ * without the game waiting for the card. When a Ruby error ends the game the
+ * error is added to the launcher's file; when the game ends normally (it
+ * quits, or Back to library) the files are removed. The setting crashRescue
+ * (launcher, per game, in-game menu) is read by the script before each copy. */
+namespace {
+struct RescueWriter {
+    SDL_mutex *lock = nullptr;
+    SDL_cond *wake = nullptr;
+    SDL_cond *idle = nullptr;
+    SDL_Thread *thread = nullptr;
+    std::string base;
+    enum Job { None, Write, Clear } job = None;
+    bool busy = false;
+    std::string data, meta, json;
+};
+RescueWriter rescueWriter;
+const char *const rescueFiles[] = {".rescue", ".meta", ".json", ".shot"};
+
+void rescueRemoveFiles(const std::string &base) {
+    /* The launcher looks for .json: it goes first. */
+    remove((base + ".json").c_str());
+    for (const char *ext : rescueFiles)
+        remove((base + ext).c_str());
+}
+
+int rescueWriterMain(void *) {
+    RescueWriter &w = rescueWriter;
+    SDL_LockMutex(w.lock);
+    for (;;) {
+        while (w.job == RescueWriter::None)
+            SDL_CondWait(w.wake, w.lock);
+        RescueWriter::Job job = w.job;
+        std::string data, meta, json;
+        data.swap(w.data); meta.swap(w.meta); json.swap(w.json);
+        w.job = RescueWriter::None;
+        w.busy = true;
+        SDL_UnlockMutex(w.lock);
+        if (job == RescueWriter::Clear)
+            rescueRemoveFiles(w.base);
+        else {
+            /* The launcher's file last: its presence means the set is whole. */
+            remove((w.base + ".json").c_str());
+            if (vitaWriteFileReplacing((w.base + ".rescue").c_str(), data.data(), data.size()) &&
+                vitaWriteFileReplacing((w.base + ".meta").c_str(), meta.data(), meta.size()))
+                vitaWriteFileReplacing((w.base + ".json").c_str(), json.data(), json.size());
+        }
+        SDL_LockMutex(w.lock);
+        w.busy = false;
+        SDL_CondBroadcast(w.idle);
+    }
+    return 0;
+}
+
+void rescueQueue(RescueWriter::Job job, std::string data = {}, std::string meta = {}, std::string json = {}) {
+    RescueWriter &w = rescueWriter;
+    if (!w.lock)
+        return;
+    SDL_LockMutex(w.lock);
+    w.job = job; /* The newest job replaces one not started yet. */
+    w.data.swap(data); w.meta.swap(meta); w.json.swap(json);
+    SDL_CondSignal(w.wake);
+    SDL_UnlockMutex(w.lock);
+}
+
+/* Waits (up to timeoutMs) until the writer has nothing left to do, then
+ * keeps it from starting anything new: the caller writes on its own. */
+void rescueSettle(unsigned timeoutMs) {
+    RescueWriter &w = rescueWriter;
+    if (!w.lock)
+        return;
+    SDL_LockMutex(w.lock);
+    const Uint32 until = SDL_GetTicks() + timeoutMs;
+    while ((w.busy || w.job != RescueWriter::None) && SDL_GetTicks() < until)
+        SDL_CondWaitTimeout(w.idle, w.lock, 50);
+    w.job = RescueWriter::None;
+    SDL_UnlockMutex(w.lock);
+}
+
+std::string rescueBytes(VALUE v) {
+    return RB_TYPE_P(v, RUBY_T_STRING) ? std::string(RSTRING_PTR(v), RSTRING_LEN(v)) : std::string();
+}
+
+/* HardRPGRescueNative.fingerprint(obj): a 64-bit hash of obj's whole content
+ * (objects by class name and instance variable names, arrays, hashes, strings
+ * with their encoding, numbers, symbols, and data objects that write
+ * themselves with _dump, such as Table). It only uses names and bytes, so the
+ * same data gives the same value in every launch. crash_rescue.rb compares
+ * the game's static data (maps, common events) with what loading the files
+ * gives, so a copy can name that data instead of writing it. nil when
+ * something in obj cannot be hashed this way, or it is too deep or too big. */
+#define RESCUE_FP_DEPTH 48
+#define RESCUE_FP_NODES 4000000L
+#define RESCUE_FP_CACHE 256
+
+typedef struct {
+    uint64_t h;
+    int depth;
+    long nodes;
+    int bad;
+    ID dump;
+    VALUE class_key[RESCUE_FP_CACHE];
+    uint64_t class_hash[RESCUE_FP_CACHE];
+    ID id_key[RESCUE_FP_CACHE];
+    uint64_t id_hash[RESCUE_FP_CACHE];
+} RescueFp;
+
+static inline void rescueFpMix(RescueFp *s, uint64_t v) {
+    s->h ^= v;
+    s->h *= 0x100000001b3ULL;
+    s->h ^= s->h >> 29;
+}
+/* Bytes, eight at a time (fixed constants: the same in every launch). */
+static uint64_t rescueFpHashBytes(const char *p, long n) {
+    uint64_t h = 0x9e3779b97f4a7c15ULL ^ (uint64_t)n;
+    long i = 0;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t w;
+        memcpy(&w, p + i, 8);
+        h ^= w;
+        h *= 0xff51afd7ed558ccdULL;
+        h ^= h >> 32;
+    }
+    uint64_t w = 0;
+    memcpy(&w, p + i, (size_t)(n - i));
+    h ^= w;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 29;
+    return h;
+}
+static uint64_t rescueFpName(const char *name) {
+    return name ? rescueFpHashBytes(name, (long)strlen(name)) : 0;
+}
+static uint64_t rescueFpId(RescueFp *s, ID id) {
+    unsigned slot = (unsigned)((id >> 3) % RESCUE_FP_CACHE);
+    if (s->id_key[slot] != id) {
+        s->id_key[slot] = id;
+        s->id_hash[slot] = rescueFpName(rb_id2name(id));
+    }
+    return s->id_hash[slot];
+}
+static uint64_t rescueFpClass(RescueFp *s, VALUE klass) {
+    unsigned slot = (unsigned)((klass >> 4) % RESCUE_FP_CACHE);
+    if (s->class_key[slot] != klass) {
+        s->class_key[slot] = klass;
+        s->class_hash[slot] = rescueFpName(rb_class2name(klass));
+    }
+    return s->class_hash[slot];
+}
+static void rescueFpWalk(VALUE v, RescueFp *s);
+static int rescueFpIvar(ID id, VALUE val, st_data_t arg) {
+    RescueFp *s = (RescueFp *)arg;
+    rescueFpMix(s, rescueFpId(s, id));
+    rescueFpWalk(val, s);
+    return s->bad ? ST_STOP : ST_CONTINUE;
+}
+static int rescueFpPair(VALUE key, VALUE val, VALUE arg) {
+    RescueFp *s = (RescueFp *)arg;
+    rescueFpWalk(key, s);
+    rescueFpWalk(val, s);
+    return s->bad ? ST_STOP : ST_CONTINUE;
+}
+static void rescueFpFloat(RescueFp *s, double d) {
+    uint64_t bits;
+    memcpy(&bits, &d, sizeof(bits));
+    rescueFpMix(s, bits ^ 7);
+}
+static void rescueFpBytes(RescueFp *s, const char *p, long n) {
+    rescueFpMix(s, rescueFpHashBytes(p, n));
+}
+static void rescueFpWalk(VALUE v, RescueFp *s) {
+    if (s->bad)
+        return;
+    if (++s->nodes > RESCUE_FP_NODES || s->depth >= RESCUE_FP_DEPTH) {
+        s->bad = 1;
+        return;
+    }
+    if (SPECIAL_CONST_P(v)) {
+        if (FLONUM_P(v))
+            rescueFpFloat(s, RFLOAT_VALUE(v));
+        else if (STATIC_SYM_P(v))
+            rescueFpMix(s, rescueFpId(s, SYM2ID(v)) ^ 5);
+        else
+            rescueFpMix(s, (uint64_t)v ^ 3); /* Integer, nil, true, false */
+        return;
+    }
+    s->depth++;
+    switch (BUILTIN_TYPE(v)) {
+    case T_STRING:
+        rescueFpMix(s, rescueFpName(rb_enc_name(rb_enc_get(v))) ^ 11);
+        rescueFpBytes(s, RSTRING_PTR(v), RSTRING_LEN(v));
+        break;
+    case T_ARRAY: {
+        const long n = RARRAY_LEN(v);
+        rescueFpMix(s, (uint64_t)n ^ 13);
+        for (long i = 0; i < n && !s->bad; i++)
+            rescueFpWalk(RARRAY_AREF(v, i), s);
+        break;
+    }
+    case T_HASH:
+        rescueFpMix(s, (uint64_t)RHASH_SIZE(v) ^ 17);
+        rb_hash_foreach(v, rescueFpPair, (VALUE)s);
+        break;
+    case T_OBJECT:
+        rescueFpMix(s, rescueFpClass(s, rb_obj_class(v)) ^ 19);
+        rb_ivar_foreach(v, rescueFpIvar, (st_data_t)s);
+        break;
+    case T_FLOAT:
+        rescueFpFloat(s, RFLOAT_VALUE(v));
+        break;
+    case T_SYMBOL:
+        rescueFpMix(s, rescueFpId(s, SYM2ID(v)) ^ 5);
+        break;
+    case T_BIGNUM: {
+        VALUE text = rb_big2str(v, 16);
+        rescueFpBytes(s, RSTRING_PTR(text), RSTRING_LEN(text));
+        break;
+    }
+    case T_DATA:
+        if (rb_respond_to(v, s->dump)) {
+            VALUE bytes = rb_funcall(v, s->dump, 1, INT2FIX(-1));
+            if (RB_TYPE_P(bytes, T_STRING)) {
+                rescueFpMix(s, rescueFpClass(s, rb_obj_class(v)) ^ 29);
+                rescueFpBytes(s, RSTRING_PTR(bytes), RSTRING_LEN(bytes));
+                break;
+            }
+        }
+        s->bad = 1;
+        break;
+    default:
+        s->bad = 1;
+        break;
+    }
+    s->depth--;
+}
+/* Returns the fingerprint as an Integer, or nil. */
+static VALUE rescueFingerprint(VALUE obj) {
+    RescueFp *s = (RescueFp *)calloc(1, sizeof(RescueFp));
+    if (!s)
+        return Qnil;
+    s->h = 1469598103934665603ULL;
+    s->dump = rb_intern("_dump");
+    rescueFpWalk(obj, s);
+    VALUE result = s->bad ? Qnil : ULL2NUM(s->h);
+    free(s);
+    return result;
+}
+} // namespace
+
+RB_METHOD(rescueNativeEnabled) {
+    RB_UNUSED_PARAM;
+    return shState->rtData().config.crashRescue ? Qtrue : Qfalse;
+}
+RB_METHOD(rescueNativeFlush) {
+    RB_UNUSED_PARAM;
+    VALUE data, meta, json;
+    rb_scan_args(argc, argv, "3", &data, &meta, &json);
+    rescueQueue(RescueWriter::Write, rescueBytes(data), rescueBytes(meta), rescueBytes(json));
+    return Qnil;
+}
+RB_METHOD(rescueNativeClear) {
+    RB_UNUSED_PARAM;
+    rescueQueue(RescueWriter::Clear);
+    return Qnil;
+}
+RB_METHOD(rescueNativeFingerprint) {
+    RB_UNUSED_PARAM;
+    VALUE obj;
+    rb_scan_args(argc, argv, "1", &obj);
+    return rescueFingerprint(obj);
+}
+
+static void crashRescueGlobals(const Config &conf) {
+    if (conf.gameFolder.empty() || conf.gameFolder == "app0:/stub")
+        return;
+    const std::string &settings = conf.vitaConfigPath;
+    const size_t slash = settings.find_last_of('/');
+    const std::string file = slash == std::string::npos ? settings : settings.substr(slash + 1);
+    std::string name;
+    if (file.size() == 21 && file.compare(16, 5, ".json") == 0 &&
+        file.find_first_not_of("0123456789abcdef") == 16)
+        name = file.substr(0, 16);
+    else {
+        unsigned long long hash = 14695981039346656037ULL;
+        for (unsigned char c : conf.gameFolder) { hash ^= c; hash *= 1099511628211ULL; }
+        char text[32];
+        snprintf(text, sizeof(text), "folder-%016llx", hash);
+        name = text;
+    }
+    mkdir("ux0:/data/hardrpg", 0777);
+    mkdir("ux0:/data/hardrpg/rescue", 0777);
+    const std::string base = "ux0:/data/hardrpg/rescue/" + name;
+    rb_gv_set("$hardrpg_rescue_base", rb_utf8_str_new(base.data(), base.size()));
+    rb_gv_set("$hardrpg_rescue_rgss", INT2FIX(rgssVer));
+    RescueWriter &w = rescueWriter;
+    if (!w.lock) {
+        w.base = base;
+        w.lock = SDL_CreateMutex();
+        w.wake = SDL_CreateCond();
+        w.idle = SDL_CreateCond();
+        /* Vita threads get a small default stack; file paths go through
+         * newlib's path resolver, which needs more. */
+        w.thread = SDL_CreateThreadWithStackSize(rescueWriterMain, "crash rescue", 256 * 1024, nullptr);
+        if (w.thread)
+            SDL_DetachThread(w.thread);
+    }
+    VALUE native = rb_define_module("HardRPGRescueNative");
+    _rb_define_module_function(native, "enabled?", rescueNativeEnabled);
+    _rb_define_module_function(native, "flush", rescueNativeFlush);
+    _rb_define_module_function(native, "clear", rescueNativeClear);
+    _rb_define_module_function(native, "fingerprint", rescueNativeFingerprint);
+}
+static VALUE crashRescueSummary(VALUE exc) {
+    VALUE rescue = rb_const_get(rb_cObject, rb_intern("HardRPGRescue"));
+    return rb_funcall(rescue, rb_intern("report"), 1, rb_class_name(rb_obj_class(exc)));
+}
+static bool crashRescueFile(const std::string &path, VALUE text) {
+    return RB_TYPE_P(text, RUBY_T_STRING) &&
+           vitaWriteFileReplacing(path.c_str(), RSTRING_PTR(text), RSTRING_LEN(text));
+}
+/* A Ruby error ended the game: write the last copy (the writer may still be
+ * busy with it), the launcher's file last, now with the error. Nothing here
+ * needs much memory, so it also runs after NoMemoryError. */
+static void crashRescueWrite(VALUE exc) {
+    VALUE base = rb_gv_get("$hardrpg_rescue_base");
+    if (!RB_TYPE_P(base, RUBY_T_STRING))
+        return;
+    rescueSettle(3000);
+    VALUE data = rb_gv_get("$hardrpg_rescue_data");
+    VALUE meta = rb_gv_get("$hardrpg_rescue_meta");
+    if (!RB_TYPE_P(data, RUBY_T_STRING) || !RB_TYPE_P(meta, RUBY_T_STRING)) {
+        vitaErrorReportFormat("\nCrash rescue: no map change or battle had been reached yet; nothing kept.\n");
+        return;
+    }
+    if (rb_const_defined(rb_cObject, rb_intern("HardRPGRescue"))) {
+        int state = 0;
+        rb_protect(crashRescueSummary, exc, &state);
+        rb_set_errinfo(exc);
+    }
+    const std::string path(RSTRING_PTR(base), RSTRING_LEN(base));
+    remove((path + ".json").c_str());
+    const bool ok = crashRescueFile(path + ".rescue", data) && crashRescueFile(path + ".meta", meta) &&
+                    crashRescueFile(path + ".json", rb_gv_get("$hardrpg_rescue_json"));
+    VALUE summary = rb_gv_get("$hardrpg_rescue_summary");
+    if (ok && RB_TYPE_P(summary, RUBY_T_STRING)) {
+        vitaErrorReportFormat("\nCrash rescue: ");
+        vitaErrorReportAppend(RSTRING_PTR(summary), std::min<long>(RSTRING_LEN(summary), 400));
+        vitaErrorReportFormat("\n");
+    } else
+        vitaErrorReportFormat("\nCrash rescue: %s\n", ok ? "the last map change or battle was kept." : "the last copy could not be written.");
+}
+/* The game ended on its own or through Back to library: nothing to rescue. */
+static void crashRescueCleanExit() {
+    VALUE base = rb_gv_get("$hardrpg_rescue_base");
+    if (!RB_TYPE_P(base, RUBY_T_STRING) || !rescueWriter.lock)
+        return;
+    rescueSettle(3000);
+    rescueRemoveFiles(std::string(RSTRING_PTR(base), RSTRING_LEN(base)));
+}
+
 /* Tap-to-walk is a script that hooks the game's own player and map classes,
  * so it can only be loaded once they exist, and RGSS1 and RGSS2 offer no
  * point between loading scripts and running them. Graphics.update calls this
@@ -1614,6 +1985,9 @@ static void runRMXPScripts(BacktraceData &btData) {
     vitaStartupTimerMark("rgss_decode_complete");
 #endif
     
+#ifdef __vita__
+    crashRescueGlobals(conf);
+#endif
     /* Execute preloaded scripts */
     vitaDiagLog("BOOTPERF", "preload_begin count=%u",
                 (unsigned)conf.preloadScripts.size());
@@ -1887,6 +2261,7 @@ static void showExc(VALUE exc, const BacktraceData &btData) {
     rb_protect(reportGameContext, Qnil, &state);
     if (state) vitaErrorReportFormat("\nAdditional game context unavailable (Ruby raised while collecting it).\n");
     rb_set_errinfo(exc);
+    crashRescueWrite(exc);
     vitaErrorReportSave();
     RB_GC_GUARD(exc);
     return;
@@ -2170,6 +2545,10 @@ static void mriBindingExecute() {
 #endif
     if (!NIL_P(exc) && !rb_obj_is_kind_of(exc, rb_eSystemExit))
         showExc(exc, btData);
+#ifdef __vita__
+    else
+        crashRescueCleanExit();
+#endif
     
     ruby_cleanup(0);
     vitaDiagLog("RUBY", "ruby_cleanup_ok");

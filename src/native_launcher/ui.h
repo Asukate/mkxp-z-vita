@@ -41,7 +41,8 @@ enum class Page {
   GameInfo,
   Remove,
   Keys, // artwork source keys
-  Sound
+  Sound,
+  Rescue // a game left a crash rescue: resume from it, start normally, discard
 };
 enum class BrowseMode { Games, Rtp, Folder };
 // The home screen: a centred cover carousel over the library, with an
@@ -263,6 +264,13 @@ public:
   void answerRemove(bool yes);
   void finishRemove();
   std::string removePath(RemoveQuestion) const;
+  // Starting a game that a Ruby error ended, with a rescue kept (see
+  // Model::rescue), asks first. From home, Circle goes back to home.
+  Model::Rescue rescueInfo;
+  bool rescueFromHome = false;
+  bool offerRescue(const Entry &chosen, const Entry &source, bool fromHome);
+  void answerRescue();
+  void startGame(const Entry &chosen);
   // Rows on the current page of the game settings.
   int optionRows() const;
   ControlProfile controls;

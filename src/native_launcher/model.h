@@ -164,6 +164,20 @@ public:
   void settleActivity(bool returning);
   std::set<std::string> favourites() const;
   void setFavourite(const std::string &id, bool on);
+  // Crash rescue (launcher/crash_rescue.rb): when a Ruby error ended a game,
+  // the engine kept the game as it was at the last safe moment, in
+  // rescue/<settings key>.{rescue,meta,json}. The .json is written last.
+  struct Rescue {
+    bool present = false, saveDisabled = false;
+    std::string reason, mapName, leader, error;
+    int mapId = 0, level = 0;
+    int64_t playtime = 0, age = 0, writtenAt = 0;
+  };
+  Rescue rescue(const Entry &) const;
+  // The next start of this game resumes from its rescue (crash_rescue.rb
+  // uses the request once), or starts normally.
+  void requestResume(const Entry &, bool resume) const;
+  void discardRescue(const Entry &) const;
 
 private:
   struct CachedRtp {

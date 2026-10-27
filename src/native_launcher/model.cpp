@@ -1284,7 +1284,7 @@ void Model::changeDisplay(const std::string &name, const Json &value) {
     if (!value.is_integer() || value.as_integer() < 0 || value.as_integer() > 3)
       throw std::runtime_error("Invalid performance metrics mode");
   } else if ((name == "fixedAspectRatio" || name == "integerScalingActive" ||
-              name == "fastForward")
+              name == "fastForward" || name == "crashRescue")
           ? !value.is_boolean()
           : name != "smoothScaling" || filterIndex(value) < 0)
     throw std::runtime_error("Invalid display setting");
@@ -1312,7 +1312,7 @@ void Model::changeGameSetting(const Entry &entry, const std::string &name,
     throw std::runtime_error(tr("Select a game to change its settings."));
   bool boolean = name == "fixedAspectRatio" || name == "integerScalingActive" ||
                  name == "enableAudio" || name == "midiChorus" ||
-                 name == "midiReverb" || name == "fastForward";
+                 name == "midiReverb" || name == "fastForward" || name == "crashRescue";
   bool integer = name == "smoothScaling" || name == "performanceMetrics";
   if ((!boolean && !integer) ||
       (!reset && (boolean ? !value.is_boolean()
@@ -2155,5 +2155,56 @@ void Model::setFavourite(const std::string &id, bool on) {
   for (auto &k : keys)
     text += k + "\n";
   atomicWrite(paths.at("favourite-games.txt"), text);
+}
+Model::Rescue Model::rescue(const Entry &e) const {
+  Rescue r;
+  if (e.kind != Kind::Game)
+    return r;
+  auto base = paths.at("rescue/" + key(e.node.identity(paths)));
+  if (!regular(base + ".json") || !regular(base + ".rescue") || !regular(base + ".meta"))
+    return r;
+  try {
+    auto v = json5pp::parse(readFile(base + ".json", 65536));
+    auto &o = v.as_object();
+    auto text = [&](const char *name) {
+      auto i = o.find(name);
+      return i != o.end() && i->second.is_string() ? i->second.as_string() : std::string();
+    };
+    auto number = [&](const char *name) -> int64_t {
+      auto i = o.find(name);
+      if (i == o.end()) return 0;
+      if (i->second.is_integer()) return i->second.as_integer();
+      if (i->second.is_number()) return int64_t(i->second.as_number());
+      return 0;
+    };
+    r.reason = text("reason");
+    r.mapName = text("map_name");
+    r.leader = text("leader");
+    r.error = text("error");
+    r.mapId = int(number("map_id"));
+    r.level = int(number("level"));
+    r.playtime = number("playtime_s");
+    r.age = number("age_s");
+    r.writtenAt = number("written_at");
+    auto disabled = o.find("save_disabled");
+    r.saveDisabled = disabled != o.end() && disabled->second.is_boolean() && disabled->second.as_boolean();
+    r.present = true;
+  } catch (const std::exception &) {
+  }
+  return r;
+}
+void Model::requestResume(const Entry &e, bool resume) const {
+  mkdirOne(paths.at("rescue"));
+  auto request = paths.at("rescue/" + key(e.node.identity(paths)) + ".resume");
+  if (resume)
+    atomicWrite(request, "1");
+  else
+    std::remove(request.c_str());
+}
+void Model::discardRescue(const Entry &e) const {
+  auto base = paths.at("rescue/" + key(e.node.identity(paths)));
+  // The .json first: without it the rest is never offered.
+  for (auto ext : {".json", ".resume", ".rescue", ".meta", ".load", ".failed"})
+    std::remove((base + ext).c_str());
 }
 } // namespace hardrpg

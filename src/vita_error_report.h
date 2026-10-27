@@ -14,4 +14,7 @@ void vitaErrorReportFormat(const char *format, ...);
 bool vitaErrorReportSave(const char *directory = "ux0:/data/hardrpg");
 bool vitaWriteErrorReport(const std::string &text,
                          const char *directory = "ux0:/data/hardrpg");
+// Writes path.tmp, then puts it in place of path. Allocates nothing, so it
+// also works after an out-of-memory error.
+bool vitaWriteFileReplacing(const char *path, const char *data, size_t size);
 #endif

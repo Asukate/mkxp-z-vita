@@ -102,6 +102,7 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/launcher/native_events.rb=native_events.rb" \
     -a "$ROOT/launcher/vita_controls.rb=vita_controls.rb" \
     -a "$ROOT/launcher/vita_tap_to_walk.rb=vita_tap_to_walk.rb" \
+    -a "$ROOT/launcher/crash_rescue.rb=crash_rescue.rb" \
     -a "$ROOT/assets/ca-certificates.crt=ca-certificates.crt" \
     -a "$ROOT/assets/TimGM6mb.sf2=TimGM6mb.sf2" \
     -a "$ROOT/LICENSES/FluidLite.txt=licenses/FluidLite.txt" \

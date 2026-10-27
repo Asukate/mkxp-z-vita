@@ -225,3 +225,22 @@ bool vitaWriteErrorReport(const std::string &text, const char *directory) {
     vitaErrorReportAppend(text.data(), text.size());
     return vitaErrorReportSave(directory);
 }
+bool vitaWriteFileReplacing(const char *path, const char *data, size_t size) {
+    char temp[1040];
+    const int count = snprintf(temp, sizeof(temp), "%s.tmp", path);
+    if (count < 0 || count >= static_cast<int>(sizeof(temp))) return false;
+    const int file = open(temp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (file < 0) return false;
+    bool ok = true;
+    while (size && ok) {
+        const ssize_t written = write(file, data, size);
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) ok = false;
+        else { data += written; size -= written; }
+    }
+    if (close(file) != 0) ok = false;
+    // The Vita's rename does not replace an existing file.
+    if (ok) { std::remove(path); ok = std::rename(temp, path) == 0; }
+    if (!ok) std::remove(temp);
+    return ok;
+}

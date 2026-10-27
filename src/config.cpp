@@ -143,6 +143,7 @@ void Config::read(int argc, char *argv[]) {
         {"printFPS", false},
         {"performanceMetrics", 0},
         {"fastForward", true},
+        {"crashRescue", true},
         {"winResizable", true},
         {"fullscreen", false},
         {"fixedAspectRatio", true},
@@ -392,6 +393,7 @@ try { exp } catch (...) {}
     SET_OPT(performanceMetrics, integer);
     if (performanceMetrics < 0 || performanceMetrics > 3) performanceMetrics = 0;
     SET_OPT(fastForward, boolean);
+    SET_OPT(crashRescue, boolean);
     SET_OPT(fullscreen, boolean);
     SET_OPT(fixedAspectRatio, boolean);
     SET_OPT(smoothScaling, integer);

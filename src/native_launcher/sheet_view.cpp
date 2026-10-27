@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <ctime>
 
 namespace hardrpg {
 using namespace homeLayout;
@@ -153,8 +154,14 @@ void View::buildSheet(const UI &u) {
     const char *modes[] = {"Off", "FPS", "FPS and frame timing", "Full stats"};
     row(Row::Choice, "Overlay in game", modes[mode]);
     row(Row::Toggle, "Fast forward with <l>+<r>", "", boolean("fastForward", true));
+    row(Row::Toggle, "Crash rescue", "", boolean("crashRescue", true));
     focusRow = u.setting;
-    if (u.setting == 1)
+    if (u.setting == 2)
+      notes = {tr("Keeps a quick copy of the game at map changes and battle starts, where crashes usually happen. "
+                  "If the game stops (an error, a closed app, a power loss), starting it again offers to resume there."),
+               tr(u.inGame ? "Your save files are never changed. Saving in the game drops the copy."
+                           : "Your save files are never changed. Saving in the game drops the copy. Applies the next time a game starts.")};
+    else if (u.setting == 1)
       notes = {tr("<l>+<r> switches up to twice the speed; »» shows in the corner while it is on. Busy maps run as fast "
                   "as they can."),
                tr(u.inGame ? "Any button can also be mapped to Fast forward in Controls."
@@ -318,6 +325,42 @@ void View::buildSheet(const UI &u) {
       focusRow = u.setting;
       notes = {tr("Saved for this game; applies the next time it starts."), tr("MIDI effects cost CPU time and are off by default.")};
       left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", "Use default", Button::Square), back};
+    } else if (u.page == Page::Rescue) {
+      const auto &r = u.rescueInfo;
+      auto span = [](int64_t seconds) {
+        seconds = std::max<int64_t>(0, seconds);
+        return seconds < 90     ? trf("{} s", {std::to_string(seconds)})
+               : seconds < 5400 ? trf("{} min", {std::to_string((seconds + 30) / 60)})
+                                : trf("{} h", {std::to_string((seconds + 1800) / 3600)});
+      };
+      const char *moment = r.reason == "transfer" ? "a map change"
+                           : r.reason == "battle" ? "the start of a battle"
+                           : r.reason == "menu"   ? "opening the menu"
+                                                  : "returning to the map";
+      const int64_t since = r.writtenAt > 0 ? int64_t(std::time(nullptr)) - r.writtenAt : -1;
+      section = tr("Resume from crash");
+      title = u.gameEntry.name;
+      if (!r.error.empty())
+        subtitle = trf("An error ({}) stopped this game. A quick save from {} before it is ready.", {r.error, span(r.age)});
+      else
+        subtitle = since >= 0 ? trf("This game stopped without saving (closed, or the Vita lost power). A quick save from {} ago is ready.", {span(since)})
+                              : tr("This game stopped without saving (closed, or the Vita lost power). A quick save is ready.");
+      row(Row::Primary, "Resume from the quick save");
+      row(Row::Plain, "Start normally");
+      row(Row::Danger, "Discard the quick save");
+      focusRow = u.setting;
+      std::string place = r.mapName.empty() ? trf("map {}", {std::to_string(r.mapId)})
+                                            : trf("map {} ({})", {std::to_string(r.mapId), r.mapName});
+      notes = {trf("Made at {}, {}. Play time {}.", {tr(moment), place, span(r.playtime)})};
+      if (!r.leader.empty())
+        notes.push_back(r.level > 0 ? trf("Party leader: {}, level {}.", {r.leader, std::to_string(r.level)})
+                                    : trf("Party leader: {}.", {r.leader}));
+      notes.push_back(tr("Your save files are not changed. Save in the game soon after resuming."));
+      if (r.saveDisabled)
+        notes.push_back(tr("Saving was turned off at that point of the game."));
+      if (!r.error.empty() && since >= 0)
+        notes.push_back(trf("The error happened {} ago.", {span(since)}));
+      left = {hint("btn-cross-26", "Choose", Button::Cross), hint("btn-circle-26", "Cancel", Button::Circle)};
     } else if (u.page == Page::Remove) {
       auto q = u.removeQuestions[u.removeStep];
       bool source = !u.removeInfo.folder.empty() || !u.removeInfo.zip.empty();

@@ -43,6 +43,8 @@ struct Config {
     int performanceMetrics;
     // L+R (or a button mapped to Fast forward) runs the game at up to 2x.
     bool fastForward;
+    /* Crash rescue (launcher/crash_rescue.rb): copies at map changes and battle starts. */
+    bool crashRescue;
     
     bool winResizable;
     bool fullscreen;

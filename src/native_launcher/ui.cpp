@@ -338,7 +338,7 @@ void UI::scroll(int rows) {
                 : page == Page::Home    ? settingsRows()
                : page == Page::Keys    ? keysRows
                 : page == Page::Sound   ? soundRows
-                : page == Page::Metrics ? 2
+                : page == Page::Metrics ? 3
                                         : 3;
     setting = std::max(0, std::min(setting + rows, std::max(0, count - 1)));
     settingFirst = std::max(0, std::min(settingFirst, setting));
@@ -498,7 +498,7 @@ void UI::sheetTouch(int x, int y) {
                 : page == Page::Sound   ? soundRows
                 : page == Page::Updates ? 3
                 : page == Page::Display ? 3
-                : page == Page::Metrics ? 2
+                : page == Page::Metrics ? 3
                 : page == Page::Rtp     ? rtpPackCount
                 : page == Page::Folders ? 1 + int(gameFolders.size())
                                         : int(errors.size());
@@ -560,10 +560,11 @@ void UI::openInGame(const Entry &entry) {
 }
 int UI::optionRows() const {
   return page == Page::Game       ? gameOptionsCount()
-         : page == Page::Metrics  ? 2
+         : page == Page::Metrics  ? 3
          : page == Page::Rtp      ? rtpPackCount
          : page == Page::GameInfo ? 0
          : page == Page::Remove   ? 2
+         : page == Page::Rescue   ? 3
                                   : 3;
 }
 void UI::openRemove() {
@@ -700,6 +701,13 @@ void UI::gameAction(Button b) {
     inGameExit = Resume;
     return;
   }
+  if (b == Button::Circle && page == Page::Rescue && rescueFromHome) {
+    gameOptions = false;
+    page = Page::Home;
+    focus = Focus::Home;
+    message.clear();
+    return;
+  }
   if (b == Button::Circle) {
     if (page == Page::Game) {
       gameOptions = false;
@@ -782,20 +790,19 @@ void UI::gameAction(Button b) {
       openFreeZip();
       break;
     case 7:
-      launchingName = gameEntry.name;
-      if (beginLaunch)
-        beginLaunch();
-      model.launch(gameEntry, [this](uint64_t done, uint64_t total) {
-        progress(done, total);
-      }, [this](const std::string &label) { preparation(label); });
-      launchFormat = gameEntry.version;
-      launchRequested = true;
+      if (offerRescue(gameEntry, gameMenuSource, false))
+        break;
+      startGame(gameEntry);
       break;
     }
     return;
   }
   if (page == Page::Remove && b == Button::Cross) {
     answerRemove(setting == 1);
+    return;
+  }
+  if (page == Page::Rescue && b == Button::Cross) {
+    answerRescue();
     return;
   }
   if (page == Page::Controls && b == Button::Cross && controlTarget(setting)) {
@@ -1185,19 +1192,20 @@ void UI::changeDisplay(int step, bool reset) {
                 : tr("Display settings saved for the next game launch.");
 }
 void UI::changeMetrics(int step, bool reset) {
-  if (setting == 1) {
-    // Fast forward (L+R in game): on unless switched off.
-    auto found = displayValues.as_object().find("fastForward");
+  if (setting == 1 || setting == 2) {
+    // Fast forward (L+R in game) and crash rescue: on unless switched off.
+    const char *key = setting == 1 ? "fastForward" : "crashRescue";
+    auto found = displayValues.as_object().find(key);
     bool on = found == displayValues.as_object().end() || !found->second.is_boolean() ||
               found->second.as_boolean();
     Json value(reset ? true : !on);
     if (gameOptions)
-      model.changeGameSetting(gameEntry, "fastForward", value, reset);
+      model.changeGameSetting(gameEntry, key, value, reset);
     else
-      model.changeDisplay("fastForward", value);
+      model.changeDisplay(key, value);
     displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
     message = gameOptions ? trf(inGame ? "Saved for {}. Applied now." : "Saved for {}. Applies on next launch.", {gameEntry.name})
-                          : tr("Fast forward saved for the next game launch.");
+                          : tr(setting == 1 ? "Fast forward saved for the next game launch." : "Crash rescue saved for the next game launch.");
     return;
   }
   auto i = displayValues.as_object().find("performanceMetrics");
@@ -1417,11 +1425,65 @@ void UI::openSetting() {
       browser->enter(folders[setting - 1]);
   }
 }
+bool UI::offerRescue(const Entry &chosen, const Entry &source, bool fromHome) {
+  auto found = model.rescue(chosen);
+  if (!found.present)
+    return false;
+  rescueInfo = found;
+  rescueFromHome = fromHome;
+  if (fromHome) {
+    gameMenuSource = source;
+    gameEntry = chosen;
+    displayValues = model.gameSettings(chosen);
+    canFreeZip = false;
+    gameOptions = true;
+    focus = Focus::Settings;
+  } else
+    gameSetting = setting;
+  page = Page::Rescue;
+  setting = settingFirst = 0;
+  message.clear();
+  return true;
+}
+void UI::answerRescue() {
+  auto chosen = gameEntry;
+  if (setting == 2) {
+    model.discardRescue(chosen);
+    if (rescueFromHome) {
+      gameOptions = false;
+      page = Page::Home;
+      focus = Focus::Home;
+    } else {
+      page = Page::Game;
+      setting = gameSetting;
+      settingFirst = std::max(0, setting - 6);
+    }
+    message = trf("Quick save of {} discarded.", {chosen.name});
+    return;
+  }
+  model.requestResume(chosen, setting == 0);
+  if (rescueFromHome)
+    model.recordLaunch(entryKey(gameMenuSource));
+  startGame(chosen);
+}
+void UI::startGame(const Entry &chosen) {
+  launchingName = chosen.name;
+  if (beginLaunch)
+    beginLaunch();
+  model.launch(chosen, [this](uint64_t done, uint64_t total) {
+    progress(done, total);
+  }, [this](const std::string &label) { preparation(label); });
+  launchFormat = chosen.version;
+  launchRequested = true;
+}
 void UI::play(size_t index) {
   if (index >= model.list.size())
     return;
   Entry chosen;
   auto e = model.list[index];
+  // A game with a crash rescue asks before anything starts.
+  if (e.kind == Kind::Game && offerRescue(e, e, true))
+    return;
   launchingName = e.name;
   if (beginLaunch && e.kind != Kind::Folder)
     beginLaunch();
@@ -1519,7 +1581,7 @@ void UI::action(Button b) {
              : page == Page::Home    ? settingsRows()
                : page == Page::Keys    ? keysRows
              : page == Page::Sound   ? soundRows
-             : page == Page::Metrics ? 2
+             : page == Page::Metrics ? 3
                                      : 3,
              7, step);
       message.clear();

@@ -1554,6 +1554,7 @@ struct GraphicsPrivate {
         number("smoothScalingDown", config.smoothScalingDown);
         number("performanceMetrics", config.performanceMetrics);
         flag("fastForward", ff);
+        flag("crashRescue", config.crashRescue);
         if (integer != integerScaleActive) {
             integerScaleActive = integer;
             integerLastMileScaling = !integer;
