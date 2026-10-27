@@ -173,6 +173,11 @@ if host_system == 'vita'
     main_source += files('vita_stubs.cpp', 'vita_posix_compat.c', 'vita_pthread_once.c', 'vita_livearea.cpp', 'input/vita_input.cpp', 'vita_error_report.cpp', 'vita_resume.cpp', 'vita_runtime_log.c', 'asset_prefetch.cpp')
     global_link_args += '-Wl,--wrap=_write_r'
     global_link_args += '-Wl,--wrap=select'
+    # libstdc++ decides whether threads exist by the address of
+    # pthread_cancel, which nothing else links in. Without it std::mutex
+    # never locks and shared_ptr and locale counts are not atomic, so the
+    # launcher's audio, artwork and library threads raced (heap corruption).
+    global_link_args += '-Wl,-u,pthread_cancel'
     if get_option('proto_launcher')
         main_source += files('vita_proto_launcher.cpp')
         global_args += '-DMKXPZ_PROTO_LAUNCHER'
