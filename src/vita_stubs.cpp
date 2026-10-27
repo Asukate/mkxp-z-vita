@@ -98,8 +98,34 @@ extern "C" uint64_t vitaStartupTimerElapsedUs(void)
         ? now - vita_startup_zero_us : 0;
 }
 
+#ifdef HARDRPG_LAUNCHER_BENCH
+#include <psp2/kernel/processmgr.h>
+/* Launcher bench builds keep the marks in memory (process time) for its report. */
+namespace {
+struct BenchMark { const char *phase; uint64_t us; };
+BenchMark bench_marks[48];
+volatile int bench_mark_count = 0;
+}
+extern "C" int vitaStartupTimerBenchMarks(const char **phases, uint64_t *us, int max)
+{
+    int n = std::min(int(bench_mark_count), max);
+    for (int i = 0; i < n; ++i) {
+        phases[i] = bench_marks[i].phase;
+        us[i] = bench_marks[i].us;
+    }
+    return n;
+}
+#endif
+
 extern "C" void vitaStartupTimerMark(const char *phase)
 {
+#ifdef HARDRPG_LAUNCHER_BENCH
+    {
+        int i = __sync_fetch_and_add(&bench_mark_count, 1);
+        if (i < 48)
+            bench_marks[i] = BenchMark{phase, uint64_t(sceKernelGetProcessTimeWide())};
+    }
+#endif
 #ifndef MKXPZ_VITA_DIAGNOSTICS
     (void)phase;
 #else

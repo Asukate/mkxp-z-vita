@@ -20,6 +20,8 @@ void vitaStartupTimerShutdown(void);
 /* Keep this run's marks as startup-timing.prev.log: the next process
  * (a restart into the launcher or a game) starts the log again. */
 void vitaStartupTimerKeep(void);
+/* Launcher bench builds only: the marks so far, in process time. */
+int vitaStartupTimerBenchMarks(const char **phases, uint64_t *us, int max);
 
 #ifdef __cplusplus
 }
