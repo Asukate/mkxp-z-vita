@@ -36,21 +36,23 @@ module HardRPGNative
     end
 
     # {"Class#meth" => [normalized text, def line]} for defs indented by one or two spaces (or a tab)
-    # in column-0 class bodies; the def ends at an `end` with the same indent.
+    # more than their class line; the def ends at an `end` with the same indent. Classes may be
+    # indented (a whole script shifted right); the swap still needs the def to be the method in place.
     def methods(src)
-      out = {}; cls = nil; cur = nil; body = nil; start = 0; ind = nil
+      out = {}; stack = []; cur = nil; body = nil; start = 0; ind = nil
       src.each_line.with_index(1) do |raw, ln|
         line = raw.chomp
         if cur
           if line.start_with?(ind) && line[ind.size..] =~ /\Aend\s*(#.*)?\z/
-            out["#{cls}##{cur}"] = [body.reject(&:empty?).join("\n"), start]; cur = nil
+            out["#{stack.last[0]}##{cur}"] = [body.reject(&:empty?).join("\n"), start]; cur = nil
           else
             body << norm_line(line)
           end
-        elsif line =~ /\A(?:class|module) (\w+)/ then cls = $1
-        elsif line =~ /\Aend\b/ then cls = nil
-        elsif cls && line =~ /\A( {1,2}|\t)def ([\w?!=]+|\[\]=?)/
-          ind = $1; cur = $2; start = ln; body = [norm_line(line)]
+        elsif line =~ /\A(\s*)(?:class|module) (\w+)/ then stack << [$2, $1]
+        elsif !stack.empty? && line =~ /\A(\s*)end\b/ && $1 == stack.last[1] then stack.pop
+        elsif !stack.empty? && line.start_with?(stack.last[1]) &&
+              line[stack.last[1].size..] =~ /\A( {1,2}|\t)def ([\w?!=]+|\[\]=?)/
+          ind = stack.last[1] + $1; cur = $2; start = ln; body = [norm_line(line)]
         end
       end
       out
@@ -94,6 +96,8 @@ module HardRPGNative
     "Game_Map#screen_tile_x:2798891327:130354449:37" => "",
     "Game_Map#screen_tile_y:3575891027:365432171:38" => "",
     "Game_Map#update_events:3280958066:797714417:104" => "",
+    "Game_Map#setup_autorun_common_event:1759215688:2925478940:183" => "",
+    "Game_Vehicle#screen_y:3716450459:2668300970:29" => "",
     "Sprite_Base#update:1618497493:1556683970:77" => "",
     "Sprite_Base#animation?:417777797:3195210554:32" => "",
     "Sprite_Base#update_animation:1467497474:2024050448:398" => "",
@@ -141,6 +145,13 @@ module HardRPGNative
     "Game_Map#floor_xy:969204233:977108497:383" => "known",
     "Game_Map#round_x:3717177633:1181881102:57" => "known",
     "Game_Map#round_y:2321096418:1017254612:57" => "known",
+    # Event Jitter Fix (Game_Map display_x/y rounded to 1/32, adjust_x/y read them)
+    "Game_Map#display_x:1717768432:2265321294:47" => "jitter",
+    "Game_Map#display_y:848227820:2269122384:47" => "jitter",
+    "Game_Map#adjust_x:1553845420:2760518742:132" => "jitter",
+    "Game_Map#adjust_y:2520378825:2320706593:132" => "jitter",
+    # Yanfly Ace Core Engine
+    "Game_Event#near_the_screen?:2967297709:769812868:342" => "yanfly",
     # star aura effect (星潟)
     "Sprite#star_aura_effects_update:2583269496:1939184202:2488" => "aura",
     "StarAuraEffect#update_aura_effect:65509816:2849013802:1804" => "known",
@@ -227,11 +238,12 @@ module HardRPGNative
     "Sprite_Character#update/mog" => :mog_anti_lag_update,
   }.freeze
 
-  CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Map Game_Variables Sprite_Base Sprite_Character
-               Spriteset_Map Sprite StarAuraEffect].freeze
+  CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Map Game_Variables Game_Vehicle Sprite_Base
+               Sprite_Character Spriteset_Map Sprite StarAuraEffect].freeze
   ATTRS = { 'Game_CharacterBase' => %i[tile_id character_name character_index pattern direction opacity blend_type
                                        bush_depth transparent animation_id balloon_id current_floor],
             'Game_Map' => %i[display_x display_y],
+            'Game_Vehicle' => %i[altitude],
             'Game_Event' => %i[can_update],
             'Game_Character' => %i[star_aura_effect_update],
             'Game_Temp' => %i[multi_viewport_accessor],

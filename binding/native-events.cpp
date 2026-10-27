@@ -171,6 +171,8 @@ enum SlotId {
     /* Game_Map */
     S_GM_adjust_x, S_GM_adjust_y, S_GM_loop_horizontal, S_GM_loop_vertical, S_GM_width, S_GM_height,
     S_GM_screen_tile_x, S_GM_screen_tile_y, S_GM_update_events,
+    /* Game_Map autorun scan, Game_Vehicle, RPG::CommonEvent (engine Ruby), Enumerable#find on Array */
+    S_GM_setup_autorun_common_event, S_GVH_screen_y, S_GVH_altitude, S_CE_autorun, S_ENUM_find,
     /* RPG data attributes (engine Ruby module) */
     S_MAP_scroll_type, S_MAP_width, S_MAP_height, S_EVENT_id,
     /* Sprite_Base */
@@ -472,8 +474,10 @@ static ID iv_real_x, iv_real_y, iv_x, iv_y, iv_jump_count, iv_jump_peak, iv_move
 static ID id_update_symbol_reaction, id_update_symbol_movement, id_zero, id_truncate, id_between,
     id_reset_sprite_effects, id_is_a, id_MOVE_CONTROL, id_DASH_PLUS, id_MOG_ANTI_LAG,
     id_UPDATE_OUT_SCREEN_RANGE, id_Game_Event, id_Calt, id_LAYER_UP_TILE, id_LAYER_DOWN_TILE,
-    id_star_aura_effect, id_star_aura_effect_update_set, id_nev_aura_tail;
-static ID gv_game_map, gv_data_animations, gv_game_variables, gv_game_system, gv_game_temp;
+    id_star_aura_effect, id_star_aura_effect_update_set, id_nev_aura_tail, id_autorun, id_switch_id,
+    id_list;
+static ID gv_game_map, gv_data_animations, gv_game_variables, gv_game_system, gv_game_temp,
+    gv_data_common_events, gv_game_switches;
 static VALUE g_spriteBase = Qnil, g_graphics = Qnil;
 static VALUE g_float_256 = Qnil;
 
@@ -597,12 +601,17 @@ static bool adjustN(VALUE map, bool horiz, VALUE coord, Num &out) {
     out = subN(x, disp);
     return true;
 }
+static VALUE gm_adjust_x(VALUE self, int argc, const VALUE *argv, bool);
+static VALUE gm_adjust_y(VALUE self, int argc, const VALUE *argv, bool);
 /* $game_map.adjust_x/y(v) as a C value, through the game's own method if it replaced it. */
 static bool adjustCall(bool horiz, VALUE coord, Num &out) {
     VALUE map = gameMap();
     Slot &s = g_slots[horiz ? S_GM_adjust_x : S_GM_adjust_y];
     if (slotOk(s, rb_class_of(map)) && s.kind == SK_NATIVE) {
         s.direct++;
+        /* Another native text (Event Jitter Fix): its own native, as a Ruby value. */
+        if (s.native != (horiz ? gm_adjust_x : gm_adjust_y))
+            return toNum(s.native(map, 1, &coord, false), out);
         if (adjustN(map, horiz, coord, out))
             return true;
         return toNum(callOrig(map, horiz ? S_GM_adjust_x : S_GM_adjust_y, 1, &coord), out);
@@ -643,8 +652,10 @@ static bool screenCall(VALUE c, bool horiz, Num &out, VALUE &boxed, bool *pure =
             if (pure)
                 *pure = slotOk(g_slots[S_GM_adjust_x], rb_class_of(gameMap())) &&
                         g_slots[S_GM_adjust_x].kind == SK_NATIVE &&
+                        g_slots[S_GM_adjust_x].native == gm_adjust_x &&
                         slotOk(g_slots[S_GM_adjust_y], rb_class_of(gameMap())) &&
                         g_slots[S_GM_adjust_y].kind == SK_NATIVE &&
+                        g_slots[S_GM_adjust_y].native == gm_adjust_y &&
                         slotOk(g_slots[S_GCB_shift_y], rb_class_of(c)) &&
                         slotOk(g_slots[S_GCB_jump_height], rb_class_of(c)) &&
                         slotOk(g_slots[S_GCB_object_character], rb_class_of(c)) &&
@@ -847,6 +858,144 @@ static VALUE gm_update_events(VALUE self, int, const VALUE *, bool) {
     for (long i = 0; i < RARRAY_LEN(common); ++i)
         rb_funcall(RARRAY_AREF(common, i), id_update, 0);
     return common;
+}
+
+/* Default Game_Map#setup_autorun_common_event:
+ *   event = $data_common_events.find do |event|
+ *     event && event.autorun? && $game_switches[event.switch_id]
+ *   end
+ *   @interpreter.setup(event.list) if event
+ *   event
+ * Runs every frame the map interpreter is idle and walks every common event; nearly all fail
+ * at autorun?, which is the engine's `@trigger == 1`. */
+static VALUE gm_setup_autorun_common_event(VALUE self, int, const VALUE *, bool) {
+    VALUE list = rb_gvar_get(gv_data_common_events);
+    /* find is Enumerable's on a plain Array, walking it with Array#each. */
+    if (!(RB_TYPE_P(list, T_ARRAY) && rb_class_of(list) == rb_cArray &&
+          slotOk(g_slots[S_ENUM_find], rb_cArray) && slotOk(g_slots[S_ARY_each], rb_cArray)))
+        return callOrig(self, S_GM_setup_autorun_common_event, 0, nullptr);
+    VALUE event = Qnil;
+    /* Array#each reads the length again after every element. */
+    for (long i = 0; i < RARRAY_LEN(list); ++i) {
+        VALUE ev = RARRAY_AREF(list, i);
+        if (!RTEST(ev))
+            continue;
+        Slot &a = g_slots[S_CE_autorun];
+        bool autorun;
+        if (slotOk(a, rb_class_of(ev))) {
+            a.direct++;
+            autorun = nEq(rb_ivar_get(ev, iv_trigger), INT2FIX(1));
+        } else {
+            a.viaRuby++;
+            autorun = RTEST(rb_funcall(ev, id_autorun, 0));
+        }
+        if (!autorun)
+            continue;
+        VALUE sid = rb_funcall(ev, id_switch_id, 0);
+        if (RTEST(rb_funcall(rb_gvar_get(gv_game_switches), id_aref, 1, sid))) {
+            event = ev;
+            break;
+        }
+    }
+    if (RTEST(event))
+        rb_funcall(IV(self, interpreter), id_setup, 1, rb_funcall(event, id_list, 0));
+    return event;
+}
+
+/* Default Game_Vehicle#screen_y: super - altitude */
+static VALUE gvh_screen_y(VALUE self, int, const VALUE *, bool fromRuby) {
+    VALUE sy = callSuper(self, S_GVH_screen_y, 0, nullptr, fromRuby);
+    return nSub(sy, call0(self, S_GVH_altitude));
+}
+
+/* Event Jitter Fix: Game_Map#display_x / display_y are (@display_x * 32).floor.to_f / 32, and
+ * adjust_x / adjust_y read them through those methods. */
+static bool jitterDisplay(VALUE d, VALUE &out) {
+    if (FIXNUM_P(d)) {
+        long long v = (long long)FIX2LONG(d) * 32; /* Integer#floor is itself; to_f; / 32 */
+        out = DBL2NUM((double)v / 32.0);
+        return true;
+    }
+    if (isFlo(d)) {
+        double v = RFLOAT_VALUE(d) * 32.0;
+        if (!std::isfinite(v)) /* Float#floor raises FloatDomainError */
+            return false;
+        out = DBL2NUM(std::floor(v) / 32.0);
+        return true;
+    }
+    return false;
+}
+static VALUE gm_display_x_jitter(VALUE self, int, const VALUE *, bool) {
+    VALUE out;
+    if (jitterDisplay(IV(self, display_x), out))
+        return out;
+    return callOrig(self, S_GM_display_x, 0, nullptr);
+}
+static VALUE gm_display_y_jitter(VALUE self, int, const VALUE *, bool) {
+    VALUE out;
+    if (jitterDisplay(IV(self, display_y), out))
+        return out;
+    return callOrig(self, S_GM_display_y, 0, nullptr);
+}
+/*   if loop_horizontal? && x < display_x - (width - screen_tile_x) / 2
+ *     x - display_x + @map.width
+ *   else
+ *     x - display_x
+ *   end                                                                */
+static VALUE gm_adjust_x_jitter(VALUE self, int argc, const VALUE *argv, bool) {
+    checkArity(argc, 1, 1);
+    VALUE x = argv[0];
+    if (RTEST(call0(self, S_GM_loop_horizontal))) {
+        VALUE d = call0(self, S_GM_display_x);
+        VALUE w = call0(self, S_GM_width);
+        VALUE half = nDiv(nSub(w, call0(self, S_GM_screen_tile_x)), INT2FIX(2));
+        if (nLt(x, nSub(d, half))) {
+            VALUE v = nSub(x, call0(self, S_GM_display_x));
+            return nAdd(v, call0(IV(self, map), S_MAP_width));
+        }
+    }
+    return nSub(x, call0(self, S_GM_display_x));
+}
+static VALUE gm_adjust_y_jitter(VALUE self, int argc, const VALUE *argv, bool) {
+    checkArity(argc, 1, 1);
+    VALUE y = argv[0];
+    if (RTEST(call0(self, S_GM_loop_vertical))) {
+        VALUE d = call0(self, S_GM_display_y);
+        VALUE h = call0(self, S_GM_height);
+        VALUE half = nDiv(nSub(h, call0(self, S_GM_screen_tile_y)), INT2FIX(2));
+        if (nLt(y, nSub(d, half))) {
+            VALUE v = nSub(y, call0(self, S_GM_display_y));
+            return nAdd(v, call0(IV(self, map), S_MAP_height));
+        }
+    }
+    return nSub(y, call0(self, S_GM_display_y));
+}
+
+/* Yanfly Ace Core Engine's Game_Event#near_the_screen?:
+ *   dx = [Graphics.width, $game_map.width * 256].min/32 - 5 if dx.nil?
+ *   dy = [Graphics.height, $game_map.height * 256].min/32 - 5 if dy.nil?
+ *   ax = $game_map.adjust_x(@real_x) - Graphics.width / 2 / 32
+ *   ay = $game_map.adjust_y(@real_y) - Graphics.height / 2 / 32
+ *   ax >= -dx && ax <= dx && ay >= -dy && ay <= dy                     */
+static VALUE ge_near_the_screen_yanfly(VALUE self, int argc, const VALUE *argv, bool) {
+    checkArity(argc, 0, 2);
+    VALUE dx = argc > 0 ? argv[0] : Qnil;
+    VALUE dy = argc > 1 ? argv[1] : Qnil;
+    if (NIL_P(dx)) {
+        VALUE gw = gfxWidth();
+        VALUE mw = nMul(call0(gameMap(), S_GM_width), INT2FIX(256));
+        dx = nSub(nDiv(nMin2(gw, mw), INT2FIX(32)), INT2FIX(5));
+    }
+    if (NIL_P(dy)) {
+        VALUE gh = gfxHeight();
+        VALUE mh = nMul(call0(gameMap(), S_GM_height), INT2FIX(256));
+        dy = nSub(nDiv(nMin2(gh, mh), INT2FIX(32)), INT2FIX(5));
+    }
+    VALUE adx = call1(gameMap(), S_GM_adjust_x, IV(self, real_x));
+    VALUE ax = nSub(adx, nDiv(nDiv(gfxWidth(), INT2FIX(2)), INT2FIX(32)));
+    VALUE ady = call1(gameMap(), S_GM_adjust_y, IV(self, real_y));
+    VALUE ay = nSub(ady, nDiv(nDiv(gfxHeight(), INT2FIX(2)), INT2FIX(32)));
+    return rbool(nGe(ax, nNeg(dx)) && nLe(ax, dx) && nGe(ay, nNeg(dy)) && nLe(ay, dy));
 }
 
 /* ------------------------------------------------------------------ */
@@ -1420,6 +1569,15 @@ static const NativeDef g_natives[] = {
     ND(S_GM_screen_tile_x, "", gm_screen_tile_x, -1),
     ND(S_GM_screen_tile_y, "", gm_screen_tile_y, -1),
     ND(S_GM_update_events, "", gm_update_events, -1),
+    ND(S_GM_setup_autorun_common_event, "", gm_setup_autorun_common_event, -1),
+    ND(S_GVH_screen_y, "", gvh_screen_y, S_GCB_screen_y),
+    /* Event Jitter Fix */
+    ND(S_GM_display_x, "jitter", gm_display_x_jitter, -1),
+    ND(S_GM_display_y, "jitter", gm_display_y_jitter, -1),
+    NDA(S_GM_adjust_x, "jitter", gm_adjust_x_jitter, -1, 1, 1),
+    NDA(S_GM_adjust_y, "jitter", gm_adjust_y_jitter, -1, 1, 1),
+    /* Yanfly Ace Core Engine */
+    NDA(S_GE_near_the_screen, "yanfly", ge_near_the_screen_yanfly, -1, 0, 2),
     ND(S_SB_update, "", sb_update, S_SPR_update),
     ND(S_SB_animation, "", sb_animation, -1),
     ND(S_SB_update_animation, "", sb_update_animation, -1),
@@ -1714,6 +1872,8 @@ void nativeEventsInit(int rgssVersion) {
     I(id_Calt, "Calt"); I(id_LAYER_UP_TILE, "LAYER_UP_TILE"); I(id_LAYER_DOWN_TILE, "LAYER_DOWN_TILE");
     I(id_star_aura_effect, "star_aura_effect"); I(id_star_aura_effect_update_set, "star_aura_effect_update=");
     I(id_nev_aura_tail, "__nev_aura_tail"); I(gv_game_temp, "$game_temp");
+    I(id_autorun, "autorun?"); I(id_switch_id, "switch_id"); I(id_list, "list");
+    I(gv_data_common_events, "$data_common_events"); I(gv_game_switches, "$game_switches");
     I(id_update_symbol_reaction, "update_symbol_reaction"); I(id_update_symbol_movement, "update_symbol_movement");
     I(id_zero, "zero?"); I(id_truncate, "truncate"); I(id_between, "between?");
     I(id_reset_sprite_effects, "reset_sprite_effects"); I(id_is_a, "is_a?"); I(id_MOVE_CONTROL, "MOVE_CONTROL");
@@ -1806,6 +1966,11 @@ void nativeEventsInit(int rgssVersion) {
     slotDef(S_GV_aref, "Game_Variables", "[]");
     slotDef(S_GS_anti_lag, "Game_System", "anti_lag");
     slotDef(S_GM_display_x, "Game_Map", "display_x");
+    slotDef(S_GM_setup_autorun_common_event, "Game_Map", "setup_autorun_common_event");
+    slotDef(S_GVH_screen_y, "Game_Vehicle", "screen_y");
+    slotDef(S_GVH_altitude, "Game_Vehicle", "altitude");
+    slotDef(S_CE_autorun, "RPG::CommonEvent", "autorun?");
+    slotDef(S_ENUM_find, "Enumerable", "find");
     slotDef(S_GM_display_y, "Game_Map", "display_y");
     slotDef(S_SC_check_can_update_sprite, "Sprite_Character", "check_can_update_sprite");
     slotDef(S_SPR_visible, "Sprite", "visible");
@@ -2031,7 +2196,7 @@ static VALUE initRuby(VALUE) {
         {S_ARY_clear, rb_cArray}, {S_STR_eq, rb_cString}, {S_STR_neq, rb_cString}, {S_ARY_aref, rb_cArray},
         {S_INT_zero, rb_cInteger}, {S_INT_truncate, rb_cInteger}, {S_FLO_truncate, rb_cFloat},
         {S_INT_between, rb_cInteger}, {S_OBJ_is_a, rb_cObject}, {S_ARY_each, rb_cArray},
-        {S_ARY_delete_if, rb_cArray}, {S_ARY_each_with_index, rb_cArray}};
+        {S_ARY_delete_if, rb_cArray}, {S_ARY_each_with_index, rb_cArray}, {S_ENUM_find, rb_cArray}};
     for (auto &b : builtins) {
         Slot &s = g_slots[b.id];
         /* The method that class has now (String#!= is BasicObject#!=, which calls ==;
@@ -2048,6 +2213,14 @@ static VALUE initRuby(VALUE) {
     attrSlotFrom(S_MAP_width, rpgClass("RPG::Map"));
     attrSlotFrom(S_MAP_height, rpgClass("RPG::Map"));
     attrSlotFrom(S_EVENT_id, rpgClass("RPG::Event"));
+    /* RPG::CommonEvent#autorun? is the engine's `@trigger == 1`: checked, then read directly. */
+    {
+        Slot &s = g_slots[S_CE_autorun];
+        s.kind = SK_KNOWN;
+        s.owner = rpgClass("RPG::CommonEvent");
+        s.expect = instanceMethod(s.owner, s.mid);
+        rb_gc_register_mark_object(s.expect);
+    }
     id_src_rect_iv = rb_intern("src_rect");
     g_float_256 = DBL2NUM(256.0);
     rb_gc_register_mark_object(g_float_256);
