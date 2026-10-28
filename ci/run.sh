@@ -23,6 +23,8 @@ c++ -std=c++14 -O2 -I src tests/vita-pad-replay.cpp -o "$WS/vita-pad-replay-test
 "$WS/vita-pad-replay-tests" 2>&1 | tee "$WS/logs/vita-pad-replay.log"
 c++ -std=c++14 -O2 -I src tests/fast-forward.cpp -o "$WS/fast-forward-tests"
 "$WS/fast-forward-tests" 2>&1 | tee "$WS/logs/fast-forward.log"
+c++ -std=c++14 -O2 -I src tests/win32-text.cpp -o "$WS/win32-text-tests"
+"$WS/win32-text-tests" 2>&1 | tee "$WS/logs/win32-text.log"
 ruby tests/vita-controls-overlay.rb 2>&1 | tee "$WS/logs/vita-controls-overlay.log"
 ruby tests/legacy-ruby-compat.rb 2>&1 | tee "$WS/logs/legacy-ruby-compat.log"
 ruby tests/sprite-fastpath.rb 2>&1 | tee "$WS/logs/sprite-fastpath.log"

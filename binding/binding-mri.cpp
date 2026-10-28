@@ -46,6 +46,7 @@
 #ifdef __vita__
 #include "vita_startup_timer.h"
 #include "vita_error_report.h"
+#include "util/win32-text.h"
 #endif
 
 #include <vector>
@@ -1697,6 +1698,33 @@ static void crashRescueWrite(VALUE exc) {
     } else
         vitaErrorReportFormat("\nCrash rescue: %s\n", ok ? "the last map change or battle was kept." : "the last copy could not be written.");
 }
+#ifdef __vita__
+bool hardrpgLastMessageBox(std::string &caption, std::string &text, double &secondsAgo);
+
+/* The game quit on its own right after a Windows message box (WF-RGSS shows
+ * its fatal errors that way, then calls exit(1)). The Vita could not show the
+ * box, so keep its text as the error report the launcher opens next. */
+static void reportMessageBoxExit(VALUE exc) {
+    std::string caption, text;
+    double secondsAgo = 0;
+    if (!hardrpgLastMessageBox(caption, text, secondsAgo))
+        return;
+    int status = 0;
+    if (!NIL_P(exc) && rb_obj_is_kind_of(exc, rb_eSystemExit)) {
+        VALUE value = rb_funcall(exc, rb_intern("status"), 0);
+        status = RB_INTEGER_TYPE_P(value) ? NUM2INT(value) : 0;
+    }
+    if (!hardrpg::win32text::reportMessageBoxOnExit(true, secondsAgo, status))
+        return;
+    vitaDiagLog("RUBY", "message_box_exit status=%d age=%.1f", status, secondsAgo);
+    vitaErrorReportBegin();
+    vitaErrorReportFormat("Graphics frame: %d\n\n", shState->graphics().getFrameCount());
+    const std::string report = hardrpg::win32text::messageBoxReport(caption, text, status);
+    vitaErrorReportAppend(report.data(), report.size());
+    vitaErrorReportSave();
+}
+#endif
+
 /* The game ended on its own or through Back to library: nothing to rescue. */
 static void crashRescueCleanExit() {
     VALUE base = rb_gv_get("$hardrpg_rescue_base");
@@ -2546,10 +2574,12 @@ static void mriBindingExecute() {
     if (!NIL_P(exc) && !rb_obj_is_kind_of(exc, rb_eSystemExit))
         showExc(exc, btData);
 #ifdef __vita__
-    else
+    else {
+        reportMessageBoxExit(exc);
         crashRescueCleanExit();
+    }
 #endif
-    
+
     ruby_cleanup(0);
     vitaDiagLog("RUBY", "ruby_cleanup_ok");
     

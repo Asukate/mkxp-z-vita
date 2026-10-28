@@ -10,6 +10,11 @@
 #include "miniffi.h"
 #include "binding-util.h"
 #include "util/debugwriter.h"
+#if defined(__vita__) || defined(__psp2__)
+#include "util/win32-text.h"
+#include <algorithm>
+#include <string>
+#endif
 
 #if RAPI_MAJOR >= 2
 #include <ruby/thread.h>
@@ -366,8 +371,110 @@ static bool vitaVKPressed(unsigned int key) {
     return state && scancode < count && state[scancode] != 0;
 }
 
+/* The last Windows message box a game showed. The Vita cannot display it, so
+ * it is logged and, when the game quits right after it, written as the error
+ * report (binding-mri.cpp). WF-RGSS shows its fatal errors this way and then
+ * calls exit(1), which otherwise looks like a clean quit. */
+static std::string g_messageBoxCaption, g_messageBoxText;
+static Uint32 g_messageBoxTicks = 0;
+static bool g_messageBoxShown = false;
+
+bool hardrpgLastMessageBox(std::string &caption, std::string &text, double &secondsAgo) {
+    if (!g_messageBoxShown)
+        return false;
+    caption = g_messageBoxCaption;
+    text = g_messageBoxText;
+    secondsAgo = (SDL_GetTicks() - g_messageBoxTicks) / 1000.0;
+    return true;
+}
+
+/* A narrow Win32 string argument: the Ruby String's bytes up to its first NUL. */
+static std::string vitaNarrowArg(VALUE value) {
+    if (!RB_TYPE_P(value, RUBY_T_STRING))
+        return std::string();
+    const char *data = RSTRING_PTR(value);
+    return std::string(data, hardrpg::win32text::narrowSpan(data, RSTRING_LEN(value), -1));
+}
+
+/* A wide argument, copied out: a Ruby String's bytes need not be 2-aligned. */
+static std::u16string vitaWideArg(VALUE value) {
+    if (!RB_TYPE_P(value, RUBY_T_STRING))
+        return std::u16string();
+    std::u16string wide(RSTRING_LEN(value) / 2, u'\0');
+    if (!wide.empty())
+        memcpy(&wide[0], RSTRING_PTR(value), wide.size() * 2);
+    return wide;
+}
+
+static long vitaLongArg(VALUE value) {
+    return RB_INTEGER_TYPE_P(value) ? NUM2LONG(value) : 0;
+}
+
+/* kernel32 text conversion (see util/win32-text.h). */
+static bool vitaKernel32Call(VALUE function, VALUE args, VALUE *result) {
+    const char *name = StringValueCStr(function);
+    using namespace hardrpg::win32text;
+    if (std::strcmp(name, "MultiByteToWideChar") == 0 && RARRAY_LEN(args) == 6) {
+        VALUE src = rb_ary_entry(args, 2), dst = rb_ary_entry(args, 4);
+        if (!RB_TYPE_P(src, RUBY_T_STRING)) { *result = INT2NUM(0); return true; }
+        long srcLen = vitaLongArg(rb_ary_entry(args, 3));
+        long dstUnits = vitaLongArg(rb_ary_entry(args, 5));
+        size_t room = RB_TYPE_P(dst, RUBY_T_STRING) ? RSTRING_LEN(dst) / 2 : 0;
+        size_t cap = dstUnits > 0 ? std::min(size_t(dstUnits), room) : 0;
+        std::u16string out(cap, u'\0');
+        long n = multiByteToWideChar(RSTRING_PTR(src), RSTRING_LEN(src), srcLen,
+                                     cap ? &out[0] : nullptr, dstUnits > 0 ? cap : 0);
+        if (dstUnits > 0 && cap == 0) n = 0; // a size was given but no buffer
+        if (n > 0 && cap) {
+            rb_str_modify(dst);
+            memcpy(RSTRING_PTR(dst), out.data(), size_t(n) * 2);
+        }
+        *result = LONG2NUM(n);
+        return true;
+    }
+    if (std::strcmp(name, "WideCharToMultiByte") == 0 && RARRAY_LEN(args) == 8) {
+        VALUE src = rb_ary_entry(args, 2), dst = rb_ary_entry(args, 4);
+        if (!RB_TYPE_P(src, RUBY_T_STRING)) { *result = INT2NUM(0); return true; }
+        std::u16string wide = vitaWideArg(src);
+        long srcLen = vitaLongArg(rb_ary_entry(args, 3));
+        long dstBytes = vitaLongArg(rb_ary_entry(args, 5));
+        size_t room = RB_TYPE_P(dst, RUBY_T_STRING) ? RSTRING_LEN(dst) : 0;
+        size_t cap = dstBytes > 0 ? std::min(size_t(dstBytes), room) : 0;
+        std::string out(cap, '\0');
+        long n = wideCharToMultiByte(wide.data(), wide.size(), srcLen,
+                                     cap ? &out[0] : nullptr, dstBytes > 0 ? cap : 0);
+        if (dstBytes > 0 && cap == 0) n = 0;
+        if (n > 0 && cap) {
+            rb_str_modify(dst);
+            memcpy(RSTRING_PTR(dst), out.data(), size_t(n));
+        }
+        *result = LONG2NUM(n);
+        return true;
+    }
+    return false;
+}
+
 static bool vitaUser32Call(VALUE function, VALUE args, VALUE *result) {
     const char *name = StringValueCStr(function);
+    if ((std::strcmp(name, "MessageBoxA") == 0 || std::strcmp(name, "MessageBoxW") == 0) &&
+        RARRAY_LEN(args) == 4) {
+        using namespace hardrpg::win32text;
+        if (name[10] == 'W') {
+            std::u16string text = vitaWideArg(rb_ary_entry(args, 1));
+            std::u16string caption = vitaWideArg(rb_ary_entry(args, 2));
+            g_messageBoxText = utf16ToUtf8(text.data(), wideSpan(text.data(), text.size(), -1));
+            g_messageBoxCaption = utf16ToUtf8(caption.data(), wideSpan(caption.data(), caption.size(), -1));
+        } else {
+            g_messageBoxText = vitaNarrowArg(rb_ary_entry(args, 1));
+            g_messageBoxCaption = vitaNarrowArg(rb_ary_entry(args, 2));
+        }
+        g_messageBoxTicks = SDL_GetTicks();
+        g_messageBoxShown = true;
+        Debug() << "MessageBox (the Vita cannot show it):" << g_messageBoxCaption << "|"
+                << g_messageBoxText.substr(0, 600);
+        *result = INT2NUM(messageBoxAnswer(static_cast<unsigned long>(vitaLongArg(rb_ary_entry(args, 3)))));
+        return true;
+    }
     if (std::strcmp(name, "GetAsyncKeyState") == 0 || std::strcmp(name, "GetKeyState") == 0) {
         unsigned int key = NUM2UINT(rb_ary_entry(args, 0));
         *result = INT2NUM(vitaVKPressed(key) ? 0x8000 : 0);
@@ -478,6 +585,11 @@ RB_METHOD_GUARD(MiniFFI_call) {
         if (library == "user32.dll" || library == "user32") {
             VALUE handled;
             if (vitaUser32Call(rb_iv_get(self, "_funcname"), args, &handled))
+                return handled;
+        }
+        if (library == "kernel32.dll" || library == "kernel32") {
+            VALUE handled;
+            if (vitaKernel32Call(rb_iv_get(self, "_funcname"), args, &handled))
                 return handled;
         }
 #endif
