@@ -92,6 +92,80 @@ raise 'event change did not redraw' unless view.draws.size == count + 1
 view.refresh_3d; HardRPGDungeonRedraw.flush
 raise 'unchanged view redrawn' unless view.draws.size == count + 1
 
+# Between turns only the middle half of each layer is drawn; ops are cut to it.
+class Rect
+  attr_accessor :x, :y, :width, :height
+  def initialize(x, y, w, h); @x = x; @y = y; @width = w; @height = h; end
+end
+class Bitmap
+  attr_reader :log, :width, :height
+  def initialize(w, h); @width = w; @height = h; @log = []; end
+  def disposed?; false; end
+  def blt(x, y, _src, rect, _opacity = 255); @log << [:blt, x, y, rect.x, rect.width]; self; end
+  def stretch_blt(d, _src, _s, _opacity = 255); @log << [:stretch, d.x, d.width]; self; end
+  def fill_rect(*a); @log << [:fill, *a]; self; end
+  def clear_rect(*a); @log << [:clear, *a.map { |v| v.is_a?(Rect) ? [v.x, v.width] : v }]; self; end
+end
+layer = Bitmap.new(1064, 416).extend(HardRPGDungeonClip)
+layer.instance_variable_set(:@hardrpg_clip, [266, 798])
+wall = Bitmap.new(200, 336)
+layer.blt(200.7, 10, wall, Rect.new(0, 0, 200, 336))  # left part hidden
+layer.blt(900, 0, wall, Rect.new(0, 0, 100, 10))      # wholly hidden
+layer.blt(300, 0, wall, Rect.new(0, 0, 100, 10))      # wholly shown
+layer.blt(200, 0, wall, Rect.new(150, 0, 100, 10))    # source rect overhangs: as written
+layer.stretch_blt(Rect.new(0, 0, 1064, 416), Bitmap.new(1, 1), Rect.new(0, 0, 1, 1))
+layer.stretch_blt(Rect.new(0, 0, 1064, 416), wall, Rect.new(0, 0, 200, 336))  # scaled image: as written
+layer.fill_rect(0, 5, 1064, 10, :colour)
+layer.clear_rect(Rect.new(0, 0, 1064, 416))
+layer.instance_variable_set(:@hardrpg_clip, nil)
+layer.clear_rect(0, 0, 1064, 416)
+want = [[:blt, 266, 10, 66, 134], [:blt, 300, 0, 0, 100], [:blt, 200, 0, 150, 100],
+        [:stretch, 266, 532], [:stretch, 0, 1064], [:fill, 266, 5, 532, 10, :colour],
+        [:clear, 266, 0, 532, 416], [:clear, 0, 0, 1064, 416]]
+raise "clipped ops wrong: #{layer.log.inspect}" unless layer.log == want
+
+class TestSprite
+  attr_accessor :bitmap, :src_rect, :visible
+  def initialize(bitmap); @bitmap = bitmap; @src_rect = Rect.new(266, 0, 532, 416); @visible = true; end
+  def disposed?; false; end
+end
+class WideView < Dungeon_Sprite
+  attr_reader :clips
+  def initialize
+    super
+    @bitmaps = Array.new(4) { Bitmap.new(1064, 416) }
+    @sprites = @bitmaps.map { |b| TestSprite.new(b) }
+    @start_ox = 266
+    @clips = []
+  end
+  def sprites; @sprites; end
+  def __hardrpg_refresh_3d; @clips << @bitmaps.map { |b| b.instance_variable_get(:@hardrpg_clip) }.uniq; end
+end
+$game_player.instance_variable_set(:@x, 5)
+wide = WideView.new
+wide.refresh_3d; HardRPGDungeonRedraw.flush
+raise "step view not clipped: #{wide.clips.inspect}" unless wide.clips == [[[266, 798]]]
+raise 'clip left set after the draw' unless wide.instance_variable_get(:@bitmaps).all? { |b| b.instance_variable_get(:@hardrpg_clip).nil? }
+HardRPGDungeonRedraw.flush
+raise 'redrawn with nothing changed' unless wide.clips.size == 1
+# A sprite shows other columns without a new draw: the view is drawn in full.
+wide.sprites[2].src_rect.x = 300
+HardRPGDungeonRedraw.flush
+raise "hidden columns not drawn when shown: #{wide.clips.inspect}" unless wide.clips.last == [nil] && wide.clips.size == 2
+HardRPGDungeonRedraw.flush
+raise 'full view drawn twice' unless wide.clips.size == 2
+# Turning: the whole width is drawn.
+wide.sprites[2].src_rect.x = 266
+$game_player.instance_variable_set(:@rotation_right, true)
+wide.refresh_3d; HardRPGDungeonRedraw.flush
+raise "turn view clipped: #{wide.clips.inspect}" unless wide.clips.last == [nil]
+$game_player.instance_variable_set(:@rotation_right, false)
+HardRPGDungeonRedraw.clip = false
+$game_player.instance_variable_set(:@x, 6)
+wide.refresh_3d; HardRPGDungeonRedraw.flush
+raise 'clip not switched off' unless wide.clips.last == [nil]
+HardRPGDungeonRedraw.clip = true
+
 # KGC Passive Skills: the actor copy is skipped only when nothing reads it.
 kgc = "def restore_passive_rev\n  dummy = Marshal.load(Marshal.dump(self)) unless @passive_dummy_flag\nend\nattr_accessor :passive_dummy_flag\n"
 raise 'passive script not recognised' unless HardRPGPassiveSkillFast.uses_script?([[1, 'KGC', '', kgc]])

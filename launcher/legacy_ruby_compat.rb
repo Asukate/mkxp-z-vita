@@ -116,10 +116,94 @@ end
 # request in a frame is drawn, and it is skipped when everything it reads is
 # the same as for the view already drawn. If the player moved after the last
 # request, that request is drawn with the player as it was then.
+#
+# The layers are twice the screen width only for the turn animation; between
+# turns each layer sprite shows the middle half. A view drawn while not turning
+# only draws inside the part the sprites show (HardRPGDungeonClip). Should a
+# sprite ever show more before the next draw, the view is drawn again in full.
+module HardRPGDungeonClip
+  # Extended onto the dungeon's layer bitmaps. @hardrpg_clip is [left, right)
+  # while a view is drawn clipped, nil otherwise. Each op is cut only where the
+  # cut copies exactly the same pixels; anything else runs as written.
+  def blt(x, y, src, rect, opacity = 255)
+    c = @hardrpg_clip
+    return super unless c && (x.is_a?(Integer) || x.is_a?(Float)) && rect.is_a?(Rect) &&
+                        src.is_a?(Bitmap) && !src.disposed?
+    rx = rect.x; ry = rect.y; rw = rect.width; rh = rect.height
+    return super unless rw > 0 && rh > 0 && rx >= 0 && ry >= 0 && rx + rw <= src.width && ry + rh <= src.height
+    x0 = x.to_i
+    a = x0 > c[0] ? x0 : c[0]
+    b = x0 + rw < c[1] ? x0 + rw : c[1]
+    return self if a >= b
+    return super if a == x0 && b == x0 + rw
+    super(a, y, src, Rect.new(rx + a - x0, ry, b - a, rh), opacity)
+  end
+
+  # Only a one-pixel source (a flat tint) inside the bitmap: the same colour
+  # lands on every covered pixel however much of the rect is drawn.
+  def stretch_blt(drect, src, srect, opacity = 255)
+    c = @hardrpg_clip
+    return super unless c && drect.is_a?(Rect) && srect.is_a?(Rect) && src.is_a?(Bitmap) && !src.disposed? &&
+                        src.width == 1 && src.height == 1 && srect.x == 0 && srect.y == 0 &&
+                        srect.width == 1 && srect.height == 1
+    x0 = drect.x; w = drect.width
+    return super unless w > 0 && drect.height > 0 && x0 >= 0 && drect.y >= 0 &&
+                        x0 + w <= width && drect.y + drect.height <= height
+    a = x0 > c[0] ? x0 : c[0]
+    b = x0 + w < c[1] ? x0 + w : c[1]
+    return self if a >= b
+    return super if a == x0 && b == x0 + w
+    super(Rect.new(a, drect.y, b - a, drect.height), src, srect, opacity)
+  end
+
+  def fill_rect(*args)
+    c = @hardrpg_clip
+    return super unless c
+    r = HardRPGDungeonClip.cut(c, args, 1)
+    r == :skip ? self : (r ? super(*r) : super)
+  end
+
+  def clear_rect(*args)
+    c = @hardrpg_clip
+    return super unless c
+    r = HardRPGDungeonClip.cut(c, args, 0)
+    r == :skip ? self : (r ? super(*r) : super)
+  end
+
+  # (x, y, w, h, *rest) or (rect, *rest) cut to the window: new args, :skip
+  # when nothing is left, nil to run the call unchanged.
+  def self.cut(c, args, rest)
+    if args.size == 1 + rest && args[0].is_a?(Rect)
+      r = args[0]
+      x = r.x; y = r.y; w = r.width; h = r.height
+    elsif args.size == 4 + rest && args[0, 4].all? { |v| v.is_a?(Integer) || v.is_a?(Float) }
+      x, y, w, h = args[0, 4].map(&:to_i)
+    else
+      return nil
+    end
+    return nil unless w > 0 && h > 0
+    a = x > c[0] ? x : c[0]
+    b = x + w < c[1] ? x + w : c[1]
+    return :skip if a >= b
+    return nil if a == x && b == x + w
+    rest.zero? ? [a, y, b - a, h] : [a, y, b - a, h, args[-1]]
+  end
+end
+
 module HardRPGDungeonRedraw
   PLAYER = [:@x, :@y, :@direction, :@move_front, :@rotation_left, :@rotation_right].freeze
   @pending = []
   @installed = false
+  @clip = true
+  @clipped = nil
+
+  class << self
+    attr_accessor :clip
+  end
+
+  def self.clipped(sprite)
+    @clipped = sprite
+  end
 
   def self.uses_script?(scripts)
     scripts.is_a?(Array) && scripts.any? do |section|
@@ -142,7 +226,11 @@ module HardRPGDungeonRedraw
       alias_method :__hardrpg_refresh_3d, :refresh_3d
       def refresh_3d
         state = (HardRPGDungeonRedraw.capture rescue nil)
-        return __hardrpg_refresh_3d unless state
+        unless state
+          @hardrpg_window = nil
+          @hardrpg_drawn_key = nil
+          return __hardrpg_refresh_3d
+        end
         @hardrpg_pending_state = state
         HardRPGDungeonRedraw.defer(self)
         nil
@@ -157,9 +245,73 @@ module HardRPGDungeonRedraw
           key = (hardrpg_view_key rescue nil)
           unless key && key == @hardrpg_drawn_key
             @hardrpg_drawn_key = nil
-            __hardrpg_refresh_3d
+            hardrpg_draw(HardRPGDungeonRedraw.clip && hardrpg_window, state)
             @hardrpg_drawn_key = key
           end
+        end
+      end
+
+      # The part of the layers the sprites show, [left, right), when the view
+      # is not turning and every layer shows the same columns; nil otherwise.
+      def hardrpg_window
+        player = $game_player
+        return nil if player.rotation_right? || player.rotation_left?
+        return nil unless @start_ox.is_a?(Integer) && @sprites.size == @bitmaps.size
+        window = nil
+        @sprites.each_with_index do |sprite, i|
+          return nil if sprite.disposed? || !sprite.bitmap.equal?(@bitmaps[i])
+          return nil if sprite.respond_to?(:wave_amp) && sprite.wave_amp != 0
+          r = sprite.src_rect
+          return nil unless r.x == @start_ox && r.width > 0
+          w = [r.x, r.x + r.width]
+          return nil if window && window != w
+          window = w
+        end
+        window
+      end
+
+      def hardrpg_draw(window, state)
+        @hardrpg_window = nil
+        if window
+          @bitmaps.each do |b|
+            b.extend(HardRPGDungeonClip) unless b.is_a?(HardRPGDungeonClip)
+            b.instance_variable_set(:@hardrpg_clip, window)
+          end
+        end
+        begin
+          __hardrpg_refresh_3d
+        ensure
+          @bitmaps.each { |b| b.instance_variable_set(:@hardrpg_clip, nil) } if window
+        end
+        return unless window
+        @hardrpg_window = window
+        @hardrpg_window_state = state
+        HardRPGDungeonRedraw.clipped(self)
+      end
+
+      # After a clipped draw: true while every sprite still shows only the
+      # columns that were drawn.
+      def hardrpg_window_shown?
+        window = @hardrpg_window
+        return true unless window
+        return true if @sprites.nil? || @bitmaps.nil? || @bitmaps.any?(&:disposed?)
+        @sprites.each_with_index.all? do |sprite, i|
+          next true if sprite.disposed? || !sprite.visible
+          r = sprite.src_rect
+          sprite.bitmap.equal?(@bitmaps[i]) && r.x >= window[0] && r.x + r.width <= window[1] &&
+            !(sprite.respond_to?(:wave_amp) && sprite.wave_amp != 0)
+        end
+      end
+
+      # Draws the last clipped view again in full.
+      def hardrpg_unclip
+        state = @hardrpg_window_state
+        @hardrpg_window = nil
+        return if @sprites.nil? || @bitmaps.nil? || @bitmaps.any?(&:disposed?)
+        if state
+          HardRPGDungeonRedraw.with_state(state) { __hardrpg_refresh_3d }
+        else
+          __hardrpg_refresh_3d
         end
       end
 
@@ -215,18 +367,32 @@ module HardRPGDungeonRedraw
   # Before anything shows or captures the screen.
   def self.flush
     install unless @installed
-    return if @pending.empty?
-    list = @pending
-    @pending = []
-    list.each do |sprite|
-      begin
-        sprite.hardrpg_flush
-      rescue StandardError
-        # Draw as the game asked, without the bookkeeping.
-        sprite.instance_variable_set(:@hardrpg_drawn_key, nil)
-        sprite.__hardrpg_refresh_3d rescue nil
+    unless @pending.empty?
+      list = @pending
+      @pending = []
+      list.each do |sprite|
+        begin
+          sprite.hardrpg_flush
+        rescue StandardError
+          # Draw as the game asked, without the bookkeeping.
+          sprite.instance_variable_set(:@hardrpg_drawn_key, nil)
+          sprite.instance_variable_set(:@hardrpg_window, nil)
+          sprite.__hardrpg_refresh_3d rescue nil
+        end
       end
     end
+    sprite = @clipped
+    return unless sprite
+    begin
+      if sprite.instance_variable_get(:@hardrpg_window)
+        return if sprite.hardrpg_window_shown?
+        sprite.hardrpg_unclip
+      end
+    rescue StandardError
+      sprite.instance_variable_set(:@hardrpg_window, nil)
+      sprite.instance_variable_set(:@hardrpg_drawn_key, nil)
+    end
+    @clipped = nil
   end
 end
 

@@ -295,6 +295,13 @@ struct BitmapPrivate
     bool readListed;
     /* Frame of the last write to the CPU pixels (see Bitmap::frameTick). */
     unsigned cpuStamp = 0;
+    /* Bumped by every change of the pixels (onModified). */
+    uint32_t contentVersion = 0;
+    /* For blits from this bitmap: per row, the columns [first, end) outside
+     * which every pixel is fully transparent (see cpuRowSpans). */
+    std::vector<uint32_t> rowSpans;
+    uint32_t spansVersion = ~0u, spansSeenVersion = ~0u;
+    const void *spansPixels = 0, *spansSeenPixels = 0;
     
     BitmapPrivate(Bitmap *self)
     : self(self),
@@ -529,6 +536,7 @@ struct BitmapPrivate
     
     void onModified(bool freeSurface = true)
     {
+        ++contentVersion;
         if (surface && freeSurface)
             dropReadback();
         
@@ -773,7 +781,24 @@ static void cpuUpload(BitmapPrivate *p, const IntRect &rect)
     /* Whole rows need no copy. A wide rectangle is sent as whole rows too:
      * a few more bytes to the GPU instead of a temporary as large as the
      * rectangle, which a long session's fragmented heap may not have. */
-    if (s->pitch == s->w * 4 && (rect.w == s->w || (size_t)rect.w * 2 >= (size_t)s->w))
+    if (s->pitch == s->w * 4 && rect.w == s->w)
+    {
+        TEX::uploadSubImage(0, rect.y, s->w, rect.h, first, GL_RGBA);
+        return;
+    }
+#ifdef __vita__
+    /* vitaGL reads the rows in place at the bitmap's pitch: only the changed
+     * columns are sent and nothing is copied first (the 3D dungeon redraws
+     * the middle half of its double-width layers). */
+    if (s->pitch % 4 == 0)
+    {
+        gl.PixelStorei(GL_UNPACK_ROW_LENGTH, s->pitch / 4);
+        TEX::uploadSubImage(rect.x, rect.y, rect.w, rect.h, first + (size_t)rect.x * 4, GL_RGBA);
+        gl.PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        return;
+    }
+#endif
+    if (s->pitch == s->w * 4 && (size_t)rect.w * 2 >= (size_t)s->w)
     {
         TEX::uploadSubImage(0, rect.y, s->w, rect.h, first, GL_RGBA);
         return;
@@ -1167,8 +1192,48 @@ static void cpuBlendConstant(SDL_Surface *dst, int x0, int y0, int x1, int y1,
 /* Blend src[sourceRect] over dst[destRect]. Both rects have positive size
  * and were already shrunk to their bitmaps by the caller; they are clipped
  * again here so a rounding step can never index outside either surface. */
+/* Per row of a blit source, the columns [first, end) holding every pixel that
+ * is not fully transparent (first == end for an empty row). A blit draws
+ * nothing for a clear source pixel, so it only has to visit these columns:
+ * the 3D dungeon walls are trapezoids in rectangles about five times their
+ * size. Worked out the second time an unchanged image is drawn from, so an
+ * image that changes between every use never pays for the scan. */
+static void cpuFindRowSpans(const SDL_Surface *s, uint32_t *spans)
+{
+    for (int y = 0; y < s->h; ++y)
+    {
+        const uint32_t *row = (const uint32_t *)((const uint8_t *)s->pixels + (size_t)y * s->pitch);
+        int first = 0, end = s->w;
+        while (first < end && (row[first] >> 24) == 0)
+            ++first;
+        while (end > first && (row[end - 1] >> 24) == 0)
+            --end;
+        spans[(size_t)y * 2] = first;
+        spans[(size_t)y * 2 + 1] = end;
+    }
+}
+
+static const uint32_t *cpuRowSpans(BitmapPrivate *sp, SDL_Surface *s)
+{
+    if (sp->spansVersion == sp->contentVersion && sp->spansPixels == s->pixels &&
+        sp->rowSpans.size() == (size_t)s->h * 2)
+        return sp->rowSpans.data();
+    if (sp->spansSeenVersion != sp->contentVersion || sp->spansSeenPixels != s->pixels)
+    {
+        sp->spansSeenVersion = sp->contentVersion;
+        sp->spansSeenPixels = s->pixels;
+        return 0;
+    }
+    sp->rowSpans.resize((size_t)s->h * 2);
+    cpuFindRowSpans(s, sp->rowSpans.data());
+    sp->spansVersion = sp->contentVersion;
+    sp->spansPixels = s->pixels;
+    return sp->rowSpans.data();
+}
+
 static void cpuBlit(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
-                    const IntRect &sourceRect, int opacity, bool smooth)
+                    const IntRect &sourceRect, int opacity, bool smooth,
+                    const uint32_t *spans = 0)
 {
     const uint32_t *recip = cpuReciprocals();
     const int x0 = std::max(destRect.x, 0), y0 = std::max(destRect.y, 0);
@@ -1188,13 +1253,21 @@ static void cpuBlit(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
         const int offX = sourceRect.x - destRect.x, offY = sourceRect.y - destRect.y;
         const int cx0 = std::max(x0, -offX), cx1 = std::min(x1, src->w - offX);
         const int cy0 = std::max(y0, -offY), cy1 = std::min(y1, src->h - offY);
-        const int count = cx1 - cx0;
-        if (count <= 0)
+        if (cx1 <= cx0)
             return;
         for (int y = cy0; y < cy1; ++y)
         {
-            const uint32_t *in = (const uint32_t *)(sp + (size_t)(y + offY) * src->pitch) + cx0 + offX;
-            uint32_t *out = (uint32_t *)(dp + (size_t)y * dst->pitch) + cx0;
+            int rx0 = cx0, rx1 = cx1;
+            if (spans)
+            {
+                rx0 = std::max(rx0, (int)spans[(size_t)(y + offY) * 2] - offX);
+                rx1 = std::min(rx1, (int)spans[(size_t)(y + offY) * 2 + 1] - offX);
+                if (rx1 <= rx0)
+                    continue;
+            }
+            const int count = rx1 - rx0;
+            const uint32_t *in = (const uint32_t *)(sp + (size_t)(y + offY) * src->pitch) + rx0 + offX;
+            uint32_t *out = (uint32_t *)(dp + (size_t)y * dst->pitch) + rx0;
             /* The loop waits on memory, not on arithmetic (28 ns a pixel
              * on the Vita against 2 for a fill), so the next row of both
              * images is fetched while this one is drawn, one cache line in
@@ -2183,8 +2256,11 @@ void Bitmap::stretchBlt(IntRect destRect,
             pixels = cpuSourcePixels(source, source.p);
         if (pixels)
         {
-            cpuBlit(p->cpu, destRect, pixels, sourceRect, opacity,
-                    smooth && !(sourceRect.w == destRect.w && sourceRect.h == destRect.h));
+            const bool unscaled = sourceRect.w == destRect.w && sourceRect.h == destRect.h;
+            const uint32_t *spans = 0;
+            if (unscaled && (pixels == source.p->cpu || pixels == source.p->surface))
+                spans = cpuRowSpans(source.p, pixels);
+            cpuBlit(p->cpu, destRect, pixels, sourceRect, opacity, smooth && !unscaled, spans);
             const IntRect changed = cpuClip(destRect, p->cpu->w, p->cpu->h);
             p->addTaintedArea(changed);
             cpuTouch(p, changed);

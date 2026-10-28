@@ -147,11 +147,32 @@ int main() try {
         for (int i = 0; i < sw * sh; ++i)
             ((uint32_t *)src->pixels)[i] = (round & 3) == 3 ? (rnd() % 3 ? rnd() | 0xFF000000u : rnd() & 0x00FFFFFFu)
                                          : (round & 1) && rnd() % 8 ? rnd() | 0xFF000000u : rnd();
+        // One round in five: clear margins of random width on each row, like a wall image.
+        if (round % 5 == 4)
+            for (int y = 0; y < sh; ++y) {
+                const int left = rnd() % (sw + 1), right = rnd() % (sw + 1);
+                for (int x = 0; x < sw; ++x)
+                    if (x < left || x >= sw - right) at(src, x, y) &= 0x00FFFFFFu;
+            }
         std::vector<uint32_t> before((uint32_t *)dst->pixels, (uint32_t *)dst->pixels + dw * dh);
         const int w = 1 + rnd() % 50, h = 1 + rnd() % 30, opacity = round % 3 ? 255 : (int)(rnd() % 256);
         const IntRect to((int)(rnd() % 80) - 40, (int)(rnd() % 50) - 25, w, h);
         const IntRect from((int)(rnd() % 80) - 40, (int)(rnd() % 50) - 25, w, h);
+        // The same blit limited to each source row's non-clear columns.
+        SDL_Surface *spanned = surface(dw, dh);
+        std::memcpy(spanned->pixels, before.data(), size_t(dw) * dh * 4);
+        std::vector<uint32_t> spans(size_t(sh) * 2);
+        cpuFindRowSpans(src, spans.data());
+        for (int y = 0; y < sh; ++y) {
+            const uint32_t first = spans[size_t(y) * 2], end = spans[size_t(y) * 2 + 1];
+            for (int x = 0; x < sw; ++x)
+                expect(((x >= (int)first && x < (int)end) || (at(src, x, y) >> 24) == 0) && first <= end && end <= (uint32_t)sw,
+                       "row span left out a visible pixel");
+        }
+        cpuBlit(spanned, to, src, from, opacity, false, spans.data());
         cpuBlit(dst, to, src, from, opacity, false);
+        expect(std::memcmp(spanned->pixels, dst->pixels, size_t(dw) * dh * 4) == 0, "blit limited to row spans differs");
+        release(spanned);
         for (int y = 0; y < dh; ++y)
             for (int x = 0; x < dw; ++x) {
                 const int sx = from.x + (x - to.x), sy = from.y + (y - to.y);
@@ -262,7 +283,7 @@ int main() try {
 with tempfile.TemporaryDirectory(prefix='hardrpg-cpu-compose-') as directory:
     source = Path(directory) / 'compose.cpp'
     helpers = ''.join(function(name) for name in
-                      ('cpuPack', 'cpuFill', 'cpuGradientAt', 'cpuGradient', 'cpuReciprocals', 'cpuOver', 'cpuLerp', 'cpuBlendConstant', 'cpuBlit'))
+                      ('cpuPack', 'cpuFill', 'cpuGradientAt', 'cpuGradient', 'cpuReciprocals', 'cpuOver', 'cpuLerp', 'cpuBlendConstant', 'cpuFindRowSpans', 'cpuBlit'))
     source.write_text(PREAMBLE + helpers + CHECKS)
     binary = Path(directory) / 'compose'
     subprocess.run(['c++', '-std=c++17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
