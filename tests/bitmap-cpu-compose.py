@@ -42,6 +42,11 @@ struct Vec4 { float x, y, z, w; Vec4(float a, float b, float c, float d) : x(a),
 struct IntRect { int x, y, w, h; IntRect() : x(0), y(0), w(0), h(0) {} IntRect(int a, int b, int c, int d) : x(a), y(b), w(c), h(d) {} };
 template<class T> static T clamp(T v, T lo, T hi) { return v < lo ? lo : (v > hi ? hi : v); }
 struct SDL_Surface { int w, h, pitch; void *pixels; };
+struct ComposeConfig { bool enableHires = false; };
+struct ComposeState { ComposeConfig cfg; const ComposeConfig &config() const { return cfg; } } composeState;
+static ComposeState *shState = &composeState;
+struct { struct { int maxTexSize = 4096; } caps; } glState;
+static size_t cpuBitmapBytes = 0;
 // Exact-size heap blocks: the sanitizer reports any write or read outside them.
 static SDL_Surface *surface(int w, int h) {
     SDL_Surface *s = new SDL_Surface{w, h, w * 4, std::malloc((size_t)w * h * 4)};
@@ -119,6 +124,55 @@ static uint32_t rnd() { static uint32_t x = 2463534242u; x ^= x << 13; x ^= x >>
 
 int main() try {
     const uint32_t *recip = cpuReciprocals();
+
+    // The composition path must not change when a long list crosses one
+    // megapixel. Both dimensions and the aggregate allocation remain bounded.
+    expect(cpuBitmapBudget == 56u * 1024 * 1024, "composition budget changed");
+    expect(cpuBitmapEligible(272, 3840), "existing long contents rejected");
+    expect(cpuBitmapEligible(280, 3840), "160-row contents rejected");
+    expect(cpuBitmapEligible(520, 2080), "contents above 2048 pixels rejected");
+    expect(cpuBitmapEligible(3840, 280), "wide contents rejected");
+    expect(!cpuBitmapEligible(4097, 24) && !cpuBitmapEligible(24, 4097), "texture limit bypassed");
+    expect(!cpuBitmapEligible(0, 24) && !cpuBitmapEligible(24, -1), "invalid extent accepted");
+    expect(!cpuBitmapEligible(4096, 4096), "single allocation exceeded the budget");
+    const size_t listBytes = 280u * 3840 * 4;
+    cpuBitmapBytes = cpuBitmapBudget - listBytes;
+    expect(cpuBitmapEligible(280, 3840), "exact budget fit rejected");
+    ++cpuBitmapBytes;
+    expect(!cpuBitmapEligible(280, 3840), "aggregate budget exceeded");
+    cpuBitmapBytes = cpuBitmapBudget + 1;
+    expect(!cpuBitmapEligible(1, 1), "budget subtraction wrapped");
+    cpuBitmapBytes = 0;
+    composeState.cfg.enableHires = true;
+    expect(!cpuBitmapEligible(280, 3840), "high-resolution rendering entered the CPU path");
+    composeState.cfg.enableHires = false;
+
+    // Interleaved backgrounds and alpha text-like pixels must retain all 160
+    // rows, including content outside the first viewport and across 2048.
+    SDL_Surface *list = surface(280, 3840), *glyph = surface(64, 24);
+    for (int i = 0; i < 64 * 24; ++i)
+        ((uint32_t *)glyph->pixels)[i] = i % 3 ? 0x80FFFFFFu : 0u;
+    for (int row = 0; row < 160; ++row) {
+        const uint32_t background = 0xC8201818u + (uint32_t)(row % 3) * 32;
+        cpuFill(list, IntRect(0, row * 24, 280, 24), background);
+        cpuBlit(list, IntRect(8, row * 24, 64, 24), glyph, IntRect(0, 0, 64, 24), 255, false);
+    }
+    for (int y = 0; y < 3840; ++y)
+        for (int x = 0; x < 280; ++x) {
+            const uint32_t background = 0xC8201818u + (uint32_t)((y / 24) % 3) * 32;
+            const uint32_t wanted = x >= 8 && x < 72
+                ? cpuOver(background, at(glyph, x - 8, y % 24), 255, recip) : background;
+            expect(at(list, x, y) == wanted, "later composition erased an earlier row");
+        }
+    SDL_Surface *view = surface(180, 336);
+    for (int scroll : {0, 336, 2016, 2040, 3504}) {
+        std::memset(view->pixels, 0, 180 * 336 * 4);
+        cpuBlit(view, IntRect(0, 0, 180, 336), list, IntRect(0, scroll, 180, 336), 255, false);
+        for (int y = 0; y < 336; ++y)
+            for (int x = 0; x < 180; ++x)
+                expect(at(view, x, y) == at(list, x, y + scroll), "scrolled contents differ");
+    }
+    release(view); release(glyph); release(list);
 
     // Blend against the shader formula. Colour under a fully transparent result is
     // never visible, and the 8-bit intermediate alpha allows one level of rounding;
@@ -282,11 +336,12 @@ int main() try {
 
 with tempfile.TemporaryDirectory(prefix='hardrpg-cpu-compose-') as directory:
     source = Path(directory) / 'compose.cpp'
-    helpers = ''.join(function(name) for name in
-                      ('cpuPack', 'cpuFill', 'cpuGradientAt', 'cpuGradient', 'cpuReciprocals', 'cpuOver', 'cpuLerp', 'cpuBlendConstant', 'cpuFindRowSpans', 'cpuBlit'))
+    budget = re.search(r'^static const size_t cpuBitmapBudget = [^;]+;', SOURCE, re.M).group(0) + '\n'
+    helpers = budget + ''.join(function(name) for name in
+                      ('cpuBitmapEligible', 'cpuPack', 'cpuFill', 'cpuGradientAt', 'cpuGradient', 'cpuReciprocals', 'cpuOver', 'cpuLerp', 'cpuBlendConstant', 'cpuFindRowSpans', 'cpuBlit'))
     source.write_text(PREAMBLE + helpers + CHECKS)
     binary = Path(directory) / 'compose'
-    subprocess.run(['c++', '-std=c++17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
+    subprocess.run(['c++', '-std=c++17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-DMKXPZ_CPU_BITMAPS',
                     '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
                     str(source), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

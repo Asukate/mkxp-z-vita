@@ -706,10 +706,17 @@ static void dropAllReadbacks()
 static bool cpuBitmapEligible(int width, int height)
 {
 #ifdef MKXPZ_CPU_BITMAPS
-    return !shState->config().enableHires &&
-           cpuBitmapBytes + (size_t)width * height * 4 <= cpuBitmapBudget &&
-           (int64_t)width * height <= 1024 * 1024 &&
-           width <= glState.caps.maxTexSize && height <= glState.caps.maxTexSize;
+    if (shState->config().enableHires || width <= 0 || height <= 0 ||
+        width > glState.caps.maxTexSize || height > glState.caps.maxTexSize)
+        return false;
+
+    /* Long window contents need the same CPU composition as short ones.
+     * Rendering them in separate GPU passes can discard earlier pixels on
+     * Vita. Bound their storage with the shared budget, not a per-bitmap
+     * pixel cutoff that changes rendering as a list grows. */
+    const size_t bytes = (size_t)width * height * 4;
+    return cpuBitmapBytes <= cpuBitmapBudget &&
+           bytes <= cpuBitmapBudget - cpuBitmapBytes;
 #else
     (void)width; (void)height;
     return false;
