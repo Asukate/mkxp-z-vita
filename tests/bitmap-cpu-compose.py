@@ -73,6 +73,48 @@ static int worst(uint32_t a, uint32_t b) {
         w = std::max(w, std::abs((int)((a >> shift) & 255) - (int)((b >> shift) & 255)));
     return w;
 }
+
+// The scaled path before columns were precomputed and 1x1 sources became a
+// fill (kept verbatim): the new code must give the same pixels.
+static void oldScaled(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
+                      const IntRect &sourceRect, int opacity, bool smooth) {
+    const uint32_t *recip = cpuReciprocals();
+    const int x0 = std::max(destRect.x, 0), y0 = std::max(destRect.y, 0);
+    const int x1 = std::min(destRect.x + destRect.w, dst->w);
+    const int y1 = std::min(destRect.y + destRect.h, dst->h);
+    if (x1 <= x0 || y1 <= y0 || src->w <= 0 || src->h <= 0) return;
+    const int sx0 = clamp(sourceRect.x, 0, src->w - 1), sy0 = clamp(sourceRect.y, 0, src->h - 1);
+    const int sx1 = clamp(sourceRect.x + sourceRect.w - 1, sx0, src->w - 1);
+    const int sy1 = clamp(sourceRect.y + sourceRect.h - 1, sy0, src->h - 1);
+    const uint8_t *sp = (const uint8_t *)src->pixels;
+    uint8_t *dp = (uint8_t *)dst->pixels;
+    const int64_t stepX = ((int64_t)sourceRect.w << 16) / destRect.w;
+    const int64_t stepY = ((int64_t)sourceRect.h << 16) / destRect.h;
+    for (int y = y0; y < y1; ++y) {
+        int64_t v = (int64_t)(y - destRect.y) * stepY + stepY / 2 - (smooth ? 0x8000 : 0);
+        if (v < 0) v = 0;
+        int sy = sourceRect.y + (int)(v >> 16);
+        const uint32_t fy = smooth ? (uint32_t)((v & 0xFFFF) >> 8) : 0;
+        sy = clamp(sy, sy0, sy1);
+        const int syn = std::min(sy + 1, sy1);
+        const uint32_t *srow = (const uint32_t *)(sp + (size_t)sy * src->pitch);
+        const uint32_t *srown = (const uint32_t *)(sp + (size_t)syn * src->pitch);
+        uint32_t *drow = (uint32_t *)(dp + (size_t)y * dst->pitch);
+        for (int x = x0; x < x1; ++x) {
+            int64_t u = (int64_t)(x - destRect.x) * stepX + stepX / 2 - (smooth ? 0x8000 : 0);
+            if (u < 0) u = 0;
+            int sx = clamp(sourceRect.x + (int)(u >> 16), sx0, sx1);
+            uint32_t s;
+            if (smooth) {
+                const uint32_t fx = (uint32_t)((u & 0xFFFF) >> 8);
+                const int sxn = std::min(sx + 1, sx1);
+                s = cpuLerp(cpuLerp(srow[sx], srow[sxn], fx), cpuLerp(srown[sx], srown[sxn], fx), fy);
+            } else
+                s = srow[sx];
+            drow[x] = cpuOver(drow[x], s, opacity, recip);
+        }
+    }
+}
 static uint32_t rnd() { static uint32_t x = 2463534242u; x ^= x << 13; x ^= x >> 17; x ^= x << 5; return x; }
 
 int main() try {
@@ -100,7 +142,11 @@ int main() try {
         const int dw = 1 + rnd() % 40, dh = 1 + rnd() % 20, sw = 1 + rnd() % 40, sh = 1 + rnd() % 20;
         SDL_Surface *dst = surface(dw, dh), *src = surface(sw, sh);
         for (int i = 0; i < dw * dh; ++i) ((uint32_t *)dst->pixels)[i] = rnd();
-        for (int i = 0; i < sw * sh; ++i) ((uint32_t *)src->pixels)[i] = rnd();
+        // Every other round mostly opaque runs, the shape of walls and tiles;
+        // one round in four also has clear runs (alpha 0, any colour).
+        for (int i = 0; i < sw * sh; ++i)
+            ((uint32_t *)src->pixels)[i] = (round & 3) == 3 ? (rnd() % 3 ? rnd() | 0xFF000000u : rnd() & 0x00FFFFFFu)
+                                         : (round & 1) && rnd() % 8 ? rnd() | 0xFF000000u : rnd();
         std::vector<uint32_t> before((uint32_t *)dst->pixels, (uint32_t *)dst->pixels + dw * dh);
         const int w = 1 + rnd() % 50, h = 1 + rnd() % 30, opacity = round % 3 ? 255 : (int)(rnd() % 256);
         const IntRect to((int)(rnd() % 80) - 40, (int)(rnd() % 50) - 25, w, h);
@@ -136,6 +182,34 @@ int main() try {
                 expect(at(dst, x, y) == (inside ? colour : 0u), "scaled blit changed a pixel outside its rect or bent a flat colour");
             }
         release(dst); release(src);
+    }
+
+
+    // Scaled blits, including a stretched 1x1 tint, give exactly the old pixels
+    // over opaque, empty and half-transparent destinations.
+    for (int round = 0; round < 6000; ++round) {
+        const int dw = 1 + rnd() % 48, dh = 1 + rnd() % 24, sw = 1 + rnd() % 24, sh = 1 + rnd() % 12;
+        SDL_Surface *a = surface(dw, dh), *b = surface(dw, dh), *src = surface(sw, sh);
+        // One round in five draws over three colours only, so the tint's
+        // reuse of the previous pixel's blend is exercised.
+        const uint32_t few[3] = {rnd() | 0xFF000000u, rnd(), rnd() & 0x00FFFFFFu};
+        for (int i = 0; i < dw * dh; ++i) {
+            uint32_t d = rnd();
+            switch (rnd() % 3) { case 0: d |= 0xFF000000u; break; case 1: d &= 0x00FFFFFFu; break; default: break; }
+            if (round % 5 == 4) d = few[rnd() % 3];
+            ((uint32_t *)a->pixels)[i] = ((uint32_t *)b->pixels)[i] = d;
+        }
+        for (int i = 0; i < sw * sh; ++i) ((uint32_t *)src->pixels)[i] = rnd() % 4 ? rnd() : rnd() | 0xFF000000u;
+        IntRect from(rnd() % sw, rnd() % sh, 1, 1);
+        if (round % 3) { from.w = 1 + rnd() % (sw - from.x); from.h = 1 + rnd() % (sh - from.y); }
+        IntRect to((int)(rnd() % 60) - 20, (int)(rnd() % 40) - 12, 1 + rnd() % 70, 1 + rnd() % 40);
+        if (to.w == from.w && to.h == from.h) to.w += 1;
+        const int opacity = round % 4 ? 255 : (int)(rnd() % 256);
+        const bool smooth = round & 1;
+        cpuBlit(a, to, src, from, opacity, smooth);
+        oldScaled(b, to, src, from, opacity, smooth);
+        expect(std::memcmp(a->pixels, b->pixels, size_t(dw) * dh * 4) == 0, "scaled blit differs from the previous code");
+        release(a); release(b); release(src);
     }
 
     // Fill and gradient stay inside the clipped rect; the ramp runs from the first colour to the second.
@@ -188,7 +262,7 @@ int main() try {
 with tempfile.TemporaryDirectory(prefix='hardrpg-cpu-compose-') as directory:
     source = Path(directory) / 'compose.cpp'
     helpers = ''.join(function(name) for name in
-                      ('cpuPack', 'cpuFill', 'cpuGradientAt', 'cpuGradient', 'cpuReciprocals', 'cpuOver', 'cpuLerp', 'cpuBlit'))
+                      ('cpuPack', 'cpuFill', 'cpuGradientAt', 'cpuGradient', 'cpuReciprocals', 'cpuOver', 'cpuLerp', 'cpuBlendConstant', 'cpuBlit'))
     source.write_text(PREAMBLE + helpers + CHECKS)
     binary = Path(directory) / 'compose'
     subprocess.run(['c++', '-std=c++17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',

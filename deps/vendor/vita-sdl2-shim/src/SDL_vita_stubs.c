@@ -95,6 +95,20 @@ void vitaPixelBlockFigures(uint32_t *count, uint32_t *bytes) {
     *bytes = vita_block_bytes;
     vita_blocks_leave();
 }
+/* Pixel buffers that came from vitaGL's uncached pool: live count, bytes. */
+void vitaPixelPoolFigures(uint32_t *count, uint32_t *bytes) {
+    int i;
+    uint32_t n = 0, total = 0;
+    vita_blocks_enter();
+    for (i = 0; i < VITA_BLOCK_SLOTS; ++i)
+        if (vita_blocks[i].ptr && vita_blocks[i].uid < 0) {
+            ++n;
+            total += vita_blocks[i].size;
+        }
+    *count = n;
+    *bytes = total;
+    vita_blocks_leave();
+}
 #endif
 
 /* outside is set when the buffer must be released with vita_big_free. */

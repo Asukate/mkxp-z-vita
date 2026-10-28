@@ -67,6 +67,7 @@ void memory(Event &e) {
 extern "C" void vitaBitmapMemoryFigures(size_t figures[4]);
 #ifdef __vita__
 extern "C" void vitaPixelBlockFigures(uint32_t *count, uint32_t *bytes);
+extern "C" void vitaPixelPoolFigures(uint32_t *count, uint32_t *bytes);
 extern "C" void vitaTexPoolFigures(size_t figures[3], char *top, size_t capacity);
 #endif
 #endif
@@ -80,11 +81,12 @@ size_t vitaMemorySnapshot(char *destination, size_t capacity) {
 #ifdef __vita__
     vitaBitmapMemoryFigures(pixels);
 #endif
-    uint32_t blockCount = 0, blockBytes = 0;
+    uint32_t blockCount = 0, blockBytes = 0, poolCount = 0, poolBytes = 0;
     size_t targets[3] = {0, 0, 0};
     char targetTop[160] = "";
 #ifdef __vita__
     vitaPixelBlockFigures(&blockCount, &blockBytes);
+    vitaPixelPoolFigures(&poolCount, &poolBytes);
     vitaTexPoolFigures(targets, targetTop, sizeof(targetTop));
 #endif
     const unsigned user = static_cast<unsigned>(e.userFree);
@@ -95,13 +97,14 @@ size_t vitaMemorySnapshot(char *destination, size_t capacity) {
         "cdram_free=%u phycont_free=%u vgl_vram_free=%lu vgl_ram_free=%lu "
         "vgl_slow_free=%lu vgl_budget_free=%lu image_events=%u graphics_gc_cycles=%u "
         "cpu_bitmaps=%u cpu_bitmap_bytes=%u readback_bytes=%u text_cache_bytes=%u "
-        "pixel_blocks=%u pixel_block_bytes=%u targets=%u target_bytes=%u pool_cache_bytes=%u target_top=%s last_image_phase=%s",
+        "pixel_blocks=%u pixel_block_bytes=%u uncached_pixels=%u uncached_pixel_bytes=%u targets=%u target_bytes=%u pool_cache_bytes=%u target_top=%s last_image_phase=%s",
         e.arena, e.used, e.free, e.blocks, e.top, e.kernelResult, user, userValid,
         static_cast<unsigned>(e.cdramFree), static_cast<unsigned>(e.phyFree),
         e.vramFree, e.ramFree, e.slowFree, e.budgetFree, eventCount, graphicsRecoveryCount,
         static_cast<unsigned>(pixels[0]), static_cast<unsigned>(pixels[1]),
         static_cast<unsigned>(pixels[2]), static_cast<unsigned>(pixels[3]),
         static_cast<unsigned>(blockCount), static_cast<unsigned>(blockBytes),
+        static_cast<unsigned>(poolCount), static_cast<unsigned>(poolBytes),
         static_cast<unsigned>(targets[0]), static_cast<unsigned>(targets[1]),
         static_cast<unsigned>(targets[2]), targetTop,
         eventCount ? events[(eventCount - 1) % 16].phase : "none");

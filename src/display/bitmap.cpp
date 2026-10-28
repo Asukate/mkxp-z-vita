@@ -1103,6 +1103,67 @@ static SDL_Surface *cpuSourcePixels(const Bitmap &source, BitmapPrivate *sp)
     return readbackSurface(sp) ? sp->surface : 0;
 }
 
+/* Blend one colour over dst[x0..x1) x [y0..y1), exactly as cpuOver would
+ * pixel by pixel. Over an opaque pixel each output channel depends only on
+ * the same destination channel, so those are looked up in tables built with
+ * cpuOver itself. */
+static void cpuBlendConstant(SDL_Surface *dst, int x0, int y0, int x1, int y1,
+                             uint32_t s, int opacity, const uint32_t *recip)
+{
+    uint32_t sa = s >> 24;
+    if (opacity != 255)
+        sa = (sa * opacity + 127) / 255;
+    if (sa == 0)
+        return;
+    uint8_t *dp = (uint8_t *)dst->pixels;
+    const uint32_t overClear = (s & 0x00FFFFFF) | (sa << 24);
+    if (sa == 255)
+    {
+        cpuFill(dst, IntRect(x0, y0, x1 - x0, y1 - y0), overClear);
+        return;
+    }
+    uint32_t red[256], green[256], blue[256];
+    uint32_t alpha = 0;
+    for (uint32_t c = 0; c < 256; ++c)
+    {
+        const uint32_t o = cpuOver(0xFF000000u | (c * 0x010101u), s, opacity, recip);
+        red[c] = o & 0xFF;
+        green[c] = o & 0xFF00;
+        blue[c] = o & 0xFF0000;
+        alpha = o & 0xFF000000u;
+    }
+    /* Tints are drawn in layers, so most pixels under a later one are
+     * already half covered, and those areas are mostly one colour: the
+     * last blend is kept and reused for the same pixel. */
+    uint32_t lastIn = 0, lastOut = overClear;
+    for (int y = y0; y < y1; ++y)
+    {
+        uint32_t *row = (uint32_t *)(dp + (size_t)y * dst->pitch);
+        const uint8_t *next = (const uint8_t *)row + dst->pitch;
+        const bool more = y + 1 < y1;
+        for (int x = x0; x < x1; ++x)
+        {
+            if (more && ((x - x0) & 7) == 0)
+                __builtin_prefetch(next + (size_t)x * 4, 1);
+            const uint32_t d = row[x];
+            if (d == lastIn)
+            {
+                row[x] = lastOut;
+                continue;
+            }
+            const uint32_t da = d >> 24;
+            lastIn = d;
+            if (da == 255)
+                lastOut = alpha | red[d & 0xFF] | green[(d >> 8) & 0xFF] | blue[(d >> 16) & 0xFF];
+            else if (da == 0)
+                lastOut = overClear;
+            else
+                lastOut = cpuOver(d, s, opacity, recip);
+            row[x] = lastOut;
+        }
+    }
+}
+
 /* Blend src[sourceRect] over dst[destRect]. Both rects have positive size
  * and were already shrunk to their bitmaps by the caller; they are clipped
  * again here so a rounding step can never index outside either surface. */
@@ -1134,9 +1195,49 @@ static void cpuBlit(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
         {
             const uint32_t *in = (const uint32_t *)(sp + (size_t)(y + offY) * src->pitch) + cx0 + offX;
             uint32_t *out = (uint32_t *)(dp + (size_t)y * dst->pitch) + cx0;
+            /* The loop waits on memory, not on arithmetic (28 ns a pixel
+             * on the Vita against 2 for a fill), so the next row of both
+             * images is fetched while this one is drawn, one cache line in
+             * eight pixels. */
+            const bool more = y + 1 < cy1;
+            const uint8_t *nextIn = (const uint8_t *)in + src->pitch;
+            const uint8_t *nextOut = (const uint8_t *)out + dst->pitch;
             if (opacity == 255)
             {
-                for (int i = 0; i < count; ++i)
+                int i = 0;
+                /* Four pixels at a time: walls are mostly runs that are all
+                 * opaque (copied) or all clear (skipped). Mixed groups go
+                 * pixel by pixel below. (Copying opaque runs with memcpy was
+                 * measured slower on the Vita: 5.8 ms against 2.2 ms for a
+                 * 171x336 wall.) */
+                for (; i + 4 <= count; i += 4)
+                {
+                    if (more && (i & 7) == 0)
+                    {
+                        __builtin_prefetch(nextIn + (size_t)i * 4);
+                        __builtin_prefetch(nextOut + (size_t)i * 4, 1);
+                    }
+                    const uint32_t s0 = in[i], s1 = in[i + 1], s2 = in[i + 2], s3 = in[i + 3];
+                    if ((s0 & s1 & s2 & s3) >= 0xFF000000u)
+                    {
+                        out[i] = s0; out[i + 1] = s1; out[i + 2] = s2; out[i + 3] = s3;
+                        continue;
+                    }
+                    if (((s0 | s1 | s2 | s3) >> 24) == 0)
+                        continue;
+                    for (int k = i; k < i + 4; ++k)
+                    {
+                        const uint32_t s = in[k];
+                        const uint32_t sa = s >> 24;
+                        if (sa == 0)
+                            continue;
+                        if (sa == 255 || (out[k] >> 24) == 0)
+                            out[k] = s;
+                        else
+                            out[k] = cpuOver(out[k], s, 255, recip);
+                    }
+                }
+                for (; i < count; ++i)
                 {
                     const uint32_t s = in[i];
                     const uint32_t sa = s >> 24;
@@ -1152,16 +1253,45 @@ static void cpuBlit(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
             else
             {
                 for (int i = 0; i < count; ++i)
+                {
+                    if (more && (i & 7) == 0)
+                    {
+                        __builtin_prefetch(nextIn + (size_t)i * 4);
+                        __builtin_prefetch(nextOut + (size_t)i * 4, 1);
+                    }
                     if (in[i] >> 24)
                         out[i] = cpuOver(out[i], in[i], opacity, recip);
+                }
             }
         }
+        return;
+    }
+
+    /* One source pixel stretched over the rect: a colour tint drawn from a
+     * 1x1 bitmap (3D dungeon darkness, screen fades). Interpolating a pixel
+     * with itself gives the pixel, so every destination pixel gets the same
+     * source colour and the blit is a fill or a single blend. */
+    if (sx0 == sx1 && sy0 == sy1)
+    {
+        cpuBlendConstant(dst, x0, y0, x1, y1,
+                         ((const uint32_t *)(sp + (size_t)sy0 * src->pitch))[sx0], opacity, recip);
         return;
     }
 
     /* Scaled: map destination pixel centres into the source rect (16.16). */
     const int64_t stepX = ((int64_t)sourceRect.w << 16) / destRect.w;
     const int64_t stepY = ((int64_t)sourceRect.h << 16) / destRect.h;
+    /* Every row samples the same columns; work them out once. */
+    static std::vector<uint32_t> columns;
+    columns.resize(x1 - x0);
+    for (int x = x0; x < x1; ++x)
+    {
+        int64_t u = (int64_t)(x - destRect.x) * stepX + stepX / 2 - (smooth ? 0x8000 : 0);
+        if (u < 0) u = 0;
+        const uint32_t sx = (uint32_t)clamp(sourceRect.x + (int)(u >> 16), sx0, sx1);
+        const uint32_t fx = smooth ? (uint32_t)((u & 0xFFFF) >> 8) : 0;
+        columns[x - x0] = sx | (fx << 24);
+    }
     for (int y = y0; y < y1; ++y)
     {
         int64_t v = (int64_t)(y - destRect.y) * stepY + stepY / 2 - (smooth ? 0x8000 : 0);
@@ -1175,13 +1305,12 @@ static void cpuBlit(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
         uint32_t *drow = (uint32_t *)(dp + (size_t)y * dst->pitch);
         for (int x = x0; x < x1; ++x)
         {
-            int64_t u = (int64_t)(x - destRect.x) * stepX + stepX / 2 - (smooth ? 0x8000 : 0);
-            if (u < 0) u = 0;
-            int sx = clamp(sourceRect.x + (int)(u >> 16), sx0, sx1);
+            const uint32_t column = columns[x - x0];
+            const int sx = (int)(column & 0xFFFFFF);
             uint32_t s;
             if (smooth)
             {
-                const uint32_t fx = (uint32_t)((u & 0xFFFF) >> 8);
+                const uint32_t fx = column >> 24;
                 const int sxn = std::min(sx + 1, sx1);
                 s = cpuLerp(cpuLerp(srow[sx], srow[sxn], fx), cpuLerp(srown[sx], srown[sxn], fx), fy);
             }
@@ -2560,9 +2689,24 @@ void Bitmap::clearRect(const IntRect &rect)
 
     if (p->cpu)
     {
+        /* Pixels outside what was drawn are already clear, so only the
+         * overlap is erased and re-uploaded (a 3D dungeon clears four
+         * 1064x416 bitmaps on every step). */
         const IntRect clip = cpuClip(rect, p->cpu->w, p->cpu->h);
-        cpuFill(p->cpu, clip, 0);
-        cpuMarkDirty(p, clip);
+        const IntRect &c = p->cpuContent;
+        const int ox0 = std::max(clip.x, c.x), oy0 = std::max(clip.y, c.y);
+        const int ox1 = std::min(clip.x + clip.w, c.x + c.w);
+        const int oy1 = std::min(clip.y + clip.h, c.y + c.h);
+        if (ox1 > ox0 && oy1 > oy0)
+        {
+            const IntRect overlap(ox0, oy0, ox1 - ox0, oy1 - oy0);
+            cpuFill(p->cpu, overlap, 0);
+            cpuMarkDirty(p, overlap);
+        }
+        /* Everything drawn is gone: start the box again. */
+        if (clip.x <= c.x && clip.y <= c.y &&
+            clip.x + clip.w >= c.x + c.w && clip.y + clip.h >= c.y + c.h)
+            p->cpuContent = IntRect(0, 0, 0, 0);
         p->onModified();
         return;
     }
