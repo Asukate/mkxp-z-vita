@@ -165,7 +165,20 @@ terminal in that folder and run the lines for your engine:
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.4.5 Alpha** is the current release. New in 0.4.5:
+**0.4.6 Alpha** is the current release. New in 0.4.6:
+
+- **Shin Megami Tensei VX: The Genesis** starts and plays, with fixes for
+  loading games, 3D dungeons and crash rescue.
+- **Faster 3D dungeons and bitmap drawing**, including wall images and tints.
+- **BLACK SOULS II:** the weapon upgrade list no longer disappears when it
+  contains many weapons. The fix also applies to large bitmap contents in
+  other games.
+- **Clearer error reports:** messages from games that use Windows error
+  dialogs are included in the report.
+
+Full list: [0.4.6 release notes](docs/RELEASE-NOTES-0.4.6.md).
+
+New in 0.4.5:
 
 - **Crash rescue:** if a game stops, starting it again offers to resume at the
   last map change or battle start. Your saves are never touched.

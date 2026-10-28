@@ -1,6 +1,6 @@
 # Game compatibility
 
-Results from testing on a real PS Vita with HardRPG **0.4.5 Alpha**. Games
+Results from testing on a real PS Vita through HardRPG **0.4.6 Alpha**. Games
 change between versions and editions, so your copy may behave differently.
 "Runs" means the game has been played on the Vita.
 
@@ -19,7 +19,8 @@ those games are still possible.
 | Game | Engine | Status | Notes |
 | --- | --- | --- | --- |
 | BLACK SOULS | VX Ace | ✅ Runs | |
-| BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). |
+| BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). Long weapon upgrade lists render correctly (0.4.6). |
+| Shin Megami Tensei VX: The Genesis | VX | ✅ Runs | Loading games, 3D dungeons and crash rescue fixed in 0.4.6. |
 | Ao Oni | XP | ✅ Runs | Played from start to finish. |
 | The Witch's House | VX | ✅ Runs | |
 | To the Moon | XP | ✅ Runs | Slowdowns in some areas. |
@@ -46,7 +47,7 @@ These run through the bundled EasyRPG Player.
 
 > [!WARNING]
 > **Pokémon Essentials games are a work in progress** and are not playable in
-> 0.4.5. Development builds already open some of them; they still need
+> 0.4.6. Development builds already open some of them; they still need
 > performance work and game-specific fixes.
 
 | Game | Engine | Status | Notes |
