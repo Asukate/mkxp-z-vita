@@ -84,6 +84,13 @@ int truncate(const char *path, off_t length) { (void)path; (void)length; errno =
 #include <mutex>
 #include <stack>
 #include <unordered_map>
+
+#ifdef __vita__
+extern "C" unsigned vitaFileWriteGeneration(void);
+static unsigned fileWriteGeneration() { return vitaFileWriteGeneration(); }
+#else
+static unsigned fileWriteGeneration() { return 0; }
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -495,6 +502,8 @@ struct FileSystemPrivate {
   typedef std::shared_ptr<const std::vector<std::string>> Listing;
   std::mutex listingLock;
   std::unordered_map<std::string, Listing> listings;
+  /* File-write count (Vita) when each listing was taken. */
+  std::unordered_map<std::string, unsigned> listingWrites;
 };
 
 static PHYSFS_EnumerateCallbackResult collectNameCB(void *d, const char *, const char *filename) {
@@ -509,11 +518,29 @@ static FileSystemPrivate::Listing directoryListing(FileSystemPrivate &p, const s
     if (found != p.listings.end())
       return found->second;
   }
+  /* Read before listing: a file added while listing counts as unseen. */
+  const unsigned writes = fileWriteGeneration();
   auto names = std::make_shared<std::vector<std::string>>();
   PHYSFS_enumerate(dir.c_str(), collectNameCB, names.get());
   std::lock_guard<std::mutex> hold(p.listingLock);
   p.listings[dir] = names;
+  p.listingWrites[dir] = writes;
   return names;
+}
+
+/* True when nothing has been written since dir was listed, so a name the
+ * listing lacks really is missing. Listing a folder again costs ~50 ms on
+ * the Vita (game folder plus RTPs), and some scripts probe for optional
+ * images on every map (Shin Megami Tensei VX: 48 per dungeon view). */
+static bool listingStillCurrent(FileSystemPrivate &p, const std::string &dir) {
+#ifdef __vita__
+  std::lock_guard<std::mutex> hold(p.listingLock);
+  auto found = p.listingWrites.find(dir);
+  return found != p.listingWrites.end() && found->second == fileWriteGeneration();
+#else
+  (void)p; (void)dir;
+  return false;
+#endif
 }
 
 static void throwPhysfsError(const char *desc) {
@@ -598,6 +625,7 @@ void FileSystem::removePath(const char *path, bool reload) {
 void FileSystem::forgetListings() {
     std::lock_guard<std::mutex> hold(p->listingLock);
     p->listings.clear();
+    p->listingWrites.clear();
 }
 
 void FileSystem::warmListing(const char *dir) {
@@ -922,7 +950,7 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
       openReadEnumCB(&data, dir, (*listing)[i].c_str());
     /* Not found, or a listed file failed to open: the directory changed
      * since it was listed. List it again and look once more. */
-    if (data.matchCount == 0 || data.physfsError) {
+    if (data.physfsError || (data.matchCount == 0 && !listingStillCurrent(*p, dir))) {
       data.matchCount = 0;
       data.stopSearching = false;
       data.physfsError = 0;
