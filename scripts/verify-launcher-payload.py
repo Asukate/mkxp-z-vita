@@ -84,9 +84,16 @@ def main() -> int:
                 metadata[name] = sfo[values + offset:values + offset + size].rstrip(b'\0').decode()
             elif fmt == 0x404 and size == 4:
                 metadata[name] = struct.unpack_from('<I', sfo, values + offset)[0]
-        if metadata.get('TITLE') != 'HardRPG':
-            raise ValueError('VPK title must be HardRPG')
+        # HARDRPG01 is the release; every other Title ID is a test bubble
+        # that must look like one (name, artwork, LiveArea stamp).
+        test = metadata.get('TITLE_ID') != 'HARDRPG01'
         release = (root / 'src/native_launcher/release.h').read_text()
+        version = re.search(r'^#define HARDRPG_VERSION "([^"]+)"$', release, re.M)[1]
+        want_name = 'HardRPG TEST' if test else 'HardRPG'
+        if metadata.get('TITLE') != want_name or metadata.get('STITLE', want_name) != want_name:
+            raise ValueError(f'VPK title must be {want_name}')
+        if not test and 'Test' in version:
+            raise ValueError(f'{version} cannot be packaged as the HARDRPG01 release')
         app_version = re.search(r'^#define HARDRPG_APP_VER "([0-9]{2}\.[0-9]{2})"$', release, re.M)
         if "launcher-backend.txt" not in names:
             raise ValueError("package needs the HardRPG launcher")
@@ -94,6 +101,17 @@ def main() -> int:
         overlay_spec = spec_from_file_location('livearea_version', root/'scripts/build-livearea.py')
         overlay = module_from_spec(overlay_spec); overlay_spec.loader.exec_module(overlay)
         label = overlay.release_version(root/'src/native_launcher/release.h')
+        if test:
+            import xml.etree.ElementTree as ET
+            shown = [n.text or '' for n in ET.fromstring(vpk.read('sce_sys/livearea/contents/template.xml')).iter('str')]
+            if len(shown) != 1 or not shown[0].startswith(label + ' | TEST '):
+                raise ValueError('test LiveArea label must show the version and a TEST build stamp')
+            label = shown[0]
+            art = root / 'launcher/livearea-test'
+            for name, source in (('sce_sys/icon0.png', 'icon0.png'), ('sce_sys/pic0.png', 'pic0.png'),
+                                 ('sce_sys/livearea/contents/bg0.png', 'bg0.png'),
+                                 ('sce_sys/livearea/contents/startup.png', 'startup.png')):
+                expected[name] = hashlib.sha256((art / source).read_bytes()).hexdigest()
         expected['sce_sys/livearea/contents/template.xml'] = hashlib.sha256(overlay.render(
             (root/'launcher/livearea/template.xml').read_bytes(), label)).hexdigest()
         if not app_version or metadata.get('APP_VER') != app_version[1]:

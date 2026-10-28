@@ -1,12 +1,17 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.4.5 Alpha"
-#define HARDRPG_VERSION_TAG "v0.4.5-alpha"
-#define HARDRPG_APP_VER "00.45"
-#define HARDRPG_RELEASE_UTC "2026-10-27"
+#define HARDRPG_VERSION "0.4.6 Test"
+#define HARDRPG_VERSION_TAG "v0.4.6-test"
+#define HARDRPG_APP_VER "00.46"
+#define HARDRPG_RELEASE_UTC "2026-10-28"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.4.5 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.4.6 Test - " HARDRPG_RELEASE_UTC,
+    "- Shin Megami Tensei VX starts and plays",
+    "- Faster 3D dungeons (SMT VX Arcade)",
+    "- Game error boxes appear in error reports",
+    "",
+    "0.4.5 Alpha - 2026-10-27",
     "- Crash rescue: resume where the game stopped",
     "- BLACK SOULS II long sessions: no out of memory (#4)",
     "- Hylics Crystal Beach no longer runs out of memory",

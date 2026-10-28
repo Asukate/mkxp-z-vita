@@ -61,9 +61,26 @@ PY2
 # RGSS thread and vitaGL's pools do not fit the default budget (about 109 MiB
 # less); EasyRPG's Vita package needs the same mode.
 MEMORY_ARGS=(-d ATTRIBUTE2=12)
-"$BIN/vita-mksfoex" "${MEMORY_ARGS[@]}" -s "TITLE_ID=$TITLE_ID" -s "APP_VER=$APP_VER" 'HardRPG' "$STAGE/param.sfo"
+# One release bubble (HARDRPG01) and test bubbles that cannot be mistaken
+# for it: any other Title ID is named "HardRPG TEST", gets the TEST artwork
+# and shows a build stamp on its LiveArea. A Test version is never packaged
+# as the release.
+VERSION="$(python3 -c 'import re,sys; print(re.search(r"^#define HARDRPG_VERSION \"([^\"]+)\"$", open(sys.argv[1]).read(), re.M)[1])' "$ROOT/src/native_launcher/release.h")"
+if [[ "$TITLE_ID" == HARDRPG01 ]]; then
+    [[ "$VERSION" != *Test* ]] || { echo "refusing to package $VERSION as the HARDRPG01 release" >&2; exit 1; }
+    APP_NAME='HardRPG'; ART="$ROOT/launcher/livearea"
+    LIVEAREA_ARGS=(--release "$ROOT/src/native_launcher/release.h")
+else
+    APP_NAME='HardRPG TEST'; ART="$ROOT/launcher/livearea-test"
+    STAMP="$(git -C "$ROOT" rev-parse --short=8 HEAD)"
+    if ! git -C "$ROOT" diff --quiet HEAD 2>/dev/null; then
+        STAMP="$STAMP+$(git -C "$ROOT" diff HEAD | sha256sum | cut -c1-6)"
+    fi
+    LIVEAREA_ARGS=(--version "$VERSION | TEST $STAMP $(date -u '+%m-%d %H:%M') UTC")
+fi
+"$BIN/vita-mksfoex" "${MEMORY_ARGS[@]}" -s "TITLE_ID=$TITLE_ID" -s "APP_VER=$APP_VER" "$APP_NAME" "$STAGE/param.sfo"
 python3 "$ROOT/scripts/build-livearea.py" "$ROOT/launcher/livearea/template.xml" \
-    "$STAGE/template.xml" --release "$ROOT/src/native_launcher/release.h"
+    "$STAGE/template.xml" "${LIVEAREA_ARGS[@]}"
 LAUNCHER_ARGS=(-a "$ROOT/launcher/native-backend.txt=launcher-backend.txt")
 # Home screen: title font, icons and brand marks (rendered from SVG).
 LAUNCHER_ARGS+=(-a "$ROOT/launcher/font-display.ttf=font-display.ttf" -a "$ROOT/LICENSES/Rajdhani.txt=licenses/Rajdhani.txt" -a "$ROOT/LICENSES/Vita-illustration.txt=licenses/Vita-illustration.txt")
@@ -89,10 +106,10 @@ fi
 VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
 (cd "$STAGE" && "$BIN/vita-pack-vpk" \
     -s param.sfo -b eboot.bin \
-    -a "$ROOT/launcher/livearea/icon0.png=sce_sys/icon0.png" \
-    -a "$ROOT/launcher/livearea/pic0.png=sce_sys/pic0.png" \
-    -a "$ROOT/launcher/livearea/bg0.png=sce_sys/livearea/contents/bg0.png" \
-    -a "$ROOT/launcher/livearea/startup.png=sce_sys/livearea/contents/startup.png" \
+    -a "$ART/icon0.png=sce_sys/icon0.png" \
+    -a "$ART/pic0.png=sce_sys/pic0.png" \
+    -a "$ART/bg0.png=sce_sys/livearea/contents/bg0.png" \
+    -a "$ART/startup.png=sce_sys/livearea/contents/startup.png" \
     -a template.xml=sce_sys/livearea/contents/template.xml \
     -a "$ROOT/launcher/mkxp.json=mkxp.json" \
     -a "$ROOT/launcher/legacy_ruby_compat.rb=legacy_ruby_compat.rb" \
