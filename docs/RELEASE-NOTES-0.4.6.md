@@ -32,3 +32,5 @@ releases, and keeps the existing game folders, saves and settings.
 This is still an alpha: compatibility and speed vary by game. Pokémon
 Essentials games remain unsupported. See the
 [compatibility list](COMPATIBILITY.md).
+
+<!-- 56352c2ca15284e924a6dbe782f5bf82a5ef807168f186eecd0428f85703615f -->
