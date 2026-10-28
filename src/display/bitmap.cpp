@@ -789,8 +789,10 @@ static void cpuUpload(BitmapPrivate *p, const IntRect &rect)
 #ifdef __vita__
     /* vitaGL reads the rows in place at the bitmap's pitch: only the changed
      * columns are sent and nothing is copied first (the 3D dungeon redraws
-     * the middle half of its double-width layers). */
-    if (s->pitch % 4 == 0)
+     * the middle half of its double-width layers). Not for a rect at x 0:
+     * vitaGL then takes the rows as packed and copies them as one block,
+     * which scrambles them (message text left over, letters cut off). */
+    if (s->pitch % 4 == 0 && rect.x > 0)
     {
         gl.PixelStorei(GL_UNPACK_ROW_LENGTH, s->pitch / 4);
         TEX::uploadSubImage(rect.x, rect.y, rect.w, rect.h, first + (size_t)rect.x * 4, GL_RGBA);
