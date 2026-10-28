@@ -874,6 +874,11 @@ module HardRPGRescue
         # Done once the resumed map runs (its sprites exist).
         if @resume_guard <= 0 || ($scene.equal?(@resume_scene) && @resume_scene.instance_variable_get(:@spriteset))
           @resume_guard = nil
+        elsif @resume_scene.is_a?(Bridge) && !$scene.equal?(@resume_scene)
+          # The closing scene changed scenes in its last frame; the copy
+          # still has to be loaded first.
+          log("#{$scene.class} replaced the resume; resume put back")
+          $scene = @resume_scene
         elsif $scene && !$scene.equal?(@resume_scene) && $scene.class.name.to_s =~ STARTUP_SCENE
           log("#{$scene.class} replaced the resumed map; map put back")
           $scene = @resume_scene
@@ -882,12 +887,34 @@ module HardRPGRescue
       end
       return unless @pending
       return unless $data_system && $data_common_events && $scene
-      @busy = true
-      begin
-        resume_legacy
-      ensure
-        @busy = false
+      # The scene that is running finishes its frame and closes with the map
+      # it was made for; the Bridge then loads the copy. Loading here, in the
+      # middle of that scene's frame, let its sprites update once against the
+      # resumed map: Shin Megami Tensei VX's title is a 2D map, its 3D dungeon
+      # sprites then found no 3D viewport and the game quit.
+      @pending = false
+      @resume_from = $scene
+      @resume_scene = $scene = Bridge.new
+      @resume_guard = 600
+    end
+
+    # Stands in as $scene for one turn of the game's scene loop.
+    class Bridge
+      def main
+        HardRPGRescue.resume_from_bridge
       end
+    end
+
+    def resume_from_bridge
+      @busy = true
+      resume_legacy
+      return if $scene.is_a?(Scene_Map) && $scene.equal?(@resume_scene)
+      # The copy could not be loaded: start where a normal boot would.
+      @resume_guard = nil
+      @resume_scene = nil
+      $scene = defined?(Scene_Title) ? Scene_Title.new : @resume_from.class.new
+    ensure
+      @busy = false
     end
 
     def legacy_done?
