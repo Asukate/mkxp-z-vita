@@ -47,6 +47,7 @@
 #endif
 
 #include <SDL_ttf.h>
+#include <SDL_endian.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
