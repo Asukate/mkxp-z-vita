@@ -1,0 +1,25 @@
+name: Question
+description: Ask about setup, controls, supported games, or using HardRPG.
+labels: [question, needs triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The [README](https://github.com/Asukate/mkxp-z-vita#readme) covers installation, controls, saves, and error reports. Use Bug report for something that is broken, or Feature request for an improvement.
+  - type: textarea
+    id: question
+    attributes:
+      label: What would you like help with?
+      description: Explain what you want to do and what is unclear.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: HardRPG version
+      description: Include this if your question concerns an installed build.
+  - type: textarea
+    id: context
+    attributes:
+      label: Relevant details
+      description: Include the game's name, your device, anything you already tried, and screenshots if useful.

@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest a feature or improvement for HardRPG.
+labels: [feature request, needs triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [existing requests](https://github.com/Asukate/mkxp-z-vita/issues?q=is%3Aissue+label%3A%22feature+request%22) before opening another one. For a specific game that does not work, use Bug report or Game compatibility instead.
+  - type: textarea
+    id: request
+    attributes:
+      label: What would you like to add or improve?
+      description: Describe the feature and how you would use it.
+    validations:
+      required: true
+  - type: textarea
+    id: reason
+    attributes:
+      label: What problem would it solve?
+      description: Explain what is difficult or missing today. Examples help.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Launcher / library
+        - Controls
+        - Graphics / display
+        - Audio
+        - Saves
+        - Game / engine compatibility
+        - Accessibility
+        - Building / installation
+        - Documentation
+        - Other / not sure
+  - type: textarea
+    id: context
+    attributes:
+      label: Examples or additional details
+      description: Add screenshots, links, alternatives, or a relevant game's name if useful.

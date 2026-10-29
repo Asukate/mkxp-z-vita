@@ -1,0 +1,92 @@
+name: Bug report
+description: Report a crash, freeze, visual glitch, or other problem in HardRPG.
+labels: [bug, needs triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [existing issues](https://github.com/Asukate/mkxp-z-vita/issues) for the same problem. Include enough detail to reproduce it; screenshots and exported error reports help.
+  - type: input
+    id: version
+    attributes:
+      label: HardRPG version
+      placeholder: "For example: 0.4.7 Alpha"
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game, edition, and language
+      description: Include the game version and source, such as Steam or itch.io, if known. Leave this blank for a launcher or installation problem.
+      placeholder: "For example: BLACK SOULS II, English Steam edition"
+  - type: dropdown
+    id: engine
+    attributes:
+      label: RPG Maker engine
+      options:
+        - XP
+        - VX
+        - VX Ace
+        - 2000 / 2003 (EasyRPG)
+        - Not sure
+        - Not applicable
+  - type: dropdown
+    id: device
+    attributes:
+      label: Where does it happen?
+      options:
+        - PS Vita
+        - PlayStation TV
+        - Vita3K
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: problem
+    attributes:
+      label: What kind of problem is it?
+      multiple: true
+      options:
+        - Crash / app closes
+        - Freeze / stops responding
+        - Visual glitch
+        - Slowdown / long loading
+        - Audio
+        - Controls
+        - Saving / loading
+        - Text / fonts
+        - Launcher / library
+        - Installation / updating
+        - Gameplay behaves incorrectly
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Describe what happened and what you expected instead. Include any error message.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Describe how to reach the problem from starting HardRPG. If it seems random, describe what you were doing and how often it happens.
+      placeholder: |
+        1. Open the game...
+        2. Load the attached save...
+        3. Open this menu...
+    validations:
+      required: true
+  - type: input
+    id: last-working-version
+    attributes:
+      label: Did this work in an earlier HardRPG version?
+      description: If known, give the last working version. Otherwise leave this blank.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Error report, screenshots, or save file
+      description: |
+        Attach files here if available. In HardRPG, open Settings → Game error history and press Square to export an error report. A save from just before the problem is especially helpful. See the README's “Something went wrong?” section for save locations.

@@ -1,0 +1,70 @@
+name: Game compatibility
+description: Share how a game runs, including games that work well.
+labels: [compatibility report, needs triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports help grow the [compatibility list](https://github.com/Asukate/mkxp-z-vita/blob/master/docs/COMPATIBILITY.md). Include what you actually played: reaching the title screen, playing part of the game, and finishing it are different results. For a specific reproducible problem, use Bug report.
+  - type: input
+    id: game
+    attributes:
+      label: Game, edition, and language
+      description: Include the game version and source, such as Steam or itch.io, if known.
+      placeholder: "For example: BLACK SOULS II, English Steam edition"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: HardRPG version
+      placeholder: "For example: 0.4.7 Alpha"
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: RPG Maker engine
+      options:
+        - XP
+        - VX
+        - VX Ace
+        - 2000 / 2003 (EasyRPG)
+        - Other
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: device
+    attributes:
+      label: Where did you test it?
+      options:
+        - PS Vita
+        - PlayStation TV
+        - Vita3K
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result in the parts you tested
+      options:
+        - Runs well
+        - Runs with problems
+        - Does not start
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: coverage
+    attributes:
+      label: How far did you play, and what did you try?
+      description: Mention the areas or playtime covered and whether you tried saving/loading, controls, and audio. Describe any problems and any settings needed to play.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or additional details
+      description: Attach screenshots, error reports, or a save file if useful.
