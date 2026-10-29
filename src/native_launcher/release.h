@@ -1,12 +1,16 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.4.7 Alpha"
-#define HARDRPG_VERSION_TAG "v0.4.7-alpha"
-#define HARDRPG_APP_VER "00.47"
-#define HARDRPG_RELEASE_UTC "2026-10-28"
+#define HARDRPG_VERSION "0.4.8 Alpha"
+#define HARDRPG_VERSION_TAG "v0.4.8-alpha"
+#define HARDRPG_APP_VER "00.48"
+#define HARDRPG_RELEASE_UTC "2026-10-29"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.4.7 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.4.8 Alpha - " HARDRPG_RELEASE_UTC,
+    "- Pocket Mirror: fixed startup crash after the team splash (#7)",
+    "- Correct font sizing prevents oversized text allocations",
+    "",
+    "0.4.7 Alpha - 2026-10-28",
     "- BLACK SOULS II: long weapon upgrade lists no longer crash (#6)",
     "- Large window contents draw through bounded texture regions",
     "- Scrolling preserves the full list and its selection",

@@ -165,14 +165,23 @@ terminal in that folder and run the lines for your engine:
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.4.7 Alpha** is the current release. New in 0.4.7:
+**0.4.8 Alpha** is the current release. New in 0.4.8:
+
+- **Pocket Mirror (original VX Ace edition):** fixed the startup crash after
+  the team splash.
+- **Font sizing:** affected fonts now use the correct size, preventing
+  enormous text allocations. The correction applies across games.
+
+Full list: [0.4.8 release notes](docs/RELEASE-NOTES-0.4.8.md).
+
+New in 0.4.7:
 
 - **BLACK SOULS II:** weapon upgrade menus with long lists no longer crash
   when their contents exceed the hardware texture size.
 - **Large window contents** preserve their complete list and draw only the
   visible region. This also covers scrolling windows in XP, VX and VX Ace.
 
-Full list: [0.4.7 release notes](docs/RELEASE-NOTES-0.4.7.md).
+Previous changes: [0.4.7 release notes](docs/RELEASE-NOTES-0.4.7.md).
 
 New in 0.4.6:
 
