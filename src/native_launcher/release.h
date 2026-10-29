@@ -1,12 +1,18 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.4.6 Alpha"
-#define HARDRPG_VERSION_TAG "v0.4.6-alpha"
-#define HARDRPG_APP_VER "00.46"
+#define HARDRPG_VERSION "0.4.7 Alpha"
+#define HARDRPG_VERSION_TAG "v0.4.7-alpha"
+#define HARDRPG_APP_VER "00.47"
 #define HARDRPG_RELEASE_UTC "2026-10-28"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.4.6 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.4.7 Alpha - " HARDRPG_RELEASE_UTC,
+    "- BLACK SOULS II: long weapon upgrade lists no longer crash (#6)",
+    "- Large window contents draw through bounded texture regions",
+    "- Scrolling preserves the full list and its selection",
+    "- Safer memory recovery for oversized editable bitmaps",
+    "",
+    "0.4.6 Alpha - 2026-10-28",
     "- Shin Megami Tensei VX starts and plays",
     "- Faster 3D dungeons and game loading",
     "- BLACK SOULS II weapon upgrade list fixed (#5)",

@@ -822,8 +822,11 @@ struct WindowVXPrivate
 				shader.setTranslation(contTrans);
 
 				TEX::setSmooth(false); // XXX
-				contents->bindTex(shader);
-				contentsQuad.draw();
+				if (!contents->drawCpuWindow(shader, IntRect(contentsOff, pad.size()), contentsOpacity.norm))
+				{
+					contents->bindTex(shader);
+					contentsQuad.draw();
+				}
 			}
 
 			glState.scissorBox.pop();

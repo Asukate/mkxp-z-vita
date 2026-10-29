@@ -263,7 +263,7 @@ struct BitmapPrivate
      * with full opacity, we can disregard any old contents
      * in the texture and blit to it directly, saving
      * ourselves the expensive blending calculation */
-    pixman_region16_t tainted;
+    pixman_region32_t tainted;
 
     // For high-resolution texture replacement.
     Bitmap *selfHires;
@@ -283,6 +283,9 @@ struct BitmapPrivate
      * these pixels are the bitmap; the texture is only a copy for sampling
      * and there is no framebuffer. */
     SDL_Surface *cpu;
+    TEX::ID windowTex = TEX::ID(0);
+    IntRect windowRect;
+    uint32_t windowVersion = ~0u;
     bool cpuDirty;
     IntRect cpuDirtyRect;
     /* Bounding box of everything drawn since the last full clear; pixels
@@ -331,16 +334,18 @@ struct BitmapPrivate
         prepareCon = shState->prepareDraw.connect(&BitmapPrivate::prepare, this);
         
         font = &shState->defaultFont();
-        pixman_region_init(&tainted);
+        pixman_region32_init(&tainted);
     }
     
     ~BitmapPrivate()
     {
         prepareCon.disconnect();
+        if (windowTex != TEX::ID(0))
+            TEX::del(windowTex);
         dropReadback();
         releaseCpuPixels();
         SDL_FreeFormat(format);
-        pixman_region_fini(&tainted);
+        pixman_region32_fini(&tainted);
     }
     
     void releaseCpuPixels();
@@ -368,14 +373,14 @@ struct BitmapPrivate
     
     void clearTaintedArea()
     {
-        pixman_region_fini(&tainted);
-        pixman_region_init(&tainted);
+        pixman_region32_fini(&tainted);
+        pixman_region32_init(&tainted);
     }
     
     void addTaintedArea(const IntRect &rect)
     {
         IntRect norm = normalizedRect(rect);
-        pixman_region_union_rect
+        pixman_region32_union_rect
         (&tainted, &tainted, norm.x, norm.y, norm.w, norm.h);
     }
     
@@ -384,24 +389,24 @@ struct BitmapPrivate
         if (!touchesTaintedArea(rect))
             return;
         
-        pixman_region16_t m_reg;
-        pixman_region_init_rect(&m_reg, rect.x, rect.y, rect.w, rect.h);
+        pixman_region32_t m_reg;
+        pixman_region32_init_rect(&m_reg, rect.x, rect.y, rect.w, rect.h);
         
-        pixman_region_subtract(&tainted, &m_reg, &tainted);
+        pixman_region32_subtract(&tainted, &m_reg, &tainted);
         
-        pixman_region_fini(&m_reg);
+        pixman_region32_fini(&m_reg);
     }
     
     bool touchesTaintedArea(const IntRect &rect)
     {
-        pixman_box16_t box;
+        pixman_box32_t box;
         box.x1 = rect.x;
         box.y1 = rect.y;
         box.x2 = rect.x + rect.w;
         box.y2 = rect.y + rect.h;
         
         pixman_region_overlap_t result =
-        pixman_region_contains_rectangle(&tainted, &box);
+        pixman_region32_contains_rectangle(&tainted, &box);
         
         return result != PIXMAN_REGION_OUT;
     }
@@ -706,21 +711,26 @@ static void dropAllReadbacks()
 static bool cpuBitmapEligible(int width, int height)
 {
 #ifdef MKXPZ_CPU_BITMAPS
-    if (shState->config().enableHires || width <= 0 || height <= 0 ||
-        width > glState.caps.maxTexSize || height > glState.caps.maxTexSize)
+    if (shState->config().enableHires || width <= 0 || height <= 0)
         return false;
 
     /* Long window contents need the same CPU composition as short ones.
      * Rendering them in separate GPU passes can discard earlier pixels on
      * Vita. Bound their storage with the shared budget, not a per-bitmap
      * pixel cutoff that changes rendering as a list grows. */
-    const size_t bytes = (size_t)width * height * 4;
+    const uint64_t bytes = (uint64_t)width * (uint64_t)height * 4;
     return cpuBitmapBytes <= cpuBitmapBudget &&
            bytes <= cpuBitmapBudget - cpuBitmapBytes;
 #else
     (void)width; (void)height;
     return false;
 #endif
+}
+
+static bool cpuOversized(const BitmapPrivate *p)
+{
+    return p->cpu && (p->cpu->w > glState.caps.maxTexSize ||
+                      p->cpu->h > glState.caps.maxTexSize);
 }
 
 void BitmapPrivate::releaseCpuPixels()
@@ -942,6 +952,10 @@ static void cpuPromote(BitmapPrivate *p)
     if (!p->cpu)
         return;
     SDL_Surface *pixels = p->cpu;
+    if (cpuOversized(p))
+        throw Exception(Exception::MKXPError,
+                        "This operation requires a full GPU texture for bitmap %dx%d; "
+                        "the texture limit is %d", pixels->w, pixels->h, glState.caps.maxTexSize);
     /* This can run in the middle of a draw pass (a blit that samples this
      * bitmap). Creating a render target binds its framebuffer, so put the
      * caller's target back afterwards. */
@@ -1715,6 +1729,15 @@ Bitmap::Bitmap(int width, int height, bool isHires)
         dropAllReadbacks();
     }
 
+#ifdef MKXPZ_CPU_BITMAPS
+    /* An oversized bitmap cannot fall back to a full GPU allocation. Keep
+     * allocation failures distinct from unsupported texture dimensions. */
+    if (!hiresBitmap && !isHires && !shState->config().enableHires &&
+        (width > glState.caps.maxTexSize || height > glState.caps.maxTexSize))
+        throw Exception(Exception::SDLError,
+                        "Error creating bitmap %dx%d: out of memory allocating CPU pixels within the bitmap memory budget", width, height);
+#endif
+
     TEXFBO tex;
     try {
         tex = shState->texPool().request(width, height);
@@ -1822,6 +1845,12 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
             p->cpuContent = other.p->cpuContent;
             p->addTaintedArea(rect());
             return;
+        }
+        if (cpuOversized(other.p))
+        {
+            delete p;
+            throw Exception(Exception::SDLError,
+                            "Error copying bitmap %dx%d: out of memory allocating CPU pixels within the bitmap memory budget", from->w, from->h);
         }
         /* No room on the CPU side: copy on the GPU, as before. */
         cpuPromote(other.p);
@@ -2050,7 +2079,7 @@ void Bitmap::setLores(Bitmap *lores) {
 bool Bitmap::isMega() const{
     guardDisposed();
     
-    return p->megaSurface;
+    return p->megaSurface || cpuOversized(p);
 }
 
 bool Bitmap::isAnimated() const {
@@ -4215,7 +4244,7 @@ SDL_Surface *Bitmap::megaSurface() const
         }
     }
 
-    return p->megaSurface;
+    return p->megaSurface ? p->megaSurface : (cpuOversized(p) ? p->cpu : nullptr);
 }
 
 void Bitmap::ensureNonMega() const
@@ -4898,6 +4927,85 @@ void Bitmap::bindTex(ShaderBase &shader, bool substituteLoresSize)
     p->bindTexture(shader, substituteLoresSize);
 }
 
+bool Bitmap::drawCpuWindow(ShaderBase &shader, const IntRect &visible, float opacity)
+{
+    guardDisposed();
+    if (!cpuOversized(p))
+        return false;
+
+    /* The bitmap keeps its complete logical contents. Only the part covered
+     * by the window is uploaded, including when ox/oy are beyond a texture's
+     * maximum extent. The tile size bounds staging memory, not list length. */
+    const IntRect clip = cpuClip(visible, p->cpu->w, p->cpu->h);
+    const int tileSize = std::min(glState.caps.maxTexSize, 1024);
+    if (tileSize <= 0)
+        return true;
+    for (int y = clip.y; y < clip.y + clip.h; )
+    {
+        const int h = std::min(tileSize, clip.y + clip.h - y);
+        for (int x = clip.x; x < clip.x + clip.w; )
+        {
+            const int w = std::min(tileSize, clip.x + clip.w - x);
+            const IntRect tile(x, y, w, h);
+            const IntRect previous = p->windowRect;
+            if (p->windowTex == TEX::ID(0) || p->windowVersion != p->contentVersion ||
+                previous.x != x || previous.y != y || previous.w != w || previous.h != h)
+            {
+                const bool resize = p->windowTex == TEX::ID(0) || previous.w != w || previous.h != h;
+                if (p->windowTex == TEX::ID(0))
+                    p->windowTex = TEX::gen();
+                TEX::bind(p->windowTex);
+                TEX::setRepeat(false);
+                TEX::setSmooth(false);
+                try
+                {
+                    if (resize)
+                        TEX::allocEmpty(w, h);
+                    const uint8_t *first = (const uint8_t *)p->cpu->pixels + (size_t)y * p->cpu->pitch;
+                    if (x == 0 && w == p->cpu->w && p->cpu->pitch == w * 4)
+                        TEX::uploadSubImage(0, 0, w, h, first, GL_RGBA);
+                    else
+                    {
+                        /* Pack cropped rows without a heap-sized staging
+                         * allocation. A late-game heap can be fragmented even
+                         * when the logical bitmap fits its pixel budget. */
+                        uint32_t pixels[8192];
+                        const int rowsPerUpload = std::max(1, 8192 / w);
+                        for (int row = 0; row < h; )
+                        {
+                            const int rows = std::min(rowsPerUpload, h - row);
+                            for (int i = 0; i < rows; ++i)
+                                memcpy(pixels + (size_t)i * w,
+                                       first + (size_t)(row + i) * p->cpu->pitch + (size_t)x * 4,
+                                       (size_t)w * 4);
+                            TEX::uploadSubImage(0, row, w, rows, pixels, GL_RGBA);
+                            row += rows;
+                        }
+                    }
+                }
+                catch (const Exception &)
+                {
+                    TEX::del(p->windowTex);
+                    p->windowTex = TEX::ID(0);
+                    reclaimRequested = true;
+                    return true;
+                }
+                p->windowRect = tile;
+                p->windowVersion = p->contentVersion;
+            }
+            TEX::bind(p->windowTex);
+            shader.setTexSize(Vec2i(w, h));
+            Quad &quad = shState->gpQuad();
+            quad.setTexPosRect(FloatRect(0, 0, w, h), FloatRect(x, y, w, h));
+            quad.setColor(Vec4(1, 1, 1, opacity));
+            quad.draw();
+            x += w;
+        }
+        y += h;
+    }
+    return true;
+}
+
 void Bitmap::taintArea(const IntRect &rect)
 {
     if (hasHires()) {
@@ -4923,6 +5031,12 @@ void Bitmap::releaseRecreatableMemory()
     textCacheClear();
     dropAllReadbacks();
     AssetPrefetch::releaseMemory();
+    for (BitmapPrivate *bitmap : cpuBitmapList)
+        if (bitmap->windowTex != TEX::ID(0))
+        {
+            TEX::del(bitmap->windowTex);
+            bitmap->windowTex = TEX::ID(0);
+        }
 }
 
 void Bitmap::reclaimMemory()
@@ -4930,8 +5044,12 @@ void Bitmap::reclaimMemory()
     releaseRecreatableMemory();
     try
     {
-        while (!cpuBitmapList.empty())
-            cpuPromote(cpuBitmapList.front());
+        for (auto i = cpuBitmapList.begin(); i != cpuBitmapList.end(); )
+        {
+            BitmapPrivate *bitmap = *i++;
+            if (!cpuOversized(bitmap))
+                cpuPromote(bitmap);
+        }
     }
     catch (const Exception &)
     {

@@ -132,7 +132,11 @@ int main() try {
     expect(cpuBitmapEligible(280, 3840), "160-row contents rejected");
     expect(cpuBitmapEligible(520, 2080), "contents above 2048 pixels rejected");
     expect(cpuBitmapEligible(3840, 280), "wide contents rejected");
-    expect(!cpuBitmapEligible(4097, 24) && !cpuBitmapEligible(24, 4097), "texture limit bypassed");
+    expect(cpuBitmapEligible(280, 4560), "reported weapon contents rejected");
+    expect(cpuBitmapEligible(280, 7440), "late-game weapon contents rejected");
+    expect(cpuBitmapEligible(280, 24000), "larger future contents rejected");
+    expect(cpuBitmapEligible(24000, 280), "wide future contents rejected");
+    expect(!cpuBitmapEligible(2147483647, 2147483647), "allocation size overflowed");
     expect(!cpuBitmapEligible(0, 24) && !cpuBitmapEligible(24, -1), "invalid extent accepted");
     expect(!cpuBitmapEligible(4096, 4096), "single allocation exceeded the budget");
     const size_t listBytes = 280u * 3840 * 4;

@@ -172,6 +172,9 @@ public:
 	/* Binds the backing texture and sets the correct
 	 * texture size uniform in shader */
 	void bindTex(ShaderBase &shader, bool substituteLoresSize = true);
+	/* Draw the visible part of oversized CPU contents with bounded textures.
+	 * Returns false when the ordinary texture path should be used. */
+	bool drawCpuWindow(ShaderBase &shader, const IntRect &visible, float opacity);
 
 	/* Adds 'rect' to tainted area */
 	void taintArea(const IntRect &rect);

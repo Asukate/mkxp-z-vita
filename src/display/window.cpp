@@ -647,8 +647,11 @@ struct WindowPrivate
 
 			shader.setTranslation(efPos + (Vec2i(16) - contentsOffset));
 
-			contents->bindTex(shader);
-			contentsQuad.draw();
+			if (!contents->drawCpuWindow(shader, IntRect(contentsOffset, contentsRect.size()), contentsOpacity.norm))
+			{
+				contents->bindTex(shader);
+				contentsQuad.draw();
+			}
 		}
 
 		glState.scissorBox.pop();

@@ -1,7 +1,7 @@
 # Game compatibility
 
-Results from testing on a real PS Vita through HardRPG **0.4.6 Alpha**. Games
-change between versions and editions, so your copy may behave differently.
+Results from testing on a real PS Vita. Versions are noted for relevant fixes.
+Games change between versions and editions, so your copy may behave differently.
 "Runs" means the game has been played on the Vita.
 
 | Status | Meaning |
@@ -19,7 +19,7 @@ those games are still possible.
 | Game | Engine | Status | Notes |
 | --- | --- | --- | --- |
 | BLACK SOULS | VX Ace | ✅ Runs | |
-| BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). Long weapon upgrade lists render correctly (0.4.6). |
+| BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). Large weapon upgrade lists render correctly and no longer fail at the texture-size limit (0.4.7). |
 | Shin Megami Tensei VX: The Genesis | VX | ✅ Runs | Loading games, 3D dungeons and crash rescue fixed in 0.4.6. |
 | Ao Oni | XP | ✅ Runs | Played from start to finish. |
 | The Witch's House | VX | ✅ Runs | |

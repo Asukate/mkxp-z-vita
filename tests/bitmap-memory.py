@@ -44,6 +44,7 @@ VALUE rb_funcall(VALUE receiver, VALUE method, int argc) {
     return 0;
 }
 void vitaErrorImageStart() {}
+void vitaReleaseGameImageCache() { assert(!graphicsLocked); }
 static int memoryEvents;
 void vitaErrorMemoryEvent(const char *, const char *) { assert(!graphicsLocked); ++memoryEvents; }
 struct TestTexPool {
@@ -93,6 +94,9 @@ static void reset(int count, Exception::Type type, const char *message) {
     graphicsLocked = false;
 }
 int main() {
+    reset(1, Exception::SDLError, "Error creating bitmap 280x7440: out of memory allocating CPU pixels within the bitmap memory budget");
+    delete vitaBitmapOfSize(280, 7440);
+    assert(calls == 2 && collections == 1 && !graphicsLocked);
     VALUE filename = 0;
     reset(0, Exception::SDLError, "");
     delete bitmapFromFile(1, &filename);
