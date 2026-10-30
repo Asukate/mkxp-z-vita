@@ -1,6 +1,7 @@
 name: Feature request
 description: Suggest a feature or improvement for HardRPG.
 labels: [feature request, needs triage]
+assignees: [Asukate]
 body:
   - type: markdown
     attributes:

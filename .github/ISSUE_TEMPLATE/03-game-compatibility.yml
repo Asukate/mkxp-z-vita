@@ -1,6 +1,7 @@
 name: Game compatibility
 description: Share how a game runs, including games that work well.
 labels: [compatibility report, needs triage]
+assignees: [Asukate]
 body:
   - type: markdown
     attributes:

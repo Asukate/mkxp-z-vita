@@ -1,6 +1,7 @@
 name: Question
 description: Ask about setup, controls, supported games, or using HardRPG.
 labels: [question, needs triage]
+assignees: [Asukate]
 body:
   - type: markdown
     attributes:
