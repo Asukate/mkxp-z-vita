@@ -1246,6 +1246,52 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(self.ui('cross')['errorLines'],0)
         self.assertEqual(self.cmd('error'),[])
 
+    def test_error_report_opens_on_exception_and_preserves_full_export(self):
+        prefix = ('Reporter: 2 (failure-only)\nCapture runtime: fixture\n'
+                  'Game root: ux0:/data/hardrpg/games/Fixture\nRGSS: 3\n' +
+                  'Native allocation details\n' * 40 + 'Graphics frame: 321\n')
+        failure = ('Exception: NoMethodError\n\n'
+                   "undefined method `fixture_method' for nil:NilClass\n\n"
+                   'Backtrace:\nScene_Fixture:42:in `update`\n'
+                   'Scene_Base:14:in `main`\n\nGame state at exception:\nscene=Fixture\n')
+        body = (prefix + failure).encode()
+        (self.root/'last-error.txt').write_bytes(body)
+        lines = self.cmd('error')
+        self.assertEqual(lines[0], 'Exception: NoMethodError')
+        self.assertIn('undefined method', lines[2])
+        self.assertIn('Scene_Fixture:42:in `update`', lines[:12])
+        self.assertGreater(lines.index('Reporter: 2 (failure-only)'),
+                           lines.index('Scene_Base:14:in `main`'))
+        self.assertEqual((self.root/'last-error.txt.prev').read_bytes(), body)
+        state = self.ui(SETTINGS+',down,down,down,cross,cross,square')
+        self.assertEqual(state['errorScroll'], 0)
+        exported = list((self.root/'reports').glob('error-*.txt'))
+        self.assertEqual(len(exported), 1)
+        self.assertTrue(exported[0].read_bytes().endswith(body))
+        archived = list((self.root/'errors').glob('*.txt'))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0].read_bytes(), body)
+
+    def test_error_report_prioritizes_older_and_message_box_reports(self):
+        prefix = 'Game root: fixture\r\nRGSS: 3\r\n' + 'Memory details\r\n' * 20
+        reports = [
+            ('Exception: RuntimeError\r\n\r\nFallo de prueba\r\n\r\n'
+             'Backtrace:\r\nEscena_ñ:17\r\n', 'Exception: RuntimeError'),
+            ('Graphics frame: 12\r\n\r\nThe game closed after showing this message.\r\n'
+             'It was a Windows message box, which the Vita cannot display.\r\n\r\n'
+             'Fixture error\r\n\r\nMissing fixture file\r\n',
+             'The game closed after showing this message.'),
+        ]
+        for failure, first in reports:
+            with self.subTest(first=first):
+                body = (prefix + failure).encode()
+                (self.root/'last-error.txt').write_bytes(body)
+                lines = self.cmd('error')
+                self.assertEqual(lines[0], first)
+                self.assertIn('Game root: fixture', lines)
+                self.assertNotIn('\r', ''.join(lines))
+                self.assertEqual((self.root/'last-error.txt.prev').read_bytes(), body)
+
     def test_export_error_report_preserves_complete_trace_and_previous_exports(self):
         body = ('Errno::ENOENT\nGraphics/System/Balloon\n' + 'script.rb:10\n' * 4000).encode()
         (self.root/'last-error.txt').write_bytes(body)

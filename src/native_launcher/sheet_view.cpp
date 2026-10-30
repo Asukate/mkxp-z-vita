@@ -257,7 +257,10 @@ void View::buildSheet(const UI &u) {
     }
   } else if (!u.errorReport.empty()) {
     section = tr("Error report");
-    title = tr("The game ended with an error");
+    const auto &first = u.errorReport.front();
+    title = first.size() > 11 && first.compare(0, 11, "Exception: ") == 0
+                ? first.substr(11)
+                : tr("The game ended with an error");
     body = u.errorReport;
     bodyFirst = u.errorScroll;
     left = {hint("btn-cross-26", "Back", Button::Cross), hint("btn-square-26", "Save report", Button::Square)};

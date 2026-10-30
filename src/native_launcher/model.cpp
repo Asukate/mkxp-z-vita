@@ -1912,6 +1912,20 @@ std::vector<std::string> Model::readError(const std::string &path) const {
     body.resize(report.gcount());
     body = scrubUtf8(body);
     std::replace(body.begin(), body.end(), '\0', ' ');
+    // Show the failure before the reporter's runtime and memory diagnostics.
+    // This changes only the display; history and exports retain the raw file.
+    if (body.find("Reporter:") == 0 || body.find("Game root:") == 0) {
+      auto details = body.find("\nException: ");
+      if (details == std::string::npos) {
+        const auto frame = body.find("\nGraphics frame: ");
+        if (frame != std::string::npos)
+          details = body.find('\n', frame + 1);
+      }
+      if (details != std::string::npos)
+        details = body.find_first_not_of("\r\n", details);
+      if (details != std::string::npos && details > 0)
+        body = body.substr(details) + "\n\n" + body.substr(0, details);
+    }
     std::vector<std::string> out;
     for (auto &line : split(body, '\n')) {
       if (!line.empty() && line.back() == '\r')
