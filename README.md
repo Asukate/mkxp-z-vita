@@ -165,7 +165,7 @@ terminal in that folder and run the lines for your engine:
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-New in **0.4.8 Alpha**:
+**0.4.8 Alpha** is the current release. New in 0.4.8:
 
 - **Pocket Mirror (original VX Ace edition):** fixed the startup crash after
   the team splash.
@@ -453,7 +453,7 @@ Games, captured on a PS Vita running HardRPG 0.3.0:
   </tr>
 </table>
 
-<!-- 79915900350ef6ef7146224c92fd246a3a4651ffcbcf45a3956a11fabade2802 -->
+<!-- b0e36a4353a87cccb89b7ed54298f4baef8cbf2222b2b1f765c70631f8e784e1 -->
 
 ## Building
 
