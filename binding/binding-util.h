@@ -454,20 +454,13 @@ inline void rb_int_arg(VALUE arg, int *out, int argPos = 0) {
     }
 }
 
+/* RGSS stores boolean properties with Ruby truthiness: a value is true
+ * unless it is false or nil. Shipped games depend on this, for example
+ * a Font shadow assigned a number instead of a boolean. Rejecting such
+ * a value stops the game, so follow the RGSS rule for every property. */
 inline void rb_bool_arg(VALUE arg, bool *out, int argPos = 0) {
-    switch (rb_type(arg)) {
-        case RUBY_T_TRUE:
-            *out = true;
-            break;
-            
-        case RUBY_T_FALSE:
-        case RUBY_T_NIL:
-            *out = false;
-            break;
-            
-        default:
-            throw Exception(Exception::TypeError, "Argument %d: Expected bool", argPos);
-    }
+    (void)argPos;
+    *out = RTEST(arg) ? true : false;
 }
 
 /* rb_check_argc and rb_error_arity are both
