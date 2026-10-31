@@ -12,9 +12,9 @@ Games change between versions and editions, so your copy may behave differently.
 
 ## RPG Maker XP, VX and VX Ace
 
-Of these, only Ao Oni has been played from start to finish on the Vita. The
-others have been played for a while but not end to end, so problems later in
-those games are still possible.
+Of these, Ao Oni and Hello Charlotte EP1 have been played from start to finish
+on the Vita. The others have been played for a while but not end to end, so
+problems later in those games are still possible.
 
 | Game | Engine | Status | Notes |
 | --- | --- | --- | --- |
@@ -22,7 +22,7 @@ those games are still possible.
 | BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). Large weapon upgrade lists render correctly and no longer fail at the texture-size limit (0.4.7). |
 | Shin Megami Tensei VX: The Genesis | VX | ✅ Runs | Loading games, 3D dungeons and crash rescue fixed in 0.4.6. |
 | Pocket Mirror (original 2016 VX Ace edition) | VX Ace | 🟡 Partial | Startup crash fixed in 0.4.8. Opening room, movement, item pickup and inventory checked; later progression untested. |
-| Hello Charlotte EP1 (English v2.0) | VX Ace | 🟡 Partial | Item popup TypeError fixed in 0.4.8. The popup crash point was checked on a real PS Vita; later progression untested. |
+| Hello Charlotte EP1 (English v2.0) | VX Ace | ✅ Runs | Item popup TypeError fixed in 0.4.8. Played to the true ending on 0.4.8 (itch.io version, community report), 50–60 fps; bad ending untested. |
 | Ao Oni | XP | ✅ Runs | Played from start to finish. |
 | The Witch's House | VX | ✅ Runs | |
 | To the Moon | XP | ✅ Runs | Slowdowns in some areas. |
