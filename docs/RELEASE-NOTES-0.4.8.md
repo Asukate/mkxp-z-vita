@@ -31,6 +31,11 @@ not been tested.
   report heading.
 - Saved history and exported reports retain the complete original content.
 
+## Known issues
+
+- **Hello Charlotte EP1:** some long dialogue lines are cut off by two or
+  three letters at the right edge of the message window.
+
 ## Updating
 
 Install the VPK over **HardRPG**. It uses the same application ID as earlier
