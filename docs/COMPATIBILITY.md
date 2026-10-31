@@ -22,7 +22,7 @@ problems later in those games are still possible.
 | BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). Large weapon upgrade lists render correctly and no longer fail at the texture-size limit (0.4.7). |
 | Shin Megami Tensei VX: The Genesis | VX | ✅ Runs | Loading games, 3D dungeons and crash rescue fixed in 0.4.6. |
 | Pocket Mirror (original 2016 VX Ace edition) | VX Ace | 🟡 Partial | Startup crash fixed in 0.4.8. Opening room, movement, item pickup and inventory checked; later progression untested. |
-| Hello Charlotte EP1 (English v2.0) | VX Ace | ✅ Runs | Item popup TypeError fixed in 0.4.8. Played to the true ending on 0.4.8 (itch.io version, community report), 50–60 fps; bad ending untested. |
+| Hello Charlotte EP1 (English v2.0) | VX Ace | ✅ Runs | Item popup TypeError fixed in 0.4.8. Played to the true ending on 0.4.8 (itch.io version, community report), 50–60 fps; bad ending untested. Some long dialogue lines are cut off by two or three letters at the right edge (known issue). |
 | Ao Oni | XP | ✅ Runs | Played from start to finish. |
 | The Witch's House | VX | ✅ Runs | |
 | To the Moon | XP | ✅ Runs | Slowdowns in some areas. |
@@ -33,6 +33,7 @@ problems later in those games are still possible.
 | Mogeko Castle (English VX Ace edition) | VX Ace | ✅ Runs | |
 | The Endless Empty | VX Ace | ✅ Runs | |
 | VorlorN | XP | ✅ Runs | |
+| N.P.C. Dreams | VX Ace | ✅ Runs | Frequent frame drops. |
 
 ## RPG Maker 2000 and 2003 (EasyRPG)
 
@@ -49,13 +50,13 @@ These run through the bundled EasyRPG Player.
 
 > [!WARNING]
 > **Pokémon Essentials games are a work in progress** and are not playable in
-> 0.4.6. Development builds already open some of them; they still need
-> performance work and game-specific fixes.
+> 0.4.8. Development builds already reach gameplay in some of them; they
+> still need a lot of game-specific work.
 
 | Game | Engine | Status | Notes |
 | --- | --- | --- | --- |
-| Pokémon Uranium | XP (Essentials) | ⛔ Not supported | Development builds open it: language menu, data load and intro. |
-| Pokémon Insurgence | XP (Essentials) | ⛔ Not supported | Development builds open it: splash screens, title and main menu. |
+| Pokémon Uranium | XP (Essentials) | ⛔ Not supported | Development builds reach gameplay: you can move around at about 50 fps. Progression untested. |
+| Pokémon Insurgence | XP (Essentials) | ⛔ Not supported | Development builds reach gameplay: you can move around at about 50 fps. Progression untested. |
 | Pokémon Infinite Fusion | XP (Essentials) | ⛔ Not supported | Its data is larger than the memory the Vita gives the game; needs memory work. |
 
 ## Tested a game?
