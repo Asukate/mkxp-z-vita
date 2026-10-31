@@ -22,6 +22,7 @@ those games are still possible.
 | BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). Large weapon upgrade lists render correctly and no longer fail at the texture-size limit (0.4.7). |
 | Shin Megami Tensei VX: The Genesis | VX | ✅ Runs | Loading games, 3D dungeons and crash rescue fixed in 0.4.6. |
 | Pocket Mirror (original 2016 VX Ace edition) | VX Ace | 🟡 Partial | Startup crash fixed in 0.4.8. Opening room, movement, item pickup and inventory checked; later progression untested. |
+| Hello Charlotte EP1 (English v2.0) | VX Ace | 🟡 Partial | Item popup TypeError fixed in 0.4.8. The popup crash point was checked on a real PS Vita; later progression untested. |
 | Ao Oni | XP | ✅ Runs | Played from start to finish. |
 | The Witch's House | VX | ✅ Runs | |
 | To the Moon | XP | ✅ Runs | Slowdowns in some areas. |

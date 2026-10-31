@@ -165,12 +165,16 @@ terminal in that folder and run the lines for your engine:
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.4.8 Alpha** is the current release. New in 0.4.8:
+New in **0.4.8 Alpha**:
 
 - **Pocket Mirror (original VX Ace edition):** fixed the startup crash after
   the team splash.
 - **Font sizing:** affected fonts now use the correct size, preventing
   enormous text allocations. The correction applies across games.
+- **Hello Charlotte EP1:** fixed the item popup crash. Boolean options now
+  accept Ruby values as RGSS does, benefiting other games with similar scripts.
+- **Error reports:** the exception, message and backtrace appear before memory
+  diagnostics. Saved reports retain the complete original details.
 
 Full list: [0.4.8 release notes](docs/RELEASE-NOTES-0.4.8.md).
 

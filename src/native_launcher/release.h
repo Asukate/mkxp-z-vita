@@ -3,12 +3,14 @@
 #define HARDRPG_VERSION "0.4.8 Alpha"
 #define HARDRPG_VERSION_TAG "v0.4.8-alpha"
 #define HARDRPG_APP_VER "00.48"
-#define HARDRPG_RELEASE_UTC "2026-10-29"
+#define HARDRPG_RELEASE_UTC "2026-10-31"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
     "0.4.8 Alpha - " HARDRPG_RELEASE_UTC,
     "- Pocket Mirror: fixed startup crash after the team splash (#7)",
     "- Correct font sizing prevents oversized text allocations",
+    "- Hello Charlotte EP1: fixed item popup crash (#9)",
+    "- Error reports show exception details before diagnostics",
     "",
     "0.4.7 Alpha - 2026-10-28",
     "- BLACK SOULS II: long weapon upgrade lists no longer crash (#6)",
