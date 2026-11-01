@@ -67,44 +67,44 @@ void VitaStats::sample() {
         milliwatts = int(lost / (seconds / 3600.0) * millivolts / 1000.0);
 }
 
-void VitaStats::build(int level, const PerformanceMetrics::Reading &frames, std::string &headline, int &tone,
-                      std::vector<hardrpg::View::StatRow> &rows) {
+void VitaStats::build(int level, int rgssVersion, const PerformanceMetrics::Reading &frames, std::string &headline,
+                      int &tone, std::vector<hardrpg::View::StatRow> &rows) {
     using hardrpg::tr;
     rows.clear();
+    /* XP games target 40 fps (25 ms frames), VX and VX Ace 60. */
+    const bool xp = rgssVersion == 1;
     if (frames.ready) {
         headline = format("%.0f FPS", frames.fps);
-        tone = frames.fps >= 55 ? 1 : frames.fps >= 30 ? 2 : 3;
+        tone = frames.fps >= (xp ? 37 : 55) ? 1 : frames.fps >= (xp ? 20 : 30) ? 2 : 3;
     } else {
         headline = "- FPS";
         tone = 0;
     }
     if (level < 2)
         return;
+    /* Average frame time over the last half second, then the slowest frame. */
     if (frames.ready)
-        rows.push_back({tr("Frame"), format("%.1f ms", frames.frameMs) + "  \xc2\xb7  " + tr("peak") + " " +
-                                         format("%.0f ms", frames.peakMs),
-                        frames.peakMs > 50 ? 3 : frames.peakMs > 25 ? 2 : 0});
+        rows.push_back({"", format("%.0f / %.0f ms", frames.frameMs, frames.peakMs),
+                        frames.peakMs > (xp ? 75 : 50) ? 3 : frames.peakMs > (xp ? 37 : 25) ? 2 : 0});
     if (level < 3)
         return;
     sample();
+    /* One narrow column: each value on its own line under a caption. */
     if (cpu >= 0)
-        rows.push_back({tr("CPU"), format("%.0f%%", cpu) + " " + tr("main thread") + "  \xc2\xb7  " +
-                                       format("%.0f MHz", armMHz),
-                        cpu >= 95 ? 3 : cpu >= 80 ? 2 : 0});
-    rows.push_back({tr("GPU"), format("%.0f MHz", gpuMHz) + "  \xc2\xb7  " + tr("video") + " " +
-                                   format("%.0f/%.0f MB", vramUsed, vramTotal),
+        rows.push_back({tr("CPU"), format("%.0f%%\n%.0f MHz", cpu, armMHz), cpu >= 95 ? 3 : cpu >= 80 ? 2 : 0});
+    rows.push_back({tr("GPU"), format("%.0f MHz", gpuMHz) + "\n" + format("%.0f/%.0f MB", vramUsed, vramTotal),
                     vramTotal > 0 && vramUsed > vramTotal * 0.9 ? 2 : 0});
-    rows.push_back({tr("Memory"), format("%.0f/%.0f MB", heapUsed, heapTotal) + "  \xc2\xb7  " + tr("free") + " " +
+    rows.push_back({tr("Memory"), format("%.0f/%.0f MB", heapUsed, heapTotal) + "\n" + tr("free") + " " +
                                       format("%.0f MB", freeRam),
                     heapTotal > 0 && heapUsed > heapTotal * 0.9 ? 3 : heapUsed > heapTotal * 0.8 ? 2 : 0});
     if (battery >= 0) {
         std::string value = format("%.0f%%", battery);
         if (charging)
-            value += "  \xc2\xb7  " + std::string(tr("charging"));
+            value += "\n" + std::string(tr("charging"));
         else if (lifeMinutes > 0)
-            value += "  \xc2\xb7  " + format("%.0f h %02.0f min", lifeMinutes / 60, lifeMinutes % 60);
+            value += "  " + format("%.0fh%02.0f", lifeMinutes / 60, lifeMinutes % 60);
         if (tempTenths > 0)
-            value += "  \xc2\xb7  " + format("%.1f \xc2\xb0" "C", tempTenths / 10.0);
+            value += "\n" + format("%.1f \xc2\xb0" "C", tempTenths / 10.0);
         rows.push_back({tr("Battery"), value, battery <= 10 ? 3 : battery <= 20 ? 2 : 0});
         rows.push_back({tr("Power draw"),
                         charging ? std::string(tr("on the charger"))

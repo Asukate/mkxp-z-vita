@@ -257,13 +257,13 @@ class NativeLauncher(unittest.TestCase):
         key = state['entries'][0]['config']
         game = lambda actions='', snapshot=None: self.run_binary('--in-game', key, '--actions', actions,
                                                                  *(['--snapshot', snapshot] if snapshot else []))
-        # The game's page with five rows; Resume first.
+        # The game's page with six rows; Resume first.
         state = game()
         self.assertTrue(state['inGame'])
         self.assertEqual((state['page'], state['setting'], state['inGameExit']), (8, 0, 0))
         self.assertEqual(game('cross')['inGameExit'], 1)            # Resume
         self.assertEqual(game('circle')['inGameExit'], 1)           # Circle resumes too
-        self.assertEqual(game('down,down,down,down,cross')['inGameExit'], 2)   # Back to library
+        self.assertEqual(game('down,down,down,down,down,cross')['inGameExit'], 2)   # Back to library
         # Display opens the game's own display page; a change is saved for
         # the game and marked for the engine to apply.
         state = game('down,down,cross')
@@ -275,6 +275,20 @@ class NativeLauncher(unittest.TestCase):
         # Circle on a sub-page goes back to the in-game page, on its row.
         state = game('down,cross,circle')
         self.assertEqual((state['page'], state['setting'], state['inGameExit']), (8, 1, 0))
+        # Audio: only the volume boost, which applies at once. Cross and
+        # Right go up, Left goes down and wraps, Square goes back to off.
+        state = game('down,down,down,cross')
+        self.assertEqual((state['page'], state['inGameExit']), (9, 0))
+        boost = lambda: json.loads((self.root/'config'/f'{key}.json').read_text()).get('audioBoost')
+        state = game('down,down,down,cross,cross,right')
+        self.assertTrue(state['inGameChanged'])
+        self.assertEqual(boost(), 150)
+        game('down,down,down,cross,down,left')              # one row: down stays on it
+        self.assertEqual(boost(), 125)
+        game('down,down,down,cross,left,left')
+        self.assertEqual(boost(), 400)
+        game('down,down,down,cross,square')
+        self.assertIsNone(boost())
         # Controls: a change saves this game's controls at once.
         state = game('down,cross,cross')
         self.assertTrue(state['inGameChanged'])
@@ -1583,8 +1597,13 @@ class NativeLauncher(unittest.TestCase):
         self.ui(GAME+',down,cross,down,down,square')
         self.assertNotIn('smoothScaling',json.loads(config.read_text()))
         self.assertNotIn('smoothScalingDown',json.loads(config.read_text()))
-        self.ui(GAME+',down,down,cross,down,cross')
+        self.ui(GAME+',down,down,cross,down,down,cross')
         self.assertTrue(json.loads(config.read_text())['midiReverb'])
+        # Volume boost, the Audio page's first row, is saved for the game only.
+        self.ui(GAME+',down,down,cross,right,right,right')
+        self.assertEqual(json.loads(config.read_text())['audioBoost'],200)
+        self.ui(GAME+',down,down,cross,square')
+        self.assertNotIn('audioBoost',json.loads(config.read_text()))
         self.ui(GAME+',down,down,down,cross,cross')
         self.assertEqual(json.loads(config.read_text())['performanceMetrics'],1)
         self.assertEqual(json.loads(global_file.read_text()),{'smoothScaling':1,'preloadScript':['keep.rb']})

@@ -215,6 +215,22 @@ static short clamp_sample(float sample) {
     return (short)sample;
 }
 
+/* The listener gain is HardRPG's per-game volume boost (1 = off). Above 1
+ * the mix is raised, and peaks past three quarters of full scale are bent
+ * smoothly toward it instead of clipping into crackle. */
+static float listener_gain = 1.0f;
+
+static short boosted_sample(float sample, float gain) {
+    const float knee = 24576.0f, room = 32767.0f - knee;
+    float v = sample * gain, a = fabsf(v);
+    if (a > knee) {
+        float t = (a - knee) / room;
+        a = knee + room * t / (1.0f + t);
+        v = v < 0 ? -a : a;
+    }
+    return clamp_sample(v);
+}
+
 static void *audio_mixer_main(void *unused) {
     (void)unused;
     short output[OUT_FRAMES * 2];
@@ -241,9 +257,15 @@ static void *audio_mixer_main(void *unused) {
                 }
             }
         }
-        for (int frame = 0; frame < OUT_FRAMES; frame++) {
-            output[frame * 2] = clamp_sample(mix[frame * 2]);
-            output[frame * 2 + 1] = clamp_sample(mix[frame * 2 + 1]);
+        const float gain = listener_gain;
+        if (gain == 1.0f) {
+            for (int frame = 0; frame < OUT_FRAMES; frame++) {
+                output[frame * 2] = clamp_sample(mix[frame * 2]);
+                output[frame * 2 + 1] = clamp_sample(mix[frame * 2 + 1]);
+            }
+        } else {
+            for (int i = 0; i < OUT_FRAMES * 2; i++)
+                output[i] = boosted_sample(mix[i], gain);
         }
         pthread_mutex_unlock(&mixer_mutex);
 
@@ -869,7 +891,13 @@ const ALchar *alGetString(ALenum param) {
     (void)param; return "";
 }
 void alDistanceModel(ALenum value) { (void)value; }
-void alListenerf(ALenum param, ALfloat value) { (void)param; (void)value; }
+void alListenerf(ALenum param, ALfloat value) {
+    if (param != AL_GAIN || !(value >= 0.0f))
+        return;
+    pthread_mutex_lock(&mixer_mutex);
+    listener_gain = value > 8.0f ? 8.0f : value;
+    pthread_mutex_unlock(&mixer_mutex);
+}
 
 void alGenBuffers(ALsizei n, ALuint *ids) {
     al_trace("GENB n=%d", (int)n);

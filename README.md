@@ -217,7 +217,8 @@ New in 0.4:
   details and screenshots, downloaded automatically in the background.
 - **Title music:** each game's own title theme plays while it is highlighted.
 - **In-game menu:** hold **L + R + Start** (or tap the icon in the screen's
-  empty border) to change controls, display and speed without leaving the game.
+  empty border) to change controls, display, volume boost and speed without
+  leaving the game.
 - **Fast forward:** **L + R** runs a game at up to twice its speed.
 - **Faster:** quicker starts, smoother maps and sprites, and a Sharp screen
   filter by default.
@@ -243,7 +244,7 @@ Full list: [0.4.0 release notes](docs/RELEASE-NOTES-0.4.0.md).
 
 | Buttons | In a game |
 | --- | --- |
-| **L + R + Start** (hold) | In-game menu: controls, display, speed, back to library |
+| **L + R + Start** (hold) | In-game menu: controls, display, audio, speed, back to library |
 | **L + R** | Fast forward on and off |
 | **L + R + Select** (hold) | Back to the library (unsaved progress is lost) |
 
@@ -258,7 +259,8 @@ Highlight a game, press **Triangle**, then **Game settings**:
 
 - **Controls:** remap the game's controls on a picture of the Vita (below).
 - **Display:** aspect ratio, scaling and filtering.
-- **Audio and MIDI:** sound, MIDI reverb and chorus.
+- **Audio and MIDI:** volume boost (up to 400% for games that stay quiet even
+  at full Vita volume, such as Hylics), sound, MIDI reverb and chorus.
 - **Performance and speed:** an in-game overlay (FPS, frame timing, or full
   stats with CPU, memory and battery), fast forward and crash rescue.
 - **Rename**, **Game information** and **Play**.
@@ -281,7 +283,7 @@ playable that were made for a PC keyboard.
 - **Tap to walk:** tap a spot on the map and your character walks there.
 - **Test inputs** shows what each button and touch does before you play.
 
-The same controls, display and speed settings are in the in-game menu
+The same controls, display, volume boost and speed settings are in the in-game menu
 (**L + R + Start**), where they apply while you play.
 
 *Example: LISA uses W, A, S and D for combo attacks. Set the rear pad to Four

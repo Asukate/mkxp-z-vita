@@ -1487,13 +1487,15 @@ struct GraphicsPrivate {
         if (samples.serial() != statsSerial || level != statsLevel) {
             statsSerial = samples.serial();
             statsLevel = level;
-            vitaStats.build(level, samples.reading(), statsHeadline, statsTone, statsRows);
+            vitaStats.build(level, threadData->config.rgssVersion, samples.reading(), statsHeadline, statsTone, statsRows);
         }
-        const int width = level >= 3 ? 250 : level == 2 ? 200 : 104;
-        const hardrpg::Image &panel = statsView->statsPanel(statsHeadline, statsTone, statsRows, width);
-        /* In the left border, under the menu icon, when it fits; otherwise
-         * over the game's bottom left corner. */
-        const int x = scOffset.x >= width + 8 ? (scOffset.x - width) / 2 : 8;
+        /* One narrow column at every level, so it fits the black border. */
+        const int width = 104;
+        /* In the left border, under the menu icon, as plain text when it fits;
+         * otherwise on a dark panel over the game's bottom left corner. */
+        const bool inBorder = scOffset.x >= width + 8;
+        const hardrpg::Image &panel = statsView->statsPanel(statsHeadline, statsTone, statsRows, width, !inBorder);
+        const int x = inBorder ? (scOffset.x - width) / 2 : 8;
         const int y = winSize.y - panel.height - 8;
         gameMenuLayer.drawImage(panel, x, y, winSize.x, winSize.y);
     }
@@ -1555,6 +1557,11 @@ struct GraphicsPrivate {
         number("performanceMetrics", config.performanceMetrics);
         flag("fastForward", ff);
         flag("crashRescue", config.crashRescue);
+        int boost = config.audioBoost;
+        if (number("audioBoost", boost) && boost >= 100 && boost <= 400 && boost != config.audioBoost) {
+            config.audioBoost = boost;
+            alListenerf(AL_GAIN, boost / 100.0f);
+        }
         if (integer != integerScaleActive) {
             integerScaleActive = integer;
             integerLastMileScaling = !integer;
@@ -2968,9 +2975,20 @@ void Graphics::resizeScreen(int width, int height) {
     p->scResLores = sizeLores;
     
     p->screen.setResolution(width, height);
-    
+
+    /* The picture's place on screen follows the new resolution now. On the
+     * Vita the window never changes size, so no resize event would redo it:
+     * a game that set its resolution kept the old shape (slightly squeezed
+     * for a 640x480 VX Ace game) until the game menu recalculated it. */
+    p->findHighestIntegerScale();
     if (p->integerScaleActive)
         p->rebuildIntegerScaleBuffer();
+    p->recalculateScreenSize(p->threadData->config.fixedAspectRatio);
+    p->updateScreenResoRatio(p->threadData);
+    {
+        SDL_Rect screenRect = {p->scOffset.x, p->scOffset.y, p->scSize.x, p->scSize.y};
+        p->threadData->ethread->notifyGameScreenChange(screenRect);
+    }
 
     /* Vita: realloc without fini leaks the previous frozen frame in the
      * GPU pools (same class of bug as PingPong::resize above). */

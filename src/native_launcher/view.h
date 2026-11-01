@@ -34,14 +34,17 @@ public:
     int clipLeft = 0, clipRight = width;  // and columns
   };
   std::vector<Quad> scene;
-  // The in-game performance overlay: a small rounded panel with a headline
-  // (the frame rate) and rows of name and value. tone: 0 plain, 1 good, 2
+  // The in-game performance overlay: a narrow rounded column with a headline
+  // (the frame rate), then each row as a small caption (skipped when name is
+  // empty) over its value, one line per '\n'. tone: 0 plain, 1 good, 2
   // warning, 3 bad. Drawn again only when its text changes.
   struct StatRow {
     std::string name, value;
     int tone = 0;
   };
-  const Image &statsPanel(const std::string &headline, int tone, const std::vector<StatRow> &rows, int width);
+  // framed false: text only, for a dark border beside the game.
+  const Image &statsPanel(const std::string &headline, int tone, const std::vector<StatRow> &rows, int width,
+                          bool framed = true);
   bool gpu = false;      // the presenter draws scene; pixels hold nothing
   // Drawn over a running game: sheets keep a see-through background and
   // pixels start transparent (premultiplied alpha).

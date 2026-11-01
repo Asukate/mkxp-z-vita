@@ -600,6 +600,7 @@ int UI::optionRows() const {
          : page == Page::GameInfo ? 0
          : page == Page::Remove   ? 2
          : page == Page::Rescue   ? 3
+         : page == Page::Audio    ? (inGame ? 1 : 4)
                                   : 3;
 }
 void UI::openRemove() {
@@ -785,9 +786,12 @@ void UI::gameAction(Button b) {
       openPage(Page::Display);
       break;
     case 3:
-      openPage(Page::Metrics);
+      openPage(Page::Audio);
       break;
     case 4:
+      openPage(Page::Metrics);
+      break;
+    case 5:
       inGameExit = BackToLibrary;
       break;
     }
@@ -864,7 +868,7 @@ void UI::gameAction(Button b) {
     else if (page == Page::Metrics)
       changeMetrics(step, reset);
     else if (page == Page::Audio)
-      changeAudio(reset);
+      changeAudio(step, reset);
     else if (page == Page::Rtp) {
       if (reset) {
         model.setRtp(packs[rtpSelected]);
@@ -873,7 +877,7 @@ void UI::gameAction(Button b) {
       } else if (b == Button::Cross)
         openBrowser(BrowseMode::Rtp);
     }
-    inGameChanged = inGameChanged || page == Page::Display || page == Page::Metrics;
+    inGameChanged = inGameChanged || page == Page::Display || page == Page::Metrics || page == Page::Audio;
   }
 }
 namespace {
@@ -1258,13 +1262,23 @@ void UI::changeMetrics(int step, bool reset) {
                 ? trf(inGame ? "Saved for {}. Applied now." : "Saved for {}. Applies on next launch.", {gameEntry.name})
                 : tr("Performance metrics saved for the next game launch.");
 }
-void UI::changeAudio(bool reset) {
-  const char *keys[] = {"enableAudio", "midiReverb", "midiChorus"};
-  auto found = displayValues.as_object().find(keys[setting]);
-  bool value = setting == 0;
-  if (found != displayValues.as_object().end() && found->second.is_boolean())
-    value = found->second.as_boolean();
-  model.changeGameSetting(gameEntry, keys[setting], Json(!value), reset);
+void UI::changeAudio(int step, bool reset) {
+  if (setting == 0) {
+    // Volume boost: Left and Right step through the levels, Cross goes up
+    // and wraps back to off.
+    auto found = displayValues.as_object().find("audioBoost");
+    int n = found != displayValues.as_object().end() ? audioBoostIndex(found->second) : 0;
+    n = (n + step + audioBoostCount) % audioBoostCount;
+    model.changeGameSetting(gameEntry, "audioBoost", Json(Json::integer_type(audioBoostValues[n])), reset);
+  } else {
+    // Only the boost shows over a running game; the rest need a restart.
+    const char *keys[] = {"enableAudio", "midiReverb", "midiChorus"};
+    auto found = displayValues.as_object().find(keys[setting - 1]);
+    bool value = setting == 1;
+    if (found != displayValues.as_object().end() && found->second.is_boolean())
+      value = found->second.as_boolean();
+    model.changeGameSetting(gameEntry, keys[setting - 1], Json(!value), reset);
+  }
   displayValues = model.gameSettings(gameEntry);
   message = trf(inGame ? "Saved for {}. Applied now." : "Saved for {}. Applies on next launch.", {gameEntry.name});
 }

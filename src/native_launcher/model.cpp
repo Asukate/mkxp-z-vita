@@ -1448,13 +1448,16 @@ void Model::changeGameSetting(const Entry &entry, const std::string &name,
   bool boolean = name == "fixedAspectRatio" || name == "integerScalingActive" ||
                  name == "enableAudio" || name == "midiChorus" ||
                  name == "midiReverb" || name == "fastForward" || name == "crashRescue";
-  bool integer = name == "smoothScaling" || name == "performanceMetrics";
+  bool integer = name == "smoothScaling" || name == "performanceMetrics" || name == "audioBoost";
+  auto boostValid = [&] {
+    return value.is_integer() && value.as_integer() == audioBoostValues[audioBoostIndex(value)];
+  };
   if ((!boolean && !integer) ||
       (!reset && (boolean ? !value.is_boolean()
-                          : name == "smoothScaling"
-                                ? filterIndex(value) < 0
-                                : !value.is_integer() || value.as_integer() < 0 ||
-                                      value.as_integer() > 3)))
+                  : name == "smoothScaling" ? filterIndex(value) < 0
+                  : name == "audioBoost"    ? !boostValid()
+                                            : !value.is_integer() || value.as_integer() < 0 ||
+                                                  value.as_integer() > 3)))
     throw std::runtime_error("Invalid game setting.");
   auto file = paths.at("config/" + key(entry.node.identity(paths)) + ".json");
   auto saved =

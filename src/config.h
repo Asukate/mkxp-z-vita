@@ -45,6 +45,9 @@ struct Config {
     bool fastForward;
     /* Crash rescue (launcher/crash_rescue.rb): copies at map changes and battle starts. */
     bool crashRescue;
+    /* HardRPG volume boost for this game, in percent (100 = off): the mixer's
+     * listener gain, so a quiet game can go past its own maximum. */
+    int audioBoost;
     
     bool winResizable;
     bool fullscreen;

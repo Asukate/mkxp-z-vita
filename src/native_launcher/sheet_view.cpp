@@ -306,8 +306,8 @@ void View::buildSheet(const UI &u) {
                              "Rename", "Game information", "Play", "Remove from library", "Delete the ZIP, keep the game"};
       Row::Kind kinds[] = {Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Action, Row::Nav, Row::Primary, Row::Danger, Row::Danger};
       // Over a running game: resume, the settings that apply at once, leave.
-      const char *playing[] = {"Resume", "Controls", "Display", "Performance and speed", "Back to library"};
-      Row::Kind playingKinds[] = {Row::Primary, Row::Nav, Row::Nav, Row::Nav, Row::Plain};
+      const char *playing[] = {"Resume", "Controls", "Display", "Audio", "Performance and speed", "Back to library"};
+      Row::Kind playingKinds[] = {Row::Primary, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Plain};
       for (int i = 0; i < u.gameOptionsCount(); ++i)
         row(u.inGame ? playingKinds[i] : kinds[i], u.inGame ? playing[i] : names[i]);
       focusRow = u.setting;
@@ -320,14 +320,27 @@ void View::buildSheet(const UI &u) {
       } else
         left = {hint("btn-cross-26", "Open", Button::Cross), back};
     } else if (u.page == Page::Audio) {
-      title = tr("Audio and MIDI");
+      title = tr(u.inGame ? "Audio" : "Audio and MIDI");
       subtitle = u.gameEntry.name;
-      const char *keys[] = {"enableAudio", "midiReverb", "midiChorus"};
-      const char *names[] = {"Sound", "MIDI reverb", "MIDI chorus"};
-      for (int i = 0; i < 3; ++i)
-        row(Row::Toggle, names[i], "", boolean(keys[i], i == 0));
+      auto boost = values().find("audioBoost");
+      int level = boost != values().end() ? audioBoostValues[audioBoostIndex(boost->second)] : 100;
+      row(Row::Choice, "Volume boost", level == 100 ? "Off" : "");
+      if (level != 100)
+        rows.back().value = std::to_string(level) + "%";
+      // Sound and the MIDI effects need a restart, so they stay in the library.
+      if (!u.inGame) {
+        const char *keys[] = {"enableAudio", "midiReverb", "midiChorus"};
+        const char *names[] = {"Sound", "MIDI reverb", "MIDI chorus"};
+        for (int i = 0; i < 3; ++i)
+          row(Row::Toggle, names[i], "", boolean(keys[i], i == 0));
+      }
       focusRow = u.setting;
-      notes = {tr("Saved for this game; applies the next time it starts."), tr("MIDI effects cost CPU time and are off by default.")};
+      if (u.setting == 0)
+        notes = {tr("Plays this game louder than its own maximum, for games that stay quiet even at full Vita volume."),
+                 tr(u.inGame ? "Saved for this game and applied now. The loudest sounds are softened instead of crackling."
+                             : "Saved for this game. The loudest sounds are softened instead of crackling.")};
+      else
+        notes = {tr("Saved for this game; applies the next time it starts."), tr("MIDI effects cost CPU time and are off by default.")};
       left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", "Use default", Button::Square), back};
     } else if (u.page == Page::Rescue) {
       const auto &r = u.rescueInfo;

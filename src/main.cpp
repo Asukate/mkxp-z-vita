@@ -198,6 +198,8 @@ int rgssThreadFun(void *userdata) {
   }
 
   alcMakeContextCurrent(alcCtx);
+  /* The game's volume boost (Audio in the game menu); 100% is off. */
+  alListenerf(AL_GAIN, threadData->config.audioBoost / 100.0f);
   vitaDiagLog("AUDIO", "openal_context_ready");
   vitaDiagLog("BOOTPERF", "openal_context_ready");
 #ifdef __vita__

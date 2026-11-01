@@ -109,24 +109,48 @@ void View::save(const std::string &path) const {
                                nullptr))
     throw std::runtime_error("Cannot write launcher preview");
 }
-const Image &View::statsPanel(const std::string &headline, int tone, const std::vector<StatRow> &rows, int width) {
-  std::string key = headline + "|" + std::to_string(tone) + "|" + std::to_string(width);
+const Image &View::statsPanel(const std::string &headline, int tone, const std::vector<StatRow> &rows, int width,
+                              bool framed) {
+  std::string key = headline + "|" + std::to_string(tone) + "|" + std::to_string(width) + (framed ? "|f" : "|t");
   for (auto &r : rows)
     key += "|" + r.name + "=" + r.value + "/" + std::to_string(r.tone);
-  const int rowH = 17, top = 34;
-  int height = top + int(rows.size()) * rowH + (rows.empty() ? 0 : 8);
+  const int captionH = 13, lineH = 15, gap = 4, top = 32;
+  struct Line { std::string text; bool caption; int tone; };
+  std::vector<Line> lines;
+  for (auto &r : rows) {
+    if (!r.name.empty())
+      lines.push_back({r.name, true, 0});
+    size_t start = 0;
+    for (;;) {
+      size_t end = r.value.find('\n', start);
+      lines.push_back({r.value.substr(start, end == std::string::npos ? std::string::npos : end - start), false, r.tone});
+      if (end == std::string::npos)
+        break;
+      start = end + 1;
+    }
+  }
+  int height = top + (lines.empty() ? 0 : 6);
+  for (size_t i = 0; i < lines.size(); ++i)
+    height += lines[i].caption ? captionH + (i ? gap : 0) : lineH;
   if (beginLayer(statsLayer, key, width, height)) {
     const Color tones[] = {{236, 236, 238}, {92, 214, 140}, {244, 190, 72}, {232, 68, 90}};
-    rect(0, 0, width, height, {10, 10, 12}, 196, 10);
-    rect(0, 0, width, height, {255, 255, 255}, 16, 10);
-    rect(1, 1, width - 2, height - 2, {10, 10, 12}, 150, 9);
-    label(10, 5, headline, 22, tones[std::max(0, std::min(3, tone))], 255, true, -1, width - 20);
+    if (framed) {
+      rect(0, 0, width, height, {10, 10, 12}, 196, 10);
+      rect(0, 0, width, height, {255, 255, 255}, 16, 10);
+      rect(1, 1, width - 2, height - 2, {10, 10, 12}, 150, 9);
+    }
+    label(9, 5, headline, 22, tones[std::max(0, std::min(3, tone))], 255, true, -1, width - 18);
     int y = top;
-    for (auto &r : rows) {
-      int nameW = std::min(measure(r.name, 11), width / 3);
-      label(10, y + 2, r.name, 11, {150, 150, 158}, 255, false, -1, width / 3);
-      label(width - 10, y, r.value, 13, tones[std::max(0, std::min(3, r.tone))], 255, false, 1, width - 26 - nameW);
-      y += rowH;
+    for (size_t i = 0; i < lines.size(); ++i) {
+      const Line &l = lines[i];
+      if (l.caption) {
+        y += i ? gap : 0;
+        label(9, y, l.text, 10, {150, 150, 158}, 255, false, -1, width - 18);
+        y += captionH;
+      } else {
+        label(9, y, l.text, 13, tones[std::max(0, std::min(3, l.tone))], 255, false, -1, width - 18);
+        y += lineH;
+      }
     }
     endLayer();
   }

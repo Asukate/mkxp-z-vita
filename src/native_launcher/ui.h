@@ -262,10 +262,10 @@ public:
   int gameSetting = 0;
   // The last row, deleting the ZIP of an unpacked ZIP game, shows only then.
   bool canFreeZip = false;
-  int gameOptionsCount() const { return inGame ? 5 : canFreeZip ? 10 : 9; }
+  int gameOptionsCount() const { return inGame ? 6 : canFreeZip ? 10 : 9; }
   // The menu opened over a running game (L+R+Start or the corner icon): the
-  // game's page with Resume, Controls, Display, Performance and speed and
-  // Back to library. Its changes apply at once (see inGameChanged).
+  // game's page with Resume, Controls, Display, Audio, Performance and speed
+  // and Back to library. Its changes apply at once (see inGameChanged).
   bool inGame = false;
   enum InGameExit { Staying, Resume, BackToLibrary };
   InGameExit inGameExit = Staying;
@@ -465,7 +465,7 @@ private:
   void openSetting();
   void changeDisplay(int step = 1, bool reset = false);
   void changeMetrics(int step = 1, bool reset = false);
-  void changeAudio(bool reset = false);
+  void changeAudio(int step = 1, bool reset = false);
   void renameGame(const Entry &);
   void gameAction(Button);
   void progress(uint64_t, uint64_t);

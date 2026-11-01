@@ -14,9 +14,10 @@
 // drawn, estimated from how fast the charge falls).
 class VitaStats {
 public:
-    // level: 1 FPS, 2 FPS and frame timing, 3 everything.
-    void build(int level, const PerformanceMetrics::Reading &frames, std::string &headline, int &tone,
-               std::vector<hardrpg::View::StatRow> &rows);
+    // level: 1 FPS, 2 FPS and frame timing, 3 everything. rgssVersion 1 (XP)
+    // games run at 40 fps, so 40 is full speed for them.
+    void build(int level, int rgssVersion, const PerformanceMetrics::Reading &frames, std::string &headline,
+               int &tone, std::vector<hardrpg::View::StatRow> &rows);
 
 private:
     void sample();

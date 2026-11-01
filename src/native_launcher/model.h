@@ -26,6 +26,18 @@ inline int filterIndex(const json5pp::value &v) {
       return i;
   return -1;
 }
+// Volume boost ("audioBoost", percent): how much louder than its own
+// maximum a game plays. 100 is off.
+constexpr int audioBoostCount = 6;
+constexpr int audioBoostValues[audioBoostCount] = {100, 125, 150, 200, 300, 400};
+// Position of a stored value in audioBoostValues; 0 (off) for anything else.
+inline int audioBoostIndex(const json5pp::value &v) {
+  if (v.is_integer())
+    for (int i = 0; i < audioBoostCount; ++i)
+      if (v.as_integer() == audioBoostValues[i])
+        return i;
+  return 0;
+}
 using Json = json5pp::value;
 using Progress = std::function<void(uint64_t, uint64_t)>;
 using PreparationStatus = std::function<void(const std::string &)>;

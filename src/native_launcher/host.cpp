@@ -444,17 +444,16 @@ int main(int argc, char **argv) {
         hardrpg::View v(font);
         std::fill(v.pixels.begin(), v.pixels.end(), 90);
         std::vector<hardrpg::View::StatRow> rows = {
-            {"Frame", "16.7 ms  \xc2\xb7  peak 21 ms", 0},
-            {"CPU", "63% main thread  \xc2\xb7  444 MHz", 0},
-            {"GPU", "222 MHz  \xc2\xb7  video 41/112 MB", 0},
-            {"Memory", "58/112 MB  \xc2\xb7  free 23 MB", 2},
-            {"Battery", "78%  \xc2\xb7  3 h 12 min  \xc2\xb7  31.4 \xc2\xb0" "C", 0},
+            {"", "25 / 41 ms", 2},
+            {"CPU", "100%\n444 MHz", 3},
+            {"GPU", "222 MHz\n108/112 MB", 2},
+            {"Memory", "108/112 MB\nfree 23 MB", 2},
+            {"Battery", "100%  13h12\n31.4 \xc2\xb0" "C", 0},
             {"Power draw", "\xe2\x89\x88 1.35 W", 0}};
         int y = 10;
         for (int level : {1, 2, 3}) {
           std::vector<hardrpg::View::StatRow> shown(rows.begin(), rows.begin() + (level == 1 ? 0 : level == 2 ? 1 : 6));
-          const auto &img = v.statsPanel(level == 3 ? "38 FPS" : "60 FPS", level == 3 ? 2 : 1, shown,
-                                         level >= 3 ? 250 : level == 2 ? 200 : 104);
+          const auto &img = v.statsPanel(level == 3 ? "38 FPS" : "60 FPS", level == 3 ? 2 : 1, shown, 104);
           for (int r = 0; r < img.height; ++r)
             for (int c = 0; c < img.width; ++c) {
               const uint8_t *src = &img.rgba[(size_t(r) * img.width + c) * 4];
