@@ -16,6 +16,9 @@ prefix = r'''
 #include <algorithm>
 #include <sys/stat.h>
 using PHYSFS_sint64=int64_t; using PHYSFS_uint64=uint64_t;
+struct PHYSFS_File;
+PHYSFS_sint64 PHYSFS_fileLength(PHYSFS_File*) { return 0; }
+int PHYSFS_setBuffer(PHYSFS_File*,PHYSFS_uint64) { return 1; }
 struct SDL_RWops { int64_t pos=0; bool stale=false,closed=false; };
 struct PHYSFS_Io {
  int version; void *opaque;

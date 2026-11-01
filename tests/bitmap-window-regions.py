@@ -94,6 +94,7 @@ public:
     bool drawCpuWindow(ShaderBase &,const IntRect &,float);
     static void releaseRecreatableMemory();
     static void reclaimMemory();
+    static void releaseReusedImages() {}
 };
 static std::list<BitmapPrivate *> cpuBitmapList;
 static int promotions=0,releases=0;
