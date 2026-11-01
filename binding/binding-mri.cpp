@@ -1745,8 +1745,9 @@ static void reportMessageBoxExit(VALUE exc) {
 #endif
 
 /* The game ended on its own or through Back to library: nothing to rescue.
- * The L+R+Select hold is a quick way out to come back to: the last copy (if
- * the writer finished it) stays, marked so the launcher words it that way. */
+ * The L+R+Select hold is a quick way out to come back to: the script copies
+ * the game where it is now (or keeps its last copy when that is not safe),
+ * and the set is written here, marked so the launcher words it that way. */
 static void crashRescueCleanExit() {
     VALUE base = rb_gv_get("$hardrpg_rescue_base");
     if (!RB_TYPE_P(base, RUBY_T_STRING) || !rescueWriter.lock)
@@ -1756,28 +1757,31 @@ static void crashRescueCleanExit() {
 #ifdef MKXPZ_PROTO_LAUNCHER
     EventThread *ethread = shState->rtData().ethread;
     if (ethread && ethread->quickExitRequested()) {
-        FILE *json = fopen((path + ".json").c_str(), "rb");
-        bool kept = json != nullptr;
-        if (json)
-            fclose(json);
-        else {
-            /* Resumed and left before the next copy: write the one in memory. */
-            VALUE data = rb_gv_get("$hardrpg_rescue_data");
-            VALUE meta = rb_gv_get("$hardrpg_rescue_meta");
-            int state = 0;
-            VALUE text = Qnil;
-            if (RB_TYPE_P(data, RUBY_T_STRING) && RB_TYPE_P(meta, RUBY_T_STRING) &&
-                rb_const_defined(rb_cObject, rb_intern("HardRPGRescue")))
-                text = rb_protect(crashRescueQuickExit, Qnil, &state);
-            if (state)
-                rb_set_errinfo(Qnil);
-            kept = !state && RB_TYPE_P(text, RUBY_T_STRING) &&
-                   crashRescueFile(path + ".rescue", data) && crashRescueFile(path + ".meta", meta) &&
+        int state = 0;
+        VALUE text = Qnil;
+        if (rb_const_defined(rb_cObject, rb_intern("HardRPGRescue")))
+            text = rb_protect(crashRescueQuickExit, Qnil, &state);
+        if (state)
+            rb_set_errinfo(Qnil);
+        VALUE data = rb_gv_get("$hardrpg_rescue_data");
+        VALUE meta = rb_gv_get("$hardrpg_rescue_meta");
+        bool kept = false;
+        if (!state && RB_TYPE_P(text, RUBY_T_STRING) && RB_TYPE_P(data, RUBY_T_STRING) &&
+            RB_TYPE_P(meta, RUBY_T_STRING)) {
+            /* The launcher's file last: its presence means the set is whole. */
+            remove((path + ".json").c_str());
+            kept = crashRescueFile(path + ".rescue", data) && crashRescueFile(path + ".meta", meta) &&
                    crashRescueFile(path + ".json", text);
+        } else {
+            /* The script had nothing to give: keep a set the writer finished. */
+            FILE *json = fopen((path + ".json").c_str(), "rb");
+            kept = json != nullptr;
+            if (json)
+                fclose(json);
         }
         if (kept)
             vitaWriteFileReplacing((path + ".left").c_str(), "1", 1);
-        vitaDiagLog("RESCUE", "quick_exit kept=%d rewritten=%d", kept ? 1 : 0, json ? 0 : 1);
+        vitaDiagLog("RESCUE", "quick_exit kept=%d state=%d", kept ? 1 : 0, state);
         return;
     }
 #endif

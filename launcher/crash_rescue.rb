@@ -423,7 +423,9 @@ module HardRPGRescue
       log("drop failed (#{e.class}: #{e.message[0, 120]})")
     end
 
-    def take(reason, allowed = [], rewind = false)
+    # now: the quick exit's copy, made at once and written by the engine
+    # itself (the writer thread is not used while the game ends).
+    def take(reason, allowed = [], rewind = false, now = false)
       return unless ready? && !@busy
       unless enabled?
         drop('setting off') if @was_on
@@ -431,7 +433,7 @@ module HardRPGRescue
         return
       end
       @was_on = true
-      return unless due?
+      return unless now || due?
       if (why = unsafe(allowed + (rewind ? [301] : [])))
         STATS["skip #{reason} (#{why})"] += 1
         return
@@ -458,7 +460,7 @@ module HardRPGRescue
       @meta = meta
       @last_at = clock
       @last_cost = meta['total_ms']
-      HardRPGRescueNative.flush(data, $hardrpg_rescue_meta, $hardrpg_rescue_json) if native?
+      HardRPGRescueNative.flush(data, $hardrpg_rescue_meta, $hardrpg_rescue_json) if native? && !now
       STATS["took #{reason}"] += 1
       log("#{reason} map=#{meta['map_id']} bytes=#{raw.bytesize}->#{data.bytesize} dump=#{meta['dump_ms']}ms total=#{meta['total_ms']}ms refs=#{meta['refs']}#{rewind ? ' (battle rewound)' : ''}")
     rescue Exception => e
@@ -603,12 +605,24 @@ module HardRPGRescue
                                 "(#{meta['reason']}, #{place}) was kept. Start the game again from the launcher to resume there."
     end
 
-    # The engine calls this when the L+R+Select hold ends the game and the
-    # launcher's file is gone (a resume removed it): the copy kept in memory,
-    # described again for the launcher.
+    # The engine calls this when the L+R+Select hold ends the game. The game
+    # is copied where it is now when that is safe (on the map or in its menu),
+    # so the quick save is the moment the player left, even before the first
+    # transfer or right after the game saved. Otherwise (battle, title, a
+    # message waiting) the last copy is kept. The engine writes the files.
     def quick_exit
+      take('quick exit', [], false, true) if ready? && !@pending && quick_exit_scene?
       return nil unless @meta
       $hardrpg_rescue_json = json(@meta)
+    end
+
+    def quick_exit_scene?
+      return false unless $game_map && map_id > 0
+      scene = RGSS == 3 ? (SceneManager.scene rescue nil) : $scene
+      names = %w[Scene_Map Scene_Menu Scene_MenuBase Scene_Item Scene_Skill Scene_Equip Scene_Status]
+      scene.class.ancestors.any? { |k| names.include?(k.name.to_s) }
+    rescue StandardError
+      false
     end
 
     # --- resuming -----------------------------------------------------------
