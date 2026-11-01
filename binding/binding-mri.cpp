@@ -1360,7 +1360,9 @@ static void runCustomScript(const std::string &filename) {
  * crash, a closed app or a power loss leaves the latest copy on the card
  * without the game waiting for the card. When a Ruby error ends the game the
  * error is added to the launcher's file; when the game ends normally (it
- * quits, or Back to library) the files are removed. The setting crashRescue
+ * quits, or Back to library) the files are removed. Leaving with the L+R+Select
+ * hold keeps them and adds <name>.left, so the launcher offers the copy as a
+ * quick save rather than a crash. The setting crashRescue
  * (launcher, per game, in-game menu) is read by the script before each copy. */
 namespace {
 struct RescueWriter {
@@ -1374,7 +1376,7 @@ struct RescueWriter {
     std::string data, meta, json;
 };
 RescueWriter rescueWriter;
-const char *const rescueFiles[] = {".rescue", ".meta", ".json", ".shot"};
+const char *const rescueFiles[] = {".rescue", ".meta", ".json", ".shot", ".left"};
 
 void rescueRemoveFiles(const std::string &base) {
     /* The launcher looks for .json: it goes first. */
@@ -1398,8 +1400,10 @@ int rescueWriterMain(void *) {
         if (job == RescueWriter::Clear)
             rescueRemoveFiles(w.base);
         else {
-            /* The launcher's file last: its presence means the set is whole. */
+            /* The launcher's file last: its presence means the set is whole.
+             * A new copy is no longer the one a quick exit left. */
             remove((w.base + ".json").c_str());
+            remove((w.base + ".left").c_str());
             if (vitaWriteFileReplacing((w.base + ".rescue").c_str(), data.data(), data.size()) &&
                 vitaWriteFileReplacing((w.base + ".meta").c_str(), meta.data(), meta.size()))
                 vitaWriteFileReplacing((w.base + ".json").c_str(), json.data(), json.size());
@@ -1677,6 +1681,10 @@ static bool crashRescueFile(const std::string &path, VALUE text) {
     return RB_TYPE_P(text, RUBY_T_STRING) &&
            vitaWriteFileReplacing(path.c_str(), RSTRING_PTR(text), RSTRING_LEN(text));
 }
+static VALUE crashRescueQuickExit(VALUE) {
+    VALUE rescue = rb_const_get(rb_cObject, rb_intern("HardRPGRescue"));
+    return rb_funcall(rescue, rb_intern("quick_exit"), 0);
+}
 /* A Ruby error ended the game: write the last copy (the writer may still be
  * busy with it), the launcher's file last, now with the error. Nothing here
  * needs much memory, so it also runs after NoMemoryError. */
@@ -1698,6 +1706,7 @@ static void crashRescueWrite(VALUE exc) {
     }
     const std::string path(RSTRING_PTR(base), RSTRING_LEN(base));
     remove((path + ".json").c_str());
+    remove((path + ".left").c_str());
     const bool ok = crashRescueFile(path + ".rescue", data) && crashRescueFile(path + ".meta", meta) &&
                     crashRescueFile(path + ".json", rb_gv_get("$hardrpg_rescue_json"));
     VALUE summary = rb_gv_get("$hardrpg_rescue_summary");
@@ -1735,13 +1744,44 @@ static void reportMessageBoxExit(VALUE exc) {
 }
 #endif
 
-/* The game ended on its own or through Back to library: nothing to rescue. */
+/* The game ended on its own or through Back to library: nothing to rescue.
+ * The L+R+Select hold is a quick way out to come back to: the last copy (if
+ * the writer finished it) stays, marked so the launcher words it that way. */
 static void crashRescueCleanExit() {
     VALUE base = rb_gv_get("$hardrpg_rescue_base");
     if (!RB_TYPE_P(base, RUBY_T_STRING) || !rescueWriter.lock)
         return;
     rescueSettle(3000);
-    rescueRemoveFiles(std::string(RSTRING_PTR(base), RSTRING_LEN(base)));
+    const std::string path(RSTRING_PTR(base), RSTRING_LEN(base));
+#ifdef MKXPZ_PROTO_LAUNCHER
+    EventThread *ethread = shState->rtData().ethread;
+    if (ethread && ethread->quickExitRequested()) {
+        FILE *json = fopen((path + ".json").c_str(), "rb");
+        bool kept = json != nullptr;
+        if (json)
+            fclose(json);
+        else {
+            /* Resumed and left before the next copy: write the one in memory. */
+            VALUE data = rb_gv_get("$hardrpg_rescue_data");
+            VALUE meta = rb_gv_get("$hardrpg_rescue_meta");
+            int state = 0;
+            VALUE text = Qnil;
+            if (RB_TYPE_P(data, RUBY_T_STRING) && RB_TYPE_P(meta, RUBY_T_STRING) &&
+                rb_const_defined(rb_cObject, rb_intern("HardRPGRescue")))
+                text = rb_protect(crashRescueQuickExit, Qnil, &state);
+            if (state)
+                rb_set_errinfo(Qnil);
+            kept = !state && RB_TYPE_P(text, RUBY_T_STRING) &&
+                   crashRescueFile(path + ".rescue", data) && crashRescueFile(path + ".meta", meta) &&
+                   crashRescueFile(path + ".json", text);
+        }
+        if (kept)
+            vitaWriteFileReplacing((path + ".left").c_str(), "1", 1);
+        vitaDiagLog("RESCUE", "quick_exit kept=%d rewritten=%d", kept ? 1 : 0, json ? 0 : 1);
+        return;
+    }
+#endif
+    rescueRemoveFiles(path);
 }
 
 /* Tap-to-walk is a script that hooks the game's own player and map classes,

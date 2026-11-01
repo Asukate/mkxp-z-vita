@@ -214,6 +214,7 @@ void EventThread::process(RGSSThreadData &rtData)
     gameMenuRequest.clear();
     gameMenuOpen.clear();
     menuReturnRequest.clear();
+    quickExit.clear();
 #endif
     
 #ifdef MKXPZ_BUILD_XCODE
@@ -297,6 +298,7 @@ void EventThread::process(RGSSThreadData &rtData)
                     returnHeldAt = SDL_GetTicks();
                     returnHoldActive = true;
                 } else if (SDL_GetTicks() - returnHeldAt >= returnHoldMs) {
+                    quickExit.set();
                     returnToLauncher = true;
                     terminate = true;
                     break;
@@ -808,6 +810,11 @@ void EventThread::setGameMenuOpen(bool open)
 void EventThread::requestReturnToLauncher()
 {
     menuReturnRequest.set();
+}
+
+bool EventThread::quickExitRequested() const
+{
+    return quickExit;
 }
 #endif
 

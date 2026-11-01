@@ -188,6 +188,7 @@ public:
   // rescue/<settings key>.{rescue,meta,json}. The .json is written last.
   struct Rescue {
     bool present = false, saveDisabled = false;
+    bool left = false; // kept by leaving with L+R+Select, not a crash
     std::string reason, mapName, leader, error;
     int mapId = 0, level = 0;
     int64_t playtime = 0, age = 0, writtenAt = 0;

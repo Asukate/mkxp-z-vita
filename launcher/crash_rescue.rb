@@ -55,7 +55,7 @@ module HardRPGRescue
   REUSE_MAX = 6
   COMPRESS = 1 # zlib level for the copy; 0 keeps it as is
   STATS = Hash.new(0)
-  FILES = %w[.rescue .meta .json .shot].freeze
+  FILES = %w[.rescue .meta .json .shot .left].freeze
 
   # Marshal.dump writes to anything with #write.
   class Sink
@@ -570,7 +570,8 @@ module HardRPGRescue
         'last_index' => (RGSS == 3 ? DataManager.last_savefile_index : 0) || 0,
         'save_disabled' => ($game_system.save_disabled ? true : false),
         'bytes' => raw, 'kept_bytes' => kept, 'compressed' => level,
-        'session_s' => (clock - (@started || clock)).round(1)
+        'session_s' => (clock - (@started || clock)).round(1),
+        'written_at' => Time.now.to_i
       }
     end
 
@@ -600,6 +601,14 @@ module HardRPGRescue
       place = meta['map_name'].to_s.empty? ? "map #{meta['map_id']}" : "map #{meta['map_id']} (#{meta['map_name']})"
       $hardrpg_rescue_summary = "the game as it was #{meta['age_s'].round} s before the error " \
                                 "(#{meta['reason']}, #{place}) was kept. Start the game again from the launcher to resume there."
+    end
+
+    # The engine calls this when the L+R+Select hold ends the game and the
+    # launcher's file is gone (a resume removed it): the copy kept in memory,
+    # described again for the launcher.
+    def quick_exit
+      return nil unless @meta
+      $hardrpg_rescue_json = json(@meta)
     end
 
     # --- resuming -----------------------------------------------------------

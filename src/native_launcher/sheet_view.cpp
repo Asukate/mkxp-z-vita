@@ -355,9 +355,12 @@ void View::buildSheet(const UI &u) {
                            : r.reason == "menu"   ? "opening the menu"
                                                   : "returning to the map";
       const int64_t since = r.writtenAt > 0 ? int64_t(std::time(nullptr)) - r.writtenAt : -1;
-      section = tr("Resume from crash");
+      section = tr(r.left ? "Resume where you left" : "Resume from crash");
       title = u.gameEntry.name;
-      if (!r.error.empty())
+      if (r.left)
+        subtitle = since >= 0 ? trf("You left this game with L+R+Select. A quick save from {} ago is ready.", {span(since)})
+                              : tr("You left this game with L+R+Select. A quick save is ready.");
+      else if (!r.error.empty())
         subtitle = trf("An error ({}) stopped this game. A quick save from {} before it is ready.", {r.error, span(r.age)});
       else
         subtitle = since >= 0 ? trf("This game stopped without saving (closed, or the Vita lost power). A quick save from {} ago is ready.", {span(since)})

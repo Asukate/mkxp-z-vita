@@ -2340,6 +2340,7 @@ Model::Rescue Model::rescue(const Entry &e) const {
     r.writtenAt = number("written_at");
     auto disabled = o.find("save_disabled");
     r.saveDisabled = disabled != o.end() && disabled->second.is_boolean() && disabled->second.as_boolean();
+    r.left = r.error.empty() && regular(base + ".left");
     r.present = true;
   } catch (const std::exception &) {
   }
@@ -2356,7 +2357,7 @@ void Model::requestResume(const Entry &e, bool resume) const {
 void Model::discardRescue(const Entry &e) const {
   auto base = paths.at("rescue/" + key(e.node.identity(paths)));
   // The .json first: without it the rest is never offered.
-  for (auto ext : {".json", ".resume", ".rescue", ".meta", ".load", ".failed"})
+  for (auto ext : {".json", ".resume", ".rescue", ".meta", ".load", ".failed", ".left"})
     std::remove((base + ext).c_str());
 }
 } // namespace hardrpg

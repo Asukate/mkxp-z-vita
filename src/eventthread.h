@@ -98,6 +98,9 @@ public:
     bool takeGameMenuRequest();
     void setGameMenuOpen(bool open);
     void requestReturnToLauncher();
+    /* The game is leaving through the L+R+Select hold (not the menu's Back to
+     * library): crash rescue keeps its last copy for the next start. */
+    bool quickExitRequested() const;
 #endif
 
 	/* Called from RGSS thread */
@@ -141,7 +144,7 @@ private:
 	bool showCursor;
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
     bool returnToLauncher;
-    AtomicFlag gameMenuRequest, gameMenuOpen, menuReturnRequest;
+    AtomicFlag gameMenuRequest, gameMenuOpen, menuReturnRequest, quickExit;
 #endif
     
     SDL_GameController *ctrl;

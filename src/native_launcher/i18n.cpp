@@ -272,6 +272,13 @@ const Text table[] = {
     {"Remove from library", "Quitar de la biblioteca", "Remover da biblioteca"},
     // Crash rescue.
     {"Resume from crash", "Reanudar tras el error", "Retomar após o erro"},
+    {"Resume where you left", "Reanudar donde lo dejaste", "Retomar de onde parou"},
+    {"You left this game with L+R+Select. A quick save from {} ago is ready.",
+     "Saliste de este juego con L+R+Select. Hay un guardado rápido de hace {}.",
+     "Você saiu deste jogo com L+R+Select. Há um salvamento rápido de {} atrás."},
+    {"You left this game with L+R+Select. A quick save is ready.",
+     "Saliste de este juego con L+R+Select. Hay un guardado rápido.",
+     "Você saiu deste jogo com L+R+Select. Há um salvamento rápido."},
     {"An error ({}) stopped this game. A quick save from {} before it is ready.",
      "Un error ({}) detuvo este juego. Hay un guardado rápido de {} antes.",
      "Um erro ({}) parou este jogo. Há um salvamento rápido de {} antes."},
