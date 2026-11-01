@@ -25,7 +25,7 @@ problems later in those games are still possible.
 | Hello Charlotte EP1 (English v2.0) | VX Ace | ✅ Runs | Item popup TypeError fixed in 0.4.8. Played to the true ending on 0.4.8 (itch.io version, community report), 50–60 fps; bad ending untested. Some long dialogue lines are cut off by two or three letters at the right edge (known issue). |
 | Ao Oni | XP | ✅ Runs | Played from start to finish. |
 | The Witch's House | VX | ✅ Runs | |
-| To the Moon | XP | ✅ Runs | Slowdowns in some areas. |
+| To the Moon | XP | ✅ Runs | Slowdowns in some areas, shorter since 0.4.9. |
 | LISA: The Painful | VX Ace | ✅ Runs | Map W/A/S/D for combo attacks in Controls. |
 | FNaF b Final Mix | VX Ace | ✅ Runs | |
 | Red Hood's Woods | VX Ace | ✅ Runs | |
@@ -33,6 +33,7 @@ problems later in those games are still possible.
 | Mogeko Castle (English VX Ace edition) | VX Ace | ✅ Runs | |
 | The Endless Empty | VX Ace | ✅ Runs | |
 | VorlorN | XP | ✅ Runs | |
+| (Mario) The Music Box 1.3.1 (itch.io) | XP | 🟡 Partial | Starts since 0.4.9 (it stopped with "Unable to load scripts" before). Title and intro checked; later progression untested. |
 | N.P.C. Dreams | VX Ace | ✅ Runs | Frequent frame drops. |
 
 ## RPG Maker 2000 and 2003 (EasyRPG)

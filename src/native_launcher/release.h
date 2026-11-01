@@ -1,12 +1,20 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.4.8 Alpha"
-#define HARDRPG_VERSION_TAG "v0.4.8-alpha"
-#define HARDRPG_APP_VER "00.48"
-#define HARDRPG_RELEASE_UTC "2026-10-31"
+#define HARDRPG_VERSION "0.4.9 Alpha"
+#define HARDRPG_VERSION_TAG "v0.4.9-alpha"
+#define HARDRPG_APP_VER "00.49"
+#define HARDRPG_RELEASE_UTC "2026-11-01"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.4.8 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.4.9 Alpha - " HARDRPG_RELEASE_UTC,
+    "- Mario The Music Box starts and plays (#11)",
+    "- Fixed a random crash while a game starts",
+    "- Faster XP maps and scene changes",
+    "- Volume boost for quiet games, up to 400%",
+    "- L+R+Select keeps your place for Resume",
+    "- Narrower performance counter",
+    "",
+    "0.4.8 Alpha - 2026-10-31",
     "- Pocket Mirror: fixed startup crash after the team splash (#7)",
     "- Correct font sizing prevents oversized text allocations",
     "- Hello Charlotte EP1: fixed item popup crash (#9)",

@@ -165,7 +165,23 @@ terminal in that folder and run the lines for your engine:
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.4.8 Alpha** is the current release. New in 0.4.8:
+**0.4.9 Alpha** is the current release. New in 0.4.9:
+
+- **Mario The Music Box:** starts and plays. Its custom archive and video
+  files are now read on the Vita.
+- **Random start-up crash fixed:** about one launch in eight could crash
+  while the game's scripts loaded. This applied to every game.
+- **Faster XP games:** map changes, weather and image loading are quicker.
+  To the Moon's worst hitches are about half as long.
+- **Volume boost:** quiet games such as Hylics can play at up to 400%.
+- **L + R + Select keeps your place:** with crash rescue on, leaving this
+  way saves the game where it is, and **Resume where you left** opens it
+  again.
+- **Performance counter:** a narrow column in the screen border.
+
+Full list: [0.4.9 release notes](docs/RELEASE-NOTES-0.4.9.md).
+
+New in 0.4.8:
 
 - **Pocket Mirror (original VX Ace edition):** fixed the startup crash after
   the team splash.
@@ -246,7 +262,7 @@ Full list: [0.4.0 release notes](docs/RELEASE-NOTES-0.4.0.md).
 | --- | --- |
 | **L + R + Start** (hold) | In-game menu: controls, display, audio, speed, back to library |
 | **L + R** | Fast forward on and off |
-| **L + R + Select** (hold) | Back to the library (unsaved progress is lost) |
+| **L + R + Select** (hold) | Back to the library; with crash rescue on, **Resume where you left** returns to that moment |
 
 The in-game menu also opens from the small icon in the screen's empty border.
 It pauses the game, and changes apply at once. For RPG Maker 2000/2003
