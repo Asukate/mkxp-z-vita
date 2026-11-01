@@ -426,16 +426,21 @@ module HardRPGRescue
     # now: the quick exit's copy, made at once and written by the engine
     # itself (the writer thread is not used while the game ends).
     def take(reason, allowed = [], rewind = false, now = false)
-      return unless ready? && !@busy
+      @last_skip = nil
+      return (@last_skip = 'busy') unless ready? && !@busy
       unless enabled?
         drop('setting off') if @was_on
         @was_on = false
+        @last_skip = 'crash rescue is off'
         return
       end
       @was_on = true
       return unless now || due?
-      if (why = unsafe(allowed + (rewind ? [301] : [])))
+      # XP: a quick exit copies through a message too; dump_legacy sends the
+      # event back to it, so it shows again after the resume.
+      if !(now && RGSS == 1) && (why = unsafe(allowed + (rewind ? [301] : [])))
         STATS["skip #{reason} (#{why})"] += 1
+        @last_skip = why
         return
       end
       rewind = rewind && command_code(interpreter) == 301
@@ -443,7 +448,7 @@ module HardRPGRescue
       @copy_meta = {}
       @refs = 0
       t = clock
-      raw = with_reuse { RGSS == 3 ? dump_vxace(rewind) : dump_legacy(rewind) }
+      raw = with_reuse { RGSS == 3 ? dump_vxace(rewind) : dump_legacy(rewind, now) }
       raw.force_encoding(Encoding::ASCII_8BIT)
       dumped = clock
       data = COMPRESS > 0 && defined?(Zlib) ? Zlib::Deflate.deflate(raw, COMPRESS) : raw
@@ -466,6 +471,7 @@ module HardRPGRescue
     rescue Exception => e
       raise if e.is_a?(SystemExit) || (defined?(RGSSReset) && e.is_a?(RGSSReset))
       @failures += 1
+      @last_skip = "#{e.class}: #{e.message[0, 80]}"
       STATS["copy failed (#{e.class})"] += 1
       log("copy failed (#{e.class}: #{e.message[0, 160]})")
     ensure
@@ -523,13 +529,14 @@ module HardRPGRescue
     end
 
     # XP (Scene_Save) and VX (Scene_File) write_save_data, into memory.
-    def dump_legacy(rewind)
+    def dump_legacy(rewind, now = false)
       system = $game_system
       count = system.save_count
       events = interpreter
       index = events.instance_variable_get(:@index)
       # XP and VX advance past Battle Processing before the battle starts.
       events.instance_variable_set(:@index, index - 1) if rewind
+      waiting = now && RGSS == 1 ? message_rewind : []
       # XP plays the new map's music after the fade-in: the copy, made during
       # the transfer, records it as Game_Map#autoplay will.
       music = nil
@@ -551,6 +558,10 @@ module HardRPGRescue
       data
     ensure
       events.instance_variable_set(:@index, index) if rewind && events
+      waiting.each do |i, at, wait|
+        i.instance_variable_set(:@index, at)
+        i.instance_variable_set(:@message_waiting, wait)
+      end if waiting
       if music
         system.instance_variable_set(:@playing_bgm, music[0])
         system.instance_variable_set(:@playing_bgs, music[1])
@@ -606,23 +617,64 @@ module HardRPGRescue
     end
 
     # The engine calls this when the L+R+Select hold ends the game. The game
-    # is copied where it is now when that is safe (on the map or in its menu),
-    # so the quick save is the moment the player left, even before the first
-    # transfer or right after the game saved. Otherwise (battle, title, a
-    # message waiting) the last copy is kept. The engine writes the files.
+    # is copied where it is now, so the quick save is the moment the player
+    # left, even before the first transfer or right after the game saved. In
+    # a battle, at the title or on a load screen the last copy is kept (VX and
+    # VX Ace also keep it while a message waits). The engine writes the files;
+    # the launcher's file says which of the two it is.
     def quick_exit
-      take('quick exit', [], false, true) if ready? && !@pending && quick_exit_scene?
+      before = @meta
+      why = quick_exit_blocker
+      unless why
+        begin
+          take('quick exit', [], false, true)
+        rescue Exception => e # the game is ending: keep what there is
+          @last_skip = "#{e.class}: #{e.message[0, 80]}"
+        end
+        why = (@last_skip || 'no copy') if @meta.equal?(before)
+      end
       return nil unless @meta
-      $hardrpg_rescue_json = json(@meta)
+      note = why ? "kept the last copy (#{why})" : 'copied on leaving'
+      log("quick exit: #{note}")
+      $hardrpg_rescue_json = json(@meta.merge('quick' => note))
     end
 
-    def quick_exit_scene?
-      return false unless $game_map && map_id > 0
+    QUICK_EXIT_KEEP = /battle|title|gameover|load|splash|logo|intro|opening|language|warning/i
+
+    def quick_exit_blocker
+      return 'not ready' unless ready?
+      return 'resume pending' if @pending
+      return 'no map' unless $game_map && map_id > 0
       scene = RGSS == 3 ? (SceneManager.scene rescue nil) : $scene
-      names = %w[Scene_Map Scene_Menu Scene_MenuBase Scene_Item Scene_Skill Scene_Equip Scene_Status]
-      scene.class.ancestors.any? { |k| names.include?(k.name.to_s) }
-    rescue StandardError
-      false
+      name = scene.class.name.to_s
+      return "scene #{name}" if scene.nil? || name =~ QUICK_EXIT_KEEP
+      nil
+    rescue StandardError => e
+      "#{e.class}"
+    end
+
+    # XP: every event waiting on a message goes back to its Show Text (or Show
+    # Choices) for the copy, so the resumed game shows the message again; an
+    # event left waiting would wait forever. Returns what to put back.
+    def message_rewind
+      changed = []
+      Static.holders.each do |i|
+        next unless i.instance_variable_defined?(:@message_waiting) && i.instance_variable_get(:@message_waiting)
+        list = i.instance_variable_get(:@list)
+        at = i.instance_variable_get(:@index)
+        changed << [i, at, true]
+        i.instance_variable_set(:@message_waiting, false)
+        next unless list.is_a?(Array) && at.is_a?(Integer)
+        code = ->(n) { n >= 0 && list[n].respond_to?(:code) ? list[n].code : nil }
+        j = at - 1
+        j -= 1 if [102, 103].include?(code.(j)) && [101, 401].include?(code.(j - 1))
+        j -= 1 while code.(j) == 401
+        i.instance_variable_set(:@index, j) if [101, 102, 103].include?(code.(j))
+      end
+      changed
+    rescue StandardError => e
+      log("message rewind failed (#{e.class})")
+      changed || []
     end
 
     # --- resuming -----------------------------------------------------------

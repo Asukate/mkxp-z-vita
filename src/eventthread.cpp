@@ -270,7 +270,9 @@ void EventThread::process(RGSSThreadData &rtData)
 #endif
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
         if (playingGame && menuReturnRequest) {
-            /* The in-game menu's Back to library. */
+            /* The in-game menu's Back to library: like the L+R+Select hold,
+             * the game is copied for Resume where you left. */
+            quickExit.set();
             returnToLauncher = true;
             terminate = true;
             break;

@@ -109,8 +109,9 @@ made and again at resume. After an error, a closed app or a power loss,
 starting that game offers Resume, Start normally or Discard. Saving in the game
 drops the copy.
 
-Hold L+R+Select in a game to return to the launcher. Unsaved
-progress is lost. Handled script failures also return to the menu. The splash
+Hold L+R+Select in a game, or choose Back to library in the in-game menu, to
+return to the launcher. With crash rescue on, the game is copied where it is
+and the launcher offers Resume where you left. Handled script failures also return to the menu. The splash
 appears only on a fresh app launch. About includes dated release notes.
 
 ## Languages and the welcome guide

@@ -11,7 +11,7 @@ static const char *const releaseNotes[] = {
     "- Fixed a random crash while a game starts",
     "- Faster XP maps and scene changes",
     "- Volume boost for quiet games, up to 400%",
-    "- L+R+Select keeps your place for Resume",
+    "- Leaving a game keeps your place for Resume",
     "- Narrower performance counter",
     "",
     "0.4.8 Alpha - 2026-10-31",

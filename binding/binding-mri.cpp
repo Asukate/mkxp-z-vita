@@ -1359,9 +1359,9 @@ static void runCustomScript(const std::string &filename) {
  * Each copy is handed to a writer thread (HardRPGRescueNative.flush), so a
  * crash, a closed app or a power loss leaves the latest copy on the card
  * without the game waiting for the card. When a Ruby error ends the game the
- * error is added to the launcher's file; when the game ends normally (it
- * quits, or Back to library) the files are removed. Leaving with the L+R+Select
- * hold keeps them and adds <name>.left, so the launcher offers the copy as a
+ * error is added to the launcher's file; when the game quits on its own the
+ * files are removed. Leaving with the L+R+Select hold or Back to library
+ * keeps them and adds <name>.left, so the launcher offers the copy as a
  * quick save rather than a crash. The setting crashRescue
  * (launcher, per game, in-game menu) is read by the script before each copy. */
 namespace {
@@ -1511,10 +1511,24 @@ static uint64_t rescueFpClass(RescueFp *s, VALUE klass) {
     return s->class_hash[slot];
 }
 static void rescueFpWalk(VALUE v, RescueFp *s);
+/* Ruby 3.1 lists an object's instance variables in the order they were first
+ * set on any object of its class in this launch, so the same map can list
+ * them differently in the next launch (a game that builds an RPG::MoveRoute
+ * before loading maps). Each variable is hashed on its own and the results
+ * are added, so the order does not count. */
+struct RescueFpIvars {
+    RescueFp *s;
+    uint64_t sum;
+};
 static int rescueFpIvar(ID id, VALUE val, st_data_t arg) {
-    RescueFp *s = (RescueFp *)arg;
+    RescueFpIvars *ivars = (RescueFpIvars *)arg;
+    RescueFp *s = ivars->s;
+    const uint64_t outer = s->h;
+    s->h = 1469598103934665603ULL;
     rescueFpMix(s, rescueFpId(s, id));
     rescueFpWalk(val, s);
+    ivars->sum += s->h;
+    s->h = outer;
     return s->bad ? ST_STOP : ST_CONTINUE;
 }
 static int rescueFpPair(VALUE key, VALUE val, VALUE arg) {
@@ -1565,9 +1579,13 @@ static void rescueFpWalk(VALUE v, RescueFp *s) {
         rb_hash_foreach(v, rescueFpPair, (VALUE)s);
         break;
     case T_OBJECT:
+    {
         rescueFpMix(s, rescueFpClass(s, rb_obj_class(v)) ^ 19);
-        rb_ivar_foreach(v, rescueFpIvar, (st_data_t)s);
+        RescueFpIvars ivars = {s, 0};
+        rb_ivar_foreach(v, rescueFpIvar, (st_data_t)&ivars);
+        rescueFpMix(s, ivars.sum ^ 23);
         break;
+    }
     case T_FLOAT:
         rescueFpFloat(s, RFLOAT_VALUE(v));
         break;
@@ -1744,8 +1762,8 @@ static void reportMessageBoxExit(VALUE exc) {
 }
 #endif
 
-/* The game ended on its own or through Back to library: nothing to rescue.
- * The L+R+Select hold is a quick way out to come back to: the script copies
+/* The game ended on its own: nothing to rescue. The L+R+Select hold and
+ * Back to library are quick ways out to come back to: the script copies
  * the game where it is now (or keeps its last copy when that is not safe),
  * and the set is written here, marked so the launcher words it that way. */
 static void crashRescueCleanExit() {

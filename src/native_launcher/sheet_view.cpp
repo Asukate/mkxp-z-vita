@@ -358,8 +358,8 @@ void View::buildSheet(const UI &u) {
       section = tr(r.left ? "Resume where you left" : "Resume from crash");
       title = u.gameEntry.name;
       if (r.left)
-        subtitle = since >= 0 ? trf("You left this game with L+R+Select. A quick save from {} ago is ready.", {span(since)})
-                              : tr("You left this game with L+R+Select. A quick save is ready.");
+        subtitle = since >= 0 ? trf("You left this game. A quick save from {} ago is ready.", {span(since)})
+                              : tr("You left this game. A quick save is ready.");
       else if (!r.error.empty())
         subtitle = trf("An error ({}) stopped this game. A quick save from {} before it is ready.", {r.error, span(r.age)});
       else

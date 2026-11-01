@@ -40,11 +40,14 @@ and 0.33 s.
 
 ## Leaving with L + R + Select
 
-- With crash rescue on, holding **L + R + Select** now saves the game where it
-  is when it is on the map or in its menu. In a battle, at the title or while
-  a message waits, the last automatic copy is kept.
-- The library offers **Resume where you left** for that game. **Back to
-  library** in the in-game menu still leaves without keeping a copy.
+- With crash rescue on, holding **L + R + Select** or choosing **Back to
+  library** in the in-game menu now saves the game where it is. An XP game
+  waiting on a message shows that message again after the resume. In a
+  battle or at the title, and in VX and VX Ace games while a message waits,
+  the last automatic copy is kept.
+- The library offers **Resume where you left** for that game.
+- Quick saves made after a map change no longer fail to resume in some games,
+  such as Mario The Music Box.
 
 ## Game picture and performance counter
 

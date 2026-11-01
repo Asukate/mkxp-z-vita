@@ -174,9 +174,9 @@ terminal in that folder and run the lines for your engine:
 - **Faster XP games:** map changes, weather and image loading are quicker.
   To the Moon's worst hitches are about half as long.
 - **Volume boost:** quiet games such as Hylics can play at up to 400%.
-- **L + R + Select keeps your place:** with crash rescue on, leaving this
-  way saves the game where it is, and **Resume where you left** opens it
-  again.
+- **Leaving keeps your place:** with crash rescue on, leaving with
+  **L + R + Select** or **Back to library** saves the game where it is, and
+  **Resume where you left** opens it again.
 - **Performance counter:** a narrow column in the screen border.
 
 Full list: [0.4.9 release notes](docs/RELEASE-NOTES-0.4.9.md).
