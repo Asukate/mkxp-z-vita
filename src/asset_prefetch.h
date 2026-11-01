@@ -48,6 +48,17 @@ void noteSound(const std::string &name, double ms);
 // Memory is short: free everything prepared or kept (it can all be loaded
 // again) and prepare nothing more this session. Any thread.
 void releaseMemory();
+
+// Held by the game thread while it loads a file itself. The worker reads its
+// files in pieces and waits between them while one is held: the memory card
+// serves one read at a time, and a 27 KB fog waited 230 ms behind the
+// worker's reads of a large tileset.
+struct ForegroundLoad {
+  ForegroundLoad();
+  ~ForegroundLoad();
+  ForegroundLoad(const ForegroundLoad &) = delete;
+  ForegroundLoad &operator=(const ForegroundLoad &) = delete;
+};
 // Loads under this cost are not worth preparing.
 constexpr double worthMs = 15.0;
 } // namespace AssetPrefetch

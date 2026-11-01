@@ -25,6 +25,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 #ifdef __vita__
@@ -66,30 +68,92 @@ struct RGSS_entryData
 	uint32_t startMagic;
 };
 
+/* Open copies of the archive file, lent to entries while they are open.
+ * Every image or sound a game loads opens an entry, and a fresh copy opens
+ * the archive file again, which costs about 15 ms on the Vita's memory card
+ * whatever the entry's size. Every read seeks first, so a returned copy can
+ * serve any later entry. Shared with the entries, which may outlive the
+ * archive's index. */
+struct RGSS_ioPool
+{
+	PHYSFS_Io *archIo;
+	std::mutex lock;
+	std::vector<PHYSFS_Io*> idle;
+	static const size_t keep = 4;
+
+	explicit RGSS_ioPool(PHYSFS_Io *archIo) : archIo(archIo) {}
+
+	PHYSFS_Io *take()
+	{
+		{
+			std::lock_guard<std::mutex> hold(lock);
+			if (!idle.empty())
+			{
+				PHYSFS_Io *io = idle.back();
+				idle.pop_back();
+				return io;
+			}
+		}
+		return archIo->duplicate(archIo);
+	}
+
+	void give(PHYSFS_Io *io)
+	{
+		if (!io)
+			return;
+		{
+			std::lock_guard<std::mutex> hold(lock);
+			if (idle.size() < keep)
+			{
+				idle.push_back(io);
+				return;
+			}
+		}
+		io->destroy(io);
+	}
+
+	~RGSS_ioPool()
+	{
+		for (PHYSFS_Io *io : idle)
+			io->destroy(io);
+	}
+};
+
 struct RGSS_entryHandle
 {
 	const RGSS_entryData data;
 	uint32_t currentMagic;
 	uint64_t currentOffset;
+	std::shared_ptr<RGSS_ioPool> pool;
 	PHYSFS_Io *io;
 
-	RGSS_entryHandle(const RGSS_entryData &data, PHYSFS_Io *archIo)
+	RGSS_entryHandle(const RGSS_entryData &data, const std::shared_ptr<RGSS_ioPool> &pool)
 	    : data(data),
 	      currentMagic(data.startMagic),
-	      currentOffset(0)
-	{
-		io = archIo->duplicate(archIo);
-	}
+	      currentOffset(0),
+	      pool(pool),
+	      io(pool->take())
+	{}
+
+	/* A duplicate reads through its own copy of the archive file. */
+	RGSS_entryHandle(const RGSS_entryHandle &other)
+	    : data(other.data),
+	      currentMagic(other.currentMagic),
+	      currentOffset(other.currentOffset),
+	      pool(other.pool),
+	      io(other.pool->take())
+	{}
 
 	~RGSS_entryHandle()
 	{
-		io->destroy(io);
+		pool->give(io);
 	}
 };
 
 struct RGSS_archiveData
 {
 	PHYSFS_Io *archiveIo;
+	std::shared_ptr<RGSS_ioPool> ioPool;
 
 	/* Maps: file path
 	 * to:   entry data */
@@ -458,21 +522,44 @@ processDirectories(RGSS_archiveData *data, BoostSet<std::string> &topLevel,
 		}
 }
 
+/* Some XP games ship a custom Game.exe that patches the RGSS DLL to use its
+ * own archive header and start key; the format is otherwise RGSSAD v1.
+ * Game.ini names such an archive in [Container] RGSSAD=. */
+struct RGSS1_Variant
+{
+	unsigned char header[8];
+	uint32_t key;
+};
+
+static const RGSS1_Variant RGSS1_VARIANTS[] =
+{
+	/* "RPGMakerXpCustomContainer" launcher: (Mario) The Music Box. */
+	{ {0x9e, 0x83, 0x42, 0x0e, 0x4e, 0xbd, 0xdc, 0x6d}, 0x2b804be2 },
+};
+
 static bool
-verifyHeader(PHYSFS_Io *io, char version)
+verifyHeader(PHYSFS_Io *io, char version, uint32_t *startKey = 0)
 {
 	char header[8];
 
 	if (!IO_READ(io, header, sizeof(header)))
 		return false;
 
-	if (strcmp(header, RGSS_HEADER))
-		return false;
+	if (startKey)
+		*startKey = RGSS_MAGIC;
 
-	if (header[7] != version)
-		return false;
+	if (!strcmp(header, RGSS_HEADER) && header[7] == version)
+		return true;
 
-	return true;
+	if (version == 1 && startKey)
+		for (const RGSS1_Variant &v : RGSS1_VARIANTS)
+			if (!memcmp(header, v.header, sizeof(header)))
+			{
+				*startKey = v.key;
+				return true;
+			}
+
+	return false;
 }
 
 #ifdef __vita__
@@ -509,7 +596,8 @@ static bool rgss1IndexIdentity(const char *archive, std::string &identity)
 	return true;
 }
 
-static bool rgss1LoadIndex(PHYSFS_Io *io, const char *archive, std::vector<RGSS1_IndexEntry> &entries)
+static bool rgss1LoadIndex(PHYSFS_Io *io, const char *archive, uint32_t startKey,
+                           std::vector<RGSS1_IndexEntry> &entries)
 {
 	std::string identity;
 	if (!rgss1IndexIdentity(archive, identity))
@@ -574,7 +662,7 @@ static bool rgss1LoadIndex(PHYSFS_Io *io, const char *archive, std::vector<RGSS1
 	const uint32_t headerSize = 4 + first.size() + 4;
 	if (!io->seek(io, 8) || io->read(io, header, headerSize) != headerSize)
 		return false;
-	uint32_t magic = RGSS_MAGIC, nameLen;
+	uint32_t magic = startKey, nameLen;
 	memcpy(&nameLen, header, 4);
 	if ((nameLen ^ advanceMagic(magic)) != first.size())
 		return false;
@@ -639,7 +727,8 @@ RGSS_openArchive(PHYSFS_Io *io, const char *archiveName, int forWrite, int *clai
 		return NULL;
 
 	/* Version 1 */
-	if (!verifyHeader(io, 1))
+	uint32_t startKey;
+	if (!verifyHeader(io, 1, &startKey))
 		return NULL;
 	else
 		*claimed = 1;
@@ -647,14 +736,14 @@ RGSS_openArchive(PHYSFS_Io *io, const char *archiveName, int forWrite, int *clai
 	RGSS_archiveData *data = new RGSS_archiveData;
 	data->archiveIo = io;
 
-	uint32_t magic = RGSS_MAGIC;
+	uint32_t magic = startKey;
 
 	/* Top level entry list */
 	BoostSet<std::string> &topLevel = data->dirHash[""];
 
 #ifdef __vita__
 	std::vector<RGSS1_IndexEntry> cached;
-	if (rgss1LoadIndex(io, archiveName, cached))
+	if (rgss1LoadIndex(io, archiveName, startKey, cached))
 	{
 		static char nameBuf[512];
 		for (const RGSS1_IndexEntry &e : cached)
@@ -772,8 +861,15 @@ RGSS_openRead(void *opaque, const char *filename)
 		target = *match;
 	}
 
+	if (!data->ioPool)
+		data->ioPool = std::make_shared<RGSS_ioPool>(data->archiveIo);
 	RGSS_entryHandle *entry =
-	        new RGSS_entryHandle(data->entryHash[target], data->archiveIo);
+	        new RGSS_entryHandle(data->entryHash[target], data->ioPool);
+	if (!entry->io)
+	{
+		delete entry;
+		return 0;
+	}
 
 	PHYSFS_Io *io = PHYSFS_ALLOC(PHYSFS_Io);
 

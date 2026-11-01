@@ -12,6 +12,24 @@ index 67b3a23..7360536 100644
          [arm*-linux*], [
              coroutine_type=arm32
          ],
+diff --git a/compile.c b/compile.c
+--- a/compile.c
++++ b/compile.c
+@@ -347,7 +347,13 @@
+ #define IS_LABEL(link) ((link)->type == ISEQ_ELEMENT_LABEL)
+ #define IS_ADJUST(link) ((link)->type == ISEQ_ELEMENT_ADJUST)
+ #define IS_TRACE(link) ((link)->type == ISEQ_ELEMENT_TRACE)
+-#define IS_INSN_ID(iobj, insn) (INSN_OF(iobj) == BIN(insn))
++/* Vita: check the element type first. get_next_insn() and
++ * get_destination_insn() can return an ADJUST element; with short enums
++ * INSN_OF() then reads the low byte of its label pointer, which matches
++ * `jump` for some heap addresses and sent optimize_checktype() through a
++ * bogus operand (random crash while compiling large scripts). */
++#define IS_INSN_ID(iobj, insn) \
++    (IS_INSN((LINK_ELEMENT *)(iobj)) && INSN_OF(iobj) == BIN(insn))
+ #define IS_NEXT_INSN_ID(link, insn) \
+     ((link)->next && IS_INSN((link)->next) && IS_INSN_ID((link)->next, insn))
+ 
 diff --git a/cont.c b/cont.c
 index 4b18ddd..5d27bce 100644
 --- a/cont.c

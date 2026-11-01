@@ -294,6 +294,7 @@ struct WindowPrivate
 	void windowskinDisposal()
 	{
 		windowskin = 0;
+		baseTexDirty = true;
 		windowskinDispCon.disconnect();
 	}
 
@@ -552,8 +553,11 @@ struct WindowPrivate
 			baseQuadArray.commit();
 
 		/* If opacity has effect, we must prerender to a texture
-		 * and then draw this texture instead of the quad array */
-		useBaseTex = opacity < 255;
+		 * and then draw this texture instead of the quad array.
+		 * Without a windowskin there is no frame to prerender (and
+		 * drawBase draws nothing): games set windowskin = nil on
+		 * transparent full-screen windows. */
+		useBaseTex = opacity < 255 && !nullOrDisposed(windowskin);
 
 		if (useBaseTex)
 		{
@@ -741,6 +745,8 @@ void Window::setWindowskin(Bitmap *value)
 	guardDisposed();
 
 	p->windowskin = value;
+	/* The prerendered frame (opacity < 255) shows the old skin. */
+	p->baseTexDirty = true;
 
 	p->windowskinDispCon.disconnect();
 

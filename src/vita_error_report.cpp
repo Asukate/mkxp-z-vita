@@ -73,6 +73,27 @@ extern "C" void vitaTexPoolFigures(size_t figures[3], char *top, size_t capacity
 #endif
 // Called only by vitaGL's exceptional allocation recovery path.
 extern "C" void mkxp_gpu_allocation_recovery(void) { ++graphicsRecoveryCount; }
+size_t vitaGraphicsFreeBytes() {
+    return vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
+}
+
+size_t vitaVglFreeCheck(char *destination, size_t capacity) {
+    if (!capacity) return 0;
+#ifdef __vita__
+    const unsigned long long t0 = now();
+    const size_t vram = vglMemFree(VGL_MEM_VRAM), ram = vglMemFree(VGL_MEM_RAM);
+    const unsigned long long t1 = now();
+    const size_t vramExact = vglMemFreeExact(VGL_MEM_VRAM), ramExact = vglMemFreeExact(VGL_MEM_RAM);
+    const unsigned long long t2 = now();
+    int n = snprintf(destination, capacity, "vram=%lu/%lu ram=%lu/%lu diff=%ld/%ld fast_us=%llu walk_us=%llu",
+                     (unsigned long)vram, (unsigned long)vramExact, (unsigned long)ram, (unsigned long)ramExact,
+                     (long)vram - (long)vramExact, (long)ram - (long)ramExact, t1 - t0, t2 - t1);
+#else
+    int n = snprintf(destination, capacity, "unavailable");
+#endif
+    return n < 0 ? 0 : std::min((size_t)n, capacity - 1);
+}
+
 size_t vitaMemorySnapshot(char *destination, size_t capacity) {
     if (!capacity) return 0;
     Event e = {};

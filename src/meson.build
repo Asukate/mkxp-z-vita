@@ -75,6 +75,10 @@ if host_system == 'vita'
     vita_threadmgr = compilers['cpp'].find_library('SceKernelThreadMgr_stub', dirs: vita_libdir, static: true, required: true)
     global_dependencies += [vita_gl, vita_mathneon, vita_appmgr, vita_apputil, vita_ctrl, vita_common_dialog, vita_dmac, vita_modulemgr, vita_shacc, vita_shark, vita_threadmgr]
     global_dependencies += compilers['cpp'].find_library('SceTouch_stub', dirs: vita_libdir, static: true, required: true)
+    # sceAvPlayer: hardware MP4 playback for RPGXPVideoDecoder.dll games.
+    foreach lib : ['SceAvPlayer_stub', 'SceSysmodule_stub']
+        global_dependencies += compilers['cpp'].find_library(lib, dirs: vita_libdir, static: true, required: true)
+    endforeach
     if get_option('proto_launcher')
         global_dependencies += compilers['cpp'].find_library('curl', dirs: get_option('vita_network_libdir'), static: true, required: true)
         foreach lib : ['turbojpeg', 'webp', 'sharpyuv', 'mbedtls', 'mbedx509', 'mbedcrypto', 'SceNet_stub', 'SceNetCtl_stub', 'SceRtc_stub', 'ScePower_stub']
@@ -170,6 +174,7 @@ main_source = files(
 )
 
 if host_system == 'vita'
+    main_source += files('vita_video_decoder.cpp')
     main_source += files('vita_stubs.cpp', 'vita_posix_compat.c', 'vita_pthread_once.c', 'vita_livearea.cpp', 'input/vita_input.cpp', 'vita_error_report.cpp', 'vita_resume.cpp', 'vita_runtime_log.c', 'vita_file_writes.c', 'asset_prefetch.cpp')
     global_link_args += '-Wl,--wrap=_write_r'
     global_link_args += '-Wl,--wrap=select'

@@ -202,6 +202,13 @@ TEXFBO TexPool::request(int width, int height)
 	return cnode.obj;
 }
 
+void TexPool::releaseUncached(TEXFBO &obj)
+{
+	if (obj.tex != TEX::ID(0) && obj.fbo != FBO::ID(0))
+		countTarget(obj.width, obj.height, -1);
+	TEXFBO::fini(obj);
+}
+
 void TexPool::release(TEXFBO &obj)
 {
 	if (obj.tex == TEX::ID(0) || obj.fbo == FBO::ID(0))

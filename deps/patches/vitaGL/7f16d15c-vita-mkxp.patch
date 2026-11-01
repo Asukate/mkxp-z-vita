@@ -1,6 +1,6 @@
 diff -ruN --no-dereference a/Makefile b/Makefile
 --- a/Makefile	2026-05-12 21:04:08.000000000 -0300
-+++ b/Makefile	2026-10-20 14:24:59.156591217 -0300
++++ b/Makefile	2026-11-01 04:22:52.160902479 -0300
 @@ -152,7 +152,7 @@
  endif
  
@@ -12,7 +12,7 @@ diff -ruN --no-dereference a/Makefile b/Makefile
  ifeq ($(HAVE_WRAPPED_ALLOCATORS),1)
 diff -ruN --no-dereference a/source/buffers.c b/source/buffers.c
 --- a/source/buffers.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/buffers.c	2026-10-20 14:24:59.156666728 -0300
++++ b/source/buffers.c	2026-11-01 04:22:52.160979523 -0300
 @@ -229,6 +229,59 @@
  	}
  }
@@ -75,7 +75,7 @@ diff -ruN --no-dereference a/source/buffers.c b/source/buffers.c
  	if (n < 0) {
 diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
 --- a/source/custom_shaders.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/custom_shaders.c	2026-10-20 17:25:37.986723079 -0300
++++ b/source/custom_shaders.c	2026-11-01 04:22:52.161127880 -0300
 @@ -616,7 +616,11 @@
  #define vgl_compile_shader(shd, sv) compile_shader(shd, sv)
  static inline __attribute__((always_inline)) void compile_shader(shader *s, GLboolean save_bindings) {
@@ -166,7 +166,7 @@ diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
  	
 diff -ruN --no-dereference a/source/draw.c b/source/draw.c
 --- a/source/draw.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/draw.c	2026-10-20 14:24:59.156975014 -0300
++++ b/source/draw.c	2026-11-01 04:22:52.161296635 -0300
 @@ -642,7 +642,7 @@
  			if (texture_slots[tex_unit->tex_id[0]].status != TEX_VALID)
  				return;
@@ -178,7 +178,7 @@ diff -ruN --no-dereference a/source/draw.c b/source/draw.c
  			sceGxmSetVertexStream(gxm_context, 1, texture_object);
 diff -ruN --no-dereference a/source/ffp.c b/source/ffp.c
 --- a/source/ffp.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/ffp.c	2026-10-20 14:24:59.157089748 -0300
++++ b/source/ffp.c	2026-11-01 04:22:52.161413664 -0300
 @@ -1184,7 +1184,7 @@
  		restore_tex_cache(tex);
  #endif
@@ -226,7 +226,7 @@ diff -ruN --no-dereference a/source/ffp.c b/source/ffp.c
  		if (smp) {
 diff -ruN --no-dereference a/source/framebuffers.c b/source/framebuffers.c
 --- a/source/framebuffers.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/framebuffers.c	2026-10-20 14:24:59.157253283 -0300
++++ b/source/framebuffers.c	2026-11-01 04:22:52.161573452 -0300
 @@ -31,6 +31,18 @@
  framebuffer *active_write_fb = NULL; // Current write framebuffer in use
  renderbuffer *active_rb = NULL; // Current renderbuffer in use
@@ -333,7 +333,7 @@ diff -ruN --no-dereference a/source/framebuffers.c b/source/framebuffers.c
  			fb->is_depth_hidden = GL_FALSE;
 diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
 --- a/source/gxm.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/gxm.c	2026-10-20 17:25:37.971948561 -0300
++++ b/source/gxm.c	2026-11-01 04:22:52.161675312 -0300
 @@ -23,6 +23,20 @@
  
  #include "shared.h"
@@ -774,7 +774,7 @@ diff -ruN --no-dereference a/source/gxm.c b/source/gxm.c
 +}
 diff -ruN --no-dereference a/source/misc.c b/source/misc.c
 --- a/source/misc.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/misc.c	2026-10-20 14:24:59.157502819 -0300
++++ b/source/misc.c	2026-11-01 04:22:52.161834660 -0300
 @@ -23,6 +23,19 @@
  
  #include "shared.h"
@@ -847,7 +847,7 @@ diff -ruN --no-dereference a/source/misc.c b/source/misc.c
  void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
 diff -ruN --no-dereference a/source/shared.h b/source/shared.h
 --- a/source/shared.h	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/shared.h	2026-10-20 14:24:59.157585844 -0300
++++ b/source/shared.h	2026-11-01 04:22:52.161919057 -0300
 @@ -47,7 +47,9 @@
  #define FRAME_PURGE_LIST_SIZE 16384 // Number of elements a single frame can hold
  #define FRAME_PURGE_RENDERTARGETS_LIST_SIZE 128 // Number of rendertargets a single frame can hold
@@ -924,7 +924,7 @@ diff -ruN --no-dereference a/source/shared.h b/source/shared.h
  	GLenum mode;
 diff -ruN --no-dereference a/source/textures.c b/source/textures.c
 --- a/source/textures.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/textures.c	2026-10-20 14:24:59.157703383 -0300
++++ b/source/textures.c	2026-11-01 04:22:52.162035655 -0300
 @@ -23,6 +23,18 @@
  
  #include "shared.h"
@@ -1096,7 +1096,7 @@ diff -ruN --no-dereference a/source/textures.c b/source/textures.c
 +}
 diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
 --- a/source/utils/gpu_utils.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/utils/gpu_utils.c	2026-10-20 14:24:59.157841341 -0300
++++ b/source/utils/gpu_utils.c	2026-11-01 04:22:52.162177319 -0300
 @@ -85,16 +85,50 @@
  }
  
@@ -1169,7 +1169,7 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
  
 diff -ruN --no-dereference a/source/utils/gpu_utils.h b/source/utils/gpu_utils.h
 --- a/source/utils/gpu_utils.h	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/utils/gpu_utils.h	2026-10-20 14:24:59.157901804 -0300
++++ b/source/utils/gpu_utils.h	2026-11-01 04:22:52.162240818 -0300
 @@ -37,6 +37,13 @@
  // Alloc a generic memblock into sceGxm mapped memory with alignment
  void *gpu_alloc_mapped_aligned(size_t alignment, size_t size, vglMemType type);
@@ -1186,7 +1186,7 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.h b/source/utils/gpu_utils.h
  	return gpu_alloc_mapped_aligned(MEM_ALIGNMENT, size, type);
 diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
 --- a/source/utils/mem_utils.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/utils/mem_utils.c	2026-10-20 17:25:38.015347860 -0300
++++ b/source/utils/mem_utils.c	2026-11-01 04:22:52.163419769 -0300
 @@ -24,7 +24,6 @@
  #include "../shared.h"
  
@@ -1195,7 +1195,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  GLboolean has_cached_mem = GL_FALSE; // Flag for whether to use cached memory for mempools or not
  
  #ifndef HAVE_CUSTOM_HEAP
-@@ -36,6 +35,82 @@
+@@ -36,6 +35,109 @@
  
  static int mempool_initialized = GL_FALSE;
  
@@ -1224,6 +1224,32 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
 +	return sceKernelExitThread(0);
 +}
 +
++/* Bytes in use per mspace, updated on every allocation and free. vglMemFree reads these:
++ * sceClibMspaceMallocStats walks every chunk of the heap (3-50 ms on a busy heap) and the
++ * engine asks for the free space every few frames and bitmap creations. */
++#define MSPACE_CHUNK_OVERHEAD 8
++static int32_t mspace_used[VGL_MEM_ALL];
++static size_t mspace_capacity[VGL_MEM_ALL];
++static int32_t ram_ext_used;
++static size_t ram_ext_capacity;
++
++static void mspace_baseline(void *ms, size_t *capacity, int32_t *used) {
++	SceClibMspaceStats stats;
++	sceClibMspaceMallocStats(ms, &stats);
++	*capacity = stats.capacity;
++	__atomic_store_n(used, (int32_t)stats.current_in_use, __ATOMIC_RELAXED);
++}
++
++static inline __attribute__((always_inline)) void *mspace_track(int32_t *used, void *ptr) {
++	if (ptr)
++		__atomic_add_fetch(used, (int32_t)(sceClibMspaceMallocUsableSize(ptr) + MSPACE_CHUNK_OVERHEAD), __ATOMIC_RELAXED);
++	return ptr;
++}
++
++static inline __attribute__((always_inline)) void mspace_untrack(int32_t *used, void *ptr) {
++	__atomic_sub_fetch(used, (int32_t)(sceClibMspaceMallocUsableSize(ptr) + MSPACE_CHUNK_OVERHEAD), __ATOMIC_RELAXED);
++}
++
 +// GL thread only. With wait, blocks until the background allocation is done.
 +static GLboolean ram_ext_adopt(GLboolean wait) {
 +	int state = ram_ext_state;
@@ -1244,6 +1270,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
 +	sceKernelGetMemBlockBase(ram_ext_block, &addr);
 +	sceGxmMapMemory(addr, ram_ext_size, SCE_GXM_MEMORY_ATTRIB_RW);
 +	ram_ext_mspace = sceClibMspaceCreate(addr, ram_ext_size);
++	mspace_baseline(ram_ext_mspace, &ram_ext_capacity, &ram_ext_used);
 +	ram_ext_addr = addr;
 +	__sync_synchronize();
 +	ram_ext_state = RAM_EXT_ADOPTED;
@@ -1260,11 +1287,11 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
 +		ram_ext_adopt(GL_FALSE);
 +	void *res = NULL;
 +	if (mempool_mspace[VGL_MEM_RAM])
-+		res = alignment ? sceClibMspaceMemalign(mempool_mspace[VGL_MEM_RAM], alignment, size) :
-+			zero ? sceClibMspaceCalloc(mempool_mspace[VGL_MEM_RAM], 1, size) : sceClibMspaceMalloc(mempool_mspace[VGL_MEM_RAM], size);
++		res = mspace_track(&mspace_used[VGL_MEM_RAM], alignment ? sceClibMspaceMemalign(mempool_mspace[VGL_MEM_RAM], alignment, size) :
++			zero ? sceClibMspaceCalloc(mempool_mspace[VGL_MEM_RAM], 1, size) : sceClibMspaceMalloc(mempool_mspace[VGL_MEM_RAM], size));
 +	if (!res && ram_ext_state != RAM_EXT_NONE && ram_ext_adopt(GL_TRUE))
-+		res = alignment ? sceClibMspaceMemalign(ram_ext_mspace, alignment, size) :
-+			zero ? sceClibMspaceCalloc(ram_ext_mspace, 1, size) : sceClibMspaceMalloc(ram_ext_mspace, size);
++		res = mspace_track(&ram_ext_used, alignment ? sceClibMspaceMemalign(ram_ext_mspace, alignment, size) :
++			zero ? sceClibMspaceCalloc(ram_ext_mspace, 1, size) : sceClibMspaceMalloc(ram_ext_mspace, size));
 +	return res;
 +}
 +#endif
@@ -1278,7 +1305,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  #ifdef HAVE_WRAPPED_ALLOCATORS
  void *__real_calloc(uint32_t nmember, uint32_t size);
  void __real_free(void *addr);
-@@ -304,6 +379,20 @@
+@@ -304,6 +406,20 @@
  	heap_destroy();
  #endif
  
@@ -1299,7 +1326,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  	for (int i = 0; i < VGL_MEM_EXTERNAL; i++) {
  #ifndef HAVE_CUSTOM_HEAP
  		sceClibMspaceDestroy(mempool_mspace[i]);
-@@ -333,6 +422,14 @@
+@@ -333,6 +449,14 @@
  	mempool_size[VGL_MEM_SLOW] = VGL_ALIGN(size_phycont, 1024 * 1024);
  #endif
  	mempool_size[VGL_MEM_BUDGET] = VGL_ALIGN(size_cdlg, 4 * 1024);
@@ -1314,7 +1341,15 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  
  #ifdef HAVE_CUSTOM_HEAP
  	// Initialize heap
-@@ -401,6 +498,22 @@
+@@ -365,6 +489,7 @@
+ 				sceGxmMapMemory(mempool_addr[i], mempool_size[i], SCE_GXM_MEMORY_ATTRIB_RW);
+ #ifndef HAVE_CUSTOM_HEAP
+ 				mempool_mspace[i] = sceClibMspaceCreate(mempool_addr[i], mempool_size[i]);
++				mspace_baseline(mempool_mspace[i], &mspace_capacity[i], &mspace_used[i]);
+ #else
+ 				heap_extend(i, mempool_addr[i], mempool_size[i]);
+ #endif
+@@ -401,6 +526,22 @@
  	mempool_size[VGL_MEM_EXTERNAL] = info.mappedSize;
  	mempool_addr[VGL_MEM_EXTERNAL] = info.mappedBase;
  
@@ -1337,7 +1372,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  	mempool_initialized = 1;
  }
  
-@@ -414,6 +527,10 @@
+@@ -414,6 +555,10 @@
  		return VGL_MEM_VRAM;
  	else if (addr >= mempool_addr[VGL_MEM_RAM] && (addr < (void *)((uint8_t *)mempool_addr[VGL_MEM_RAM] + mempool_size[VGL_MEM_RAM])))
  		return VGL_MEM_RAM;
@@ -1348,18 +1383,23 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  #ifndef PHYCONT_ON_DEMAND
  	else if (addr >= mempool_addr[VGL_MEM_SLOW] && (addr < (void *)((uint8_t *)mempool_addr[VGL_MEM_SLOW] + mempool_size[VGL_MEM_SLOW])))
  		return VGL_MEM_SLOW;
-@@ -461,7 +578,17 @@
- 	} else if (mempool_size[type]) {
- 		SceClibMspaceStats stats;
- 		sceClibMspaceMallocStats(mempool_mspace[type], &stats);
+@@ -458,15 +603,42 @@
+ 		return tm_free[type];
+ 	}
+ #else
+-	} else if (mempool_size[type]) {
+-		SceClibMspaceStats stats;
+-		sceClibMspaceMallocStats(mempool_mspace[type], &stats);
 -		return stats.capacity - stats.current_in_use;
-+		size_t res = stats.capacity - stats.current_in_use;
++	} else if (mempool_size[type] && mempool_mspace[type]) {
++		int32_t used = __atomic_load_n(&mspace_used[type], __ATOMIC_RELAXED);
++		size_t res = (size_t)used < mspace_capacity[type] ? mspace_capacity[type] - (size_t)used : 0;
 +		if (type == VGL_MEM_RAM) {
 +			// A pending deferred tail counts as free: allocations wait for it.
 +			int state = ram_ext_state;
 +			if (state == RAM_EXT_ADOPTED) {
-+				sceClibMspaceMallocStats(ram_ext_mspace, &stats);
-+				res += stats.capacity - stats.current_in_use;
++				int32_t ext = __atomic_load_n(&ram_ext_used, __ATOMIC_RELAXED);
++				res += (size_t)ext < ram_ext_capacity ? ram_ext_capacity - (size_t)ext : 0;
 +			} else if (state == RAM_EXT_PENDING || state == RAM_EXT_READY)
 +				res += ram_ext_size;
 +		}
@@ -1367,7 +1407,30 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  	} else
  		return 0;
  #endif
-@@ -474,9 +601,12 @@
+ }
+ 
++/* The same figure from a full walk of the heap (slow): for checking the counters only. */
++size_t vgl_mem_get_free_space_walk(vglMemType type) {
++#ifndef HAVE_CUSTOM_HEAP
++	if (type < VGL_MEM_EXTERNAL && type != VGL_MEM_SLOW && mempool_size[type] && mempool_mspace[type]) {
++		SceClibMspaceStats stats;
++		sceClibMspaceMallocStats(mempool_mspace[type], &stats);
++		size_t res = stats.capacity - stats.current_in_use;
++		if (type == VGL_MEM_RAM && ram_ext_state == RAM_EXT_ADOPTED) {
++			sceClibMspaceMallocStats(ram_ext_mspace, &stats);
++			res += stats.capacity - stats.current_in_use;
++		} else if (type == VGL_MEM_RAM && (ram_ext_state == RAM_EXT_PENDING || ram_ext_state == RAM_EXT_READY))
++			res += ram_ext_size;
++		return res;
++	}
++#endif
++	return vgl_mem_get_free_space(type);
++}
++
+ size_t vgl_mem_get_total_space(vglMemType type) {
+ 	if (type == VGL_MEM_ALL) {
+ 		size_t size = 0;
+@@ -474,9 +646,12 @@
  			size += vgl_mem_get_total_space(i);
  		}
  		return size;
@@ -1382,7 +1445,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  }
  
  size_t vgl_malloc_usable_size(void *ptr) {
-@@ -496,6 +626,8 @@
+@@ -496,6 +671,8 @@
  }
  
  void vgl_free(void *ptr) {
@@ -1391,34 +1454,46 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  	vglMemType type = vgl_mem_get_type_by_addr(ptr);
  	if (type == VGL_MEM_EXTERNAL)
  #ifdef HAVE_WRAPPED_ALLOCATORS
-@@ -513,6 +645,8 @@
+@@ -513,8 +690,13 @@
  	else
  		heap_blk_free(ptr);
  #else
-+	else if (type == VGL_MEM_RAM && ram_ext_contains(ptr))
+-	else if (mempool_mspace[type])
++	else if (type == VGL_MEM_RAM && ram_ext_contains(ptr)) {
++		mspace_untrack(&ram_ext_used, ptr);
 +		sceClibMspaceFree(ram_ext_mspace, ptr);
- 	else if (mempool_mspace[type])
++	} else if (mempool_mspace[type]) {
++		mspace_untrack(&mspace_used[type], ptr);
  		sceClibMspaceFree(mempool_mspace[type], ptr);
++	}
  #endif
-@@ -533,6 +667,8 @@
+ }
+ 
+@@ -533,8 +715,10 @@
  	else if (size <= tm_free[type])
  		return heap_alloc(type, size, MEM_ALIGNMENT);
  #else
 +	else if (type == VGL_MEM_RAM)
 +		return ram_alloc(0, size, GL_FALSE);
  	else if (mempool_mspace[type])
- 		return sceClibMspaceMalloc(mempool_mspace[type], size);
+-		return sceClibMspaceMalloc(mempool_mspace[type], size);
++		return mspace_track(&mspace_used[type], sceClibMspaceMalloc(mempool_mspace[type], size));
  #endif
-@@ -554,6 +690,8 @@
+ 	return NULL;
+ }
+@@ -554,8 +738,10 @@
  	else if (num * size <= tm_free[type])
  		return heap_alloc(type, num * size, MEM_ALIGNMENT);
  #else
 +	else if (type == VGL_MEM_RAM)
 +		return ram_alloc(0, num * size, GL_TRUE);
  	else if (mempool_mspace[type])
- 		return sceClibMspaceCalloc(mempool_mspace[type], num, size);
+-		return sceClibMspaceCalloc(mempool_mspace[type], num, size);
++		return mspace_track(&mspace_used[type], sceClibMspaceCalloc(mempool_mspace[type], num, size));
  #endif
-@@ -575,8 +713,19 @@
+ 	return NULL;
+ }
+@@ -575,8 +761,19 @@
  	else if (size <= tm_free[type])
  		return heap_alloc(type, size, alignment);
  #else
@@ -1435,23 +1510,69 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
 +			phys_size = 32;
 +		if (type == VGL_MEM_RAM)
 +			return ram_alloc(alignment, phys_size, GL_FALSE);
-+		return sceClibMspaceMemalign(mempool_mspace[type], alignment, phys_size);
++		return mspace_track(&mspace_used[type], sceClibMspaceMemalign(mempool_mspace[type], alignment, phys_size));
 +	}
  #endif
  	return NULL;
  }
-@@ -603,6 +752,8 @@
+@@ -603,8 +800,23 @@
  	}
  #endif
  #ifndef HAVE_CUSTOM_HEAP
-+	else if (type == VGL_MEM_RAM && ram_ext_contains(ptr))
-+		return sceClibMspaceRealloc(ram_ext_mspace, ptr, size);
- 	else if (mempool_mspace[type])
- 		return sceClibMspaceRealloc(mempool_mspace[type], ptr, size);
+-	else if (mempool_mspace[type])
+-		return sceClibMspaceRealloc(mempool_mspace[type], ptr, size);
++	else if (type == VGL_MEM_RAM && ram_ext_contains(ptr)) {
++		size_t old = sceClibMspaceMallocUsableSize(ptr);
++		void *res = sceClibMspaceRealloc(ram_ext_mspace, ptr, size);
++		if (res) {
++			__atomic_sub_fetch(&ram_ext_used, (int32_t)old, __ATOMIC_RELAXED);
++			__atomic_add_fetch(&ram_ext_used, (int32_t)sceClibMspaceMallocUsableSize(res), __ATOMIC_RELAXED);
++		}
++		return res;
++	} else if (mempool_mspace[type]) {
++		size_t old = sceClibMspaceMallocUsableSize(ptr);
++		void *res = sceClibMspaceRealloc(mempool_mspace[type], ptr, size);
++		if (res) {
++			__atomic_sub_fetch(&mspace_used[type], (int32_t)old, __ATOMIC_RELAXED);
++			__atomic_add_fetch(&mspace_used[type], (int32_t)sceClibMspaceMallocUsableSize(res), __ATOMIC_RELAXED);
++		}
++		return res;
++	}
  #endif
+ 	return NULL;
+ }
+diff -ruN --no-dereference a/source/utils/mem_utils.h b/source/utils/mem_utils.h
+--- a/source/utils/mem_utils.h	2026-05-12 21:04:08.000000000 -0300
++++ b/source/utils/mem_utils.h	2026-11-01 04:22:52.164255679 -0300
+@@ -97,6 +97,7 @@
+ void vgl_mem_init(size_t size_ram, size_t size_cdram, size_t size_phycont, size_t size_cdlg);
+ void vgl_mem_term(void);
+ size_t vgl_mem_get_free_space(vglMemType type);
++size_t vgl_mem_get_free_space_walk(vglMemType type);
+ size_t vgl_mem_get_total_space(vglMemType type);
+ 
+ size_t vgl_malloc_usable_size(void *ptr);
+diff -ruN --no-dereference a/source/vgl.c b/source/vgl.c
+--- a/source/vgl.c	2026-05-12 21:04:08.000000000 -0300
++++ b/source/vgl.c	2026-11-01 04:22:52.164934176 -0300
+@@ -593,6 +593,14 @@
+ 	return vgl_mem_get_free_space(type);
+ }
+ 
++size_t vglMemFreeExact(vglMemType type) {
++#ifndef SKIP_ERROR_HANDLING
++	if (type >= VGL_MEM_ALL)
++		return 0;
++#endif
++	return vgl_mem_get_free_space_walk(type);
++}
++
+ size_t vglMemTotal(vglMemType type) {
+ #ifndef SKIP_ERROR_HANDLING
+ 	if (type >= VGL_MEM_ALL)
 diff -ruN --no-dereference a/source/vitaGL.h b/source/vitaGL.h
 --- a/source/vitaGL.h	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/vitaGL.h	2026-10-20 17:25:38.029698186 -0300
++++ b/source/vitaGL.h	2026-11-01 04:22:52.165598536 -0300
 @@ -1078,6 +1078,22 @@
  // Get the internal texture data pointer of a GL texture.
  void *vglGetTexDataPointer(GLenum target);
@@ -1475,7 +1596,16 @@ diff -ruN --no-dereference a/source/vitaGL.h b/source/vitaGL.h
  // Simple vitaGL init function. Legacy pool size is the amount of memory to reserve to handle immediate mode usage.
  GLboolean vglInit(int legacy_pool_size);
  
-@@ -1123,6 +1139,9 @@
+@@ -1104,6 +1120,8 @@
+ 
+ // Gets the total amount of free memory in a given internal memory pool.
+ size_t vglMemFree(vglMemType type);
++// Same as vglMemFree, from a full walk of the heap (slow): for checking only.
++size_t vglMemFreeExact(vglMemType type);
+ 
+ // Gets the total amount of free and used memory in a given internal memory pool.
+ size_t vglMemTotal(vglMemType type);
+@@ -1123,6 +1141,9 @@
  // Change the total memory to use for internal circular pools to use in vitaGL. Disabled with NO_CIRCULAR_POOL. Default value: 32 * 1024 * 1024.
  void vglSetCircularPoolSize(uint32_t size);
  

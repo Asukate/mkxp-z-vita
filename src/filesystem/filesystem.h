@@ -63,6 +63,9 @@ public:
 		 * references to it. Instead, copy the structure without closing
 		 * if you need to further read from it later. */
 		virtual bool tryRead(SDL_RWops &ops, const char *ext) = 0;
+
+		/* The PhysFS path of the file about to be passed to tryRead. */
+		virtual void opening(const char *physfsPath) { (void)physfsPath; }
 	};
 
 	void openRead(OpenHandler &handler,

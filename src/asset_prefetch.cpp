@@ -22,6 +22,7 @@
 #include <cstring>
 #include <iterator>
 #include <list>
+#include <atomic>
 #include <exception>
 #include <set>
 #include <unordered_map>
@@ -37,6 +38,8 @@ constexpr size_t imageBudget = 24u << 20, soundBudget = 16u << 20;
 constexpr size_t keepBudget = 24u << 20;
 constexpr double keepMs = 8.0;
 constexpr size_t historyMax = 400;
+// Longest wait for a file the worker is preparing (see waitWhileBusy).
+constexpr Uint32 busyWaitMs = 40;
 
 struct Entry {
   char kind; // 'I' image, 'S' sound
@@ -138,6 +141,39 @@ std::string key(const std::string &name) {
 
 double now() { return double(SDL_GetPerformanceCounter()) * 1000.0 / double(SDL_GetPerformanceFrequency()); }
 
+std::atomic<int> foregroundLoads{0};
+// SDL_GetTicks when the game thread last finished loading a file.
+std::atomic<Uint32> foregroundEnded{0};
+// Scene changes load files in bursts; the worker stays off the card for
+// this long after each load so the next one in the burst finds it idle.
+constexpr Uint32 quietMs = 150;
+
+// Reads the whole file in 64 KB pieces, waiting before each while the game
+// thread is loading a file (see ForegroundLoad), then closes ops.
+bool readAll(SDL_RWops &ops, std::vector<uint8_t> &out) {
+  constexpr size_t piece = 64 * 1024;
+  constexpr Uint32 longestWaitMs = 2000; // never starve the worker for good
+  const Sint64 length = SDL_RWsize(&ops);
+  bool ok = length > 0 && length < (64 << 20) && SDL_RWseek(&ops, 0, RW_SEEK_SET) == 0;
+  if (ok) {
+    out.resize(size_t(length));
+    for (size_t done = 0; ok && done < out.size();) {
+      const Uint32 waitStart = SDL_GetTicks();
+      while ((foregroundLoads.load(std::memory_order_relaxed) > 0 ||
+              SDL_GetTicks() - foregroundEnded.load(std::memory_order_relaxed) < quietMs) &&
+             SDL_GetTicks() - waitStart < longestWaitMs)
+        SDL_Delay(1);
+      const size_t n = std::min(piece, out.size() - done);
+      ok = SDL_RWread(&ops, out.data() + done, 1, n) == n;
+      done += n;
+    }
+  }
+  SDL_RWclose(&ops);
+  if (!ok)
+    out.clear();
+  return ok;
+}
+
 struct ImageHandler : FileSystem::OpenHandler {
   SDL_Surface *surface = nullptr;
   bool tryRead(SDL_RWops &ops, const char *ext) override {
@@ -145,7 +181,10 @@ struct ImageHandler : FileSystem::OpenHandler {
       SDL_RWclose(&ops);
       return true;
     }
-    surface = IMG_LoadTyped_RW(&ops, 1, ext);
+    std::vector<uint8_t> bytes;
+    if (!readAll(ops, bytes))
+      return false;
+    surface = IMG_LoadTyped_RW(SDL_RWFromConstMem(bytes.data(), int(bytes.size())), 1, ext);
     return surface != nullptr;
   }
 };
@@ -155,9 +194,14 @@ struct SoundHandler : FileSystem::OpenHandler {
   bool ok = false;
   explicit SoundHandler(Sound *out) : out(out) {}
   bool tryRead(SDL_RWops &ops, const char *ext) override {
-    Sound_Sample *sample = Sound_NewSample(&ops, ext, 0, 32768);
+    std::vector<uint8_t> file;
+    if (!readAll(ops, file))
+      return false;
+    SDL_RWops *mem = SDL_RWFromConstMem(file.data(), int(file.size()));
+    Sound_Sample *sample = mem ? Sound_NewSample(mem, ext, 0, 32768) : nullptr;
     if (!sample) {
-      SDL_RWclose(&ops);
+      if (mem)
+        SDL_RWclose(mem);
       return false;
     }
     uint32_t bytes = Sound_DecodeAll(sample);
@@ -409,6 +453,21 @@ void stop() {
   state = nullptr;
 }
 
+// Under the lock: waits while the worker is preparing k, but not for long.
+// The worker runs below the game's priority and can be held up by music
+// starting on the other cores (a 30 ms image once took 250 ms that way); the
+// game thread then loads the file itself and the worker's copy is dropped.
+static bool waitWhileBusy(State &s, const std::string &k) {
+  const Uint32 began = SDL_GetTicks();
+  while (s.busy == k) {
+    const Uint32 waited = SDL_GetTicks() - began;
+    if (waited >= busyWaitMs)
+      return false;
+    SDL_CondWaitTimeout(s.changed, s.lock, busyWaitMs - waited);
+  }
+  return true;
+}
+
 SDL_Surface *takeImage(const std::string &name) {
   if (!state)
     return nullptr;
@@ -416,8 +475,8 @@ SDL_Surface *takeImage(const std::string &name) {
   SDL_Surface *surface = nullptr;
   {
     Lock hold(state->lock);
-    while (state->busy == k)
-      SDL_CondWait(state->changed, state->lock);
+    if (!waitWhileBusy(*state, k))
+      return nullptr;
     auto found = state->images.find(k);
     if (found != state->images.end()) {
       surface = found->second.surface;
@@ -453,8 +512,8 @@ bool takeSound(const std::string &name, Sound &out) {
   std::string k = key(name);
   {
     Lock hold(state->lock);
-    while (state->busy == k)
-      SDL_CondWait(state->changed, state->lock);
+    if (!waitWhileBusy(*state, k))
+      return false;
     auto found = state->sounds.find(k);
     if (found == state->sounds.end())
       return false;
@@ -512,4 +571,10 @@ void noteImage(const std::string &name, double ms) {
 void noteSound(const std::string &name, double ms) {
   note('S', name, ms);
 }
+ForegroundLoad::ForegroundLoad() { foregroundLoads.fetch_add(1, std::memory_order_relaxed); }
+ForegroundLoad::~ForegroundLoad() {
+  foregroundEnded.store(SDL_GetTicks(), std::memory_order_relaxed);
+  foregroundLoads.fetch_sub(1, std::memory_order_relaxed);
+}
+
 } // namespace AssetPrefetch

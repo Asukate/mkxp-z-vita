@@ -156,6 +156,9 @@ struct Config {
     struct {
         std::string scripts;
         std::string title;
+        /* [Container] RGSSAD=: archive path used by custom XP launchers
+         * instead of Game.rgssad, relative to the game folder. */
+        std::string containerArchive;
     } game;
     
     // MJIT Options

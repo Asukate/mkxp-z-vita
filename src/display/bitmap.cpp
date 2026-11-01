@@ -75,6 +75,7 @@ extern unsigned long long vgl_upload_barrier_us;
 
 extern "C" {
 #include "libnsgif/libnsgif.h"
+#include <physfs.h>
 }
 
 #define GUARD_MEGA \
@@ -300,6 +301,12 @@ struct BitmapPrivate
     unsigned cpuStamp = 0;
     /* Bumped by every change of the pixels (onModified). */
     uint32_t contentVersion = 0;
+    /* Loaded from an image file (see "Reused file images"): the name the game
+     * asked for, the file PhysFS opened, its size and time, and contentVersion
+     * right after loading. */
+    std::string fileKey, filePath;
+    int64_t fileSize = -1, fileTime = -1;
+    uint32_t fileVersion = ~0u;
     /* For blits from this bitmap: per row, the columns [first, end) outside
      * which every pixel is fully transparent (see cpuRowSpans). */
     std::vector<uint32_t> rowSpans;
@@ -1429,9 +1436,26 @@ struct BitmapOpenHandler : FileSystem::OpenHandler
     size_t gif_data_size;
     
     
+    // The file that was read, for "Reused file images".
+    std::string path;
+    int64_t size = -1, mtime = -1;
+
     BitmapOpenHandler()
     : surface(0), gif(0), gif_data(0), gif_data_size(0)
     {}
+
+    void opening(const char *physfsPath) override
+    {
+        path = physfsPath;
+        PHYSFS_Stat st;
+        if (PHYSFS_stat(physfsPath, &st))
+        {
+            size = st.filesize;
+            mtime = st.modtime;
+        }
+        else
+            size = mtime = -1;
+    }
     
     bool tryRead(SDL_RWops &ops, const char *ext)
     {
@@ -1478,7 +1502,25 @@ struct BitmapOpenHandler : FileSystem::OpenHandler
                 return false;
             }
         } else {
-            surface = IMG_LoadTyped_RW(&ops, 1, ext);
+            /* Read the whole file first and decode from memory. */
+            std::vector<uint8_t> bytes;
+            const Sint64 length = SDL_RWsize(&ops);
+            if (length > 0 && length < (64 << 20))
+            {
+                bytes.resize(size_t(length));
+                if (SDL_RWread(&ops, bytes.data(), 1, bytes.size()) != bytes.size())
+                    bytes.clear();
+            }
+            if (!bytes.empty())
+            {
+                SDL_RWclose(&ops);
+                surface = IMG_LoadTyped_RW(SDL_RWFromConstMem(bytes.data(), int(bytes.size())), 1, ext);
+            }
+            else
+            {
+                SDL_RWseek(&ops, 0, RW_SEEK_SET);
+                surface = IMG_LoadTyped_RW(&ops, 1, ext);
+            }
         }
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         if (!surface && !gif)
@@ -1498,6 +1540,132 @@ struct BitmapOpenHandler : FileSystem::OpenHandler
         return (surface || gif);
     }
 };
+
+/* Reused file images.
+ *
+ * RPG Maker games dispose cached images and load the same files again soon
+ * after: XP's Spriteset_Map disposes its tileset, and many games dispose the
+ * pictures of a scene and load them again when the scene comes back (a menu
+ * closing). Each load reads, decodes and uploads the file again (10-90 ms on
+ * the Vita). When an image is disposed with its pixels unchanged since it
+ * was loaded, its texture is kept here instead, and the next load of the same
+ * name takes it back if the file still has the same size and time.
+ *
+ * At most reuseCount images and reuseBudget bytes are kept, oldest dropped
+ * first. Nothing is kept while graphics memory is low, and everything is let
+ * go when memory runs short (releaseRecreatableMemory). */
+namespace
+{
+struct ReusedImage
+{
+    std::string key, path;
+    int64_t size, mtime;
+    TEXFBO tex;
+    size_t bytes;
+};
+std::list<ReusedImage> reusedImages;
+size_t reusedBytes = 0;
+bool reuseSuspended = false;
+/* An XP map rebuild disposes ~30 images at once (tileset, autotiles, the
+ * shown pictures: To the Moon keeps ~15 screen-sized ones up), so the pool
+ * must hold a whole scene or the oldest are dropped before they come back.
+ * Each kept image also holds one of vitaGL's framebuffer slots (1024 in all,
+ * shared with live bitmaps and TexPool's 64), so the count stays moderate. */
+constexpr size_t reuseBudget = 40u << 20;
+constexpr size_t reuseCount = 48;
+constexpr size_t reuseImageMax = 8u << 20;
+#ifdef __vita__
+/* Graphics memory that must stay free (both pools) for an image to be kept. */
+constexpr size_t reuseMemFloor = 32u << 20;
+#endif
+
+void dropReused(std::list<ReusedImage>::iterator it)
+{
+    reusedBytes -= it->bytes;
+    shState->texPool().release(it->tex);
+    reusedImages.erase(it);
+}
+
+bool takeReused(const char *key, ReusedImage &out)
+{
+    for (auto it = reusedImages.begin(); it != reusedImages.end(); ++it)
+    {
+        if (it->key != key)
+            continue;
+        PHYSFS_Stat st;
+        if (!PHYSFS_stat(it->path.c_str(), &st) || st.filesize != it->size || st.modtime != it->mtime)
+        {
+            dropReused(it);
+            return false;
+        }
+        out = *it;
+        reusedBytes -= it->bytes;
+        reusedImages.erase(it);
+        return true;
+    }
+    return false;
+}
+
+/* Called while a bitmap is released: true if its texture was kept. */
+bool keepReused(BitmapPrivate *p)
+{
+    if (reuseSuspended || p->fileKey.empty() || p->filePath.empty() || p->fileSize < 0 ||
+        p->contentVersion != p->fileVersion || p->pendingClear || p->selfHires || p->selfLores ||
+        p->megaSurface || p->animation.enabled || p->cpu ||
+        p->gl.tex == TEX::ID(0) || p->gl.fbo == FBO::ID(0))
+        return false;
+    const size_t bytes = size_t(p->gl.width) * p->gl.height * 4;
+    if (bytes > reuseImageMax)
+        return false;
+#ifdef __vita__
+    if (vitaGraphicsFreeBytes() < reuseMemFloor + bytes)
+        return false;
+#endif
+    for (auto it = reusedImages.begin(); it != reusedImages.end(); ++it)
+        if (it->key == p->fileKey)
+        {
+            dropReused(it);
+            break;
+        }
+    reusedImages.push_front({p->fileKey, p->filePath, p->fileSize, p->fileTime, p->gl, bytes});
+    reusedBytes += bytes;
+    while (reusedImages.size() > reuseCount || reusedBytes > reuseBudget)
+        dropReused(std::prev(reusedImages.end()));
+    return true;
+}
+} // namespace
+
+void Bitmap::releaseReusedImages()
+{
+    while (!reusedImages.empty())
+        dropReused(reusedImages.begin());
+}
+
+bool Bitmap::trimReusedImages(size_t wantFree)
+{
+    bool dropped = false;
+#ifdef __vita__
+    /* Freed outright: TexPool would only cache the textures again. */
+    while (!reusedImages.empty() && vitaGraphicsFreeBytes() < wantFree)
+    {
+        auto last = std::prev(reusedImages.end());
+        reusedBytes -= last->bytes;
+        shState->texPool().releaseUncached(last->tex);
+        reusedImages.erase(last);
+        dropped = true;
+    }
+#else
+    (void)wantFree;
+#endif
+    return dropped;
+}
+
+void Bitmap::suspendImageReuse(bool suspend)
+{
+    reuseSuspended = suspend;
+    if (suspend)
+        releaseReusedImages();
+}
 
 Bitmap::Bitmap(const char *filename)
 {
@@ -1521,19 +1689,66 @@ Bitmap::Bitmap(const char *filename)
         }
     }
 
+    if (!hiresBitmap)
+    {
+        ReusedImage reused;
+        if (takeReused(filename, reused))
+        {
+            p = new BitmapPrivate(this);
+            p->gl = reused.tex;
+            p->fileKey = reused.key;
+            p->filePath = reused.path;
+            p->fileSize = reused.size;
+            p->fileTime = reused.mtime;
+            p->addTaintedArea(rect());
+            p->fileVersion = p->contentVersion;
+            return;
+        }
+    }
 #ifdef __vita__
     /* Prepared on another core from this game's load history. */
     if (!hiresBitmap)
         if (SDL_Surface *ready = AssetPrefetch::takeImage(filename))
         {
             initFromSurface(ready, nullptr, false);
+            /* Finds the file without reading it, so this image can be
+             * kept for reuse like one the game thread loaded. */
+            struct FileOnly : FileSystem::OpenHandler
+            {
+                std::string path;
+                int64_t size = -1, mtime = -1;
+                void opening(const char *physfsPath) override
+                {
+                    path = physfsPath;
+                    PHYSFS_Stat st;
+                    if (PHYSFS_stat(physfsPath, &st))
+                    {
+                        size = st.filesize;
+                        mtime = st.modtime;
+                    }
+                }
+                bool tryRead(SDL_RWops &ops, const char *) override
+                {
+                    SDL_RWclose(&ops);
+                    return true;
+                }
+            } found;
+            try { shState->fileSystem().openRead(found, filename); } catch (...) { found.size = -1; }
+            if (!p->megaSurface && found.size >= 0)
+            {
+                p->fileKey = filename;
+                p->filePath = found.path;
+                p->fileSize = found.size;
+                p->fileTime = found.mtime;
+                p->fileVersion = p->contentVersion;
+            }
             return;
         }
     const Uint64 loadBegan = SDL_GetPerformanceCounter();
 #endif
     BitmapOpenHandler handler;
     try {
-        { FrameProfile::Scope decode(FrameProfile::ImageReadDecode); shState->fileSystem().openRead(handler, filename); }
+        { FrameProfile::Scope decode(FrameProfile::ImageReadDecode); AssetPrefetch::ForegroundLoad first; shState->fileSystem().openRead(handler, filename); }
 #ifdef __vita__
         if (handler.surface && !hiresBitmap)
         {
@@ -1675,6 +1890,14 @@ Bitmap::Bitmap(const char *filename)
     SDL_Surface *imgSurf = handler.surface;
 
     initFromSurface(imgSurf, hiresBitmap, false);
+    if (!hiresBitmap && !p->megaSurface)
+    {
+        p->fileKey = filename;
+        p->filePath = handler.path;
+        p->fileSize = handler.size;
+        p->fileTime = handler.mtime;
+        p->fileVersion = p->contentVersion;
+    }
 }
 
 Bitmap::Bitmap(int width, int height, bool isHires)
@@ -2218,6 +2441,42 @@ static void bltFilter(enum Bitmap::BitmapBltMode mode, uint32_t &dst_pixel, uint
             ((uint8_t *)&dst_pixel)[3] = 255;
             break;
     }
+}
+
+void Bitmap::drawExternalTexture(unsigned int glTexture, int texWidth, int texHeight)
+{
+    guardDisposed();
+    GUARD_MEGA;
+    GUARD_ANIMATED;
+
+    if (texWidth <= 0 || texHeight <= 0)
+        return;
+
+    if (hasHires()) {
+        p->selfHires->drawExternalTexture(glTexture, texWidth, texHeight);
+        return;
+    }
+
+    if (p->cpu)
+        cpuPromote(p);
+
+    /* Every pixel is overwritten, so a pending clear fuses with the draw. */
+    clearRead(p);
+
+    TEXFBO source;
+    source.tex = TEX::ID(glTexture);
+    source.width = texWidth;
+    source.height = texHeight;
+
+    const IntRect dest(0, 0, width(), height());
+    GLMeta::blitBegin(getGLTypes());
+    GLMeta::blitSource(source);
+    GLMeta::blitRectangle(IntRect(0, 0, texWidth, texHeight), dest,
+                          texWidth != dest.w || texHeight != dest.h);
+    GLMeta::blitEnd();
+
+    p->addTaintedArea(dest);
+    p->onModified();
 }
 
 void Bitmap::stretchBlt(IntRect destRect,
@@ -5030,6 +5289,7 @@ void Bitmap::releaseRecreatableMemory()
 {
     textCacheClear();
     dropAllReadbacks();
+    releaseReusedImages();
     AssetPrefetch::releaseMemory();
     for (BitmapPrivate *bitmap : cpuBitmapList)
         if (bitmap->windowTex != TEX::ID(0))
@@ -5133,10 +5393,12 @@ void Bitmap::assumeRubyGC()
 
 void Bitmap::releaseResources()
 {
-    /* Disposal drops a pending clear: no pixels will ever be observed. */
+    /* Disposal drops a pending clear: no pixels will ever be observed. A
+     * cleared image is no longer the file's, so it is not kept for reuse. */
     if (p && p->pendingClear)
     {
         p->pendingClear = false;
+        p->fileKey.clear();
         FrameProfile::Scope discarded(FrameProfile::ClearDiscarded);
     }
     if (p->selfHires && !p->assumingRubyGC) {
@@ -5162,7 +5424,7 @@ void Bitmap::releaseResources()
         if (p->gl.tex != TEX::ID(0))
             TEX::del(p->gl.tex);
     }
-    else
+    else if (!keepReused(p))
         shState->texPool().release(p->gl);
     
     delete p;

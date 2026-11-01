@@ -237,6 +237,7 @@ RB_METHOD(mkxpSettingsMenu);
 RB_METHOD(mkxpCpuCount);
 RB_METHOD(mkxpSystemMemory);
 RB_METHOD(mkxpVitaMemorySnapshot);
+RB_METHOD(mkxpVitaVglFreeCheck);
 #ifdef __vita__
 RB_METHOD(mkxpVitaPadScript);
 RB_METHOD(mkxpVitaPadStats);
@@ -420,6 +421,7 @@ static void mriBindingInit() {
     _rb_define_module_function(mod, "nproc", mkxpCpuCount);
     _rb_define_module_function(mod, "memory", mkxpSystemMemory);
     _rb_define_module_function(mod, "vita_memory_snapshot", mkxpVitaMemorySnapshot);
+    _rb_define_module_function(mod, "vita_vgl_free_check", mkxpVitaVglFreeCheck);
 #ifdef __vita__
     /* Benchmark packages: scripted pad presses (needs vitaPadTest). */
     _rb_define_module_function(mod, "vita_pad_script", mkxpVitaPadScript);
@@ -746,6 +748,14 @@ RB_METHOD(mkxpCpuCount) {
     RB_UNUSED_PARAM;
     
     return INT2NUM(SDL_GetCPUCount());
+}
+
+RB_METHOD(mkxpVitaVglFreeCheck) {
+    RB_UNUSED_PARAM;
+    rb_check_arity(argc, 0, 0);
+    char text[256];
+    const size_t size = vitaVglFreeCheck(text, sizeof(text));
+    return rb_utf8_str_new(text, size);
 }
 
 RB_METHOD(mkxpVitaMemorySnapshot) {

@@ -193,6 +193,18 @@ struct SharedStatePrivate
 #else
 		std::string archPath = config.execName + gameArchExt();
 #endif
+		if (!config.game.containerArchive.empty())
+		{
+			FILE *defaultArchive = fopen(archPath.c_str(), "rb");
+			if (defaultArchive)
+				fclose(defaultArchive);
+			else
+#ifdef __vita__
+				archPath = gameRoot + config.game.containerArchive;
+#else
+				archPath = config.game.containerArchive;
+#endif
+		}
 
 #ifdef __vita__
         FILE *archiveProbe = fopen(archPath.c_str(), "rb");

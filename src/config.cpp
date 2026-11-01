@@ -603,6 +603,14 @@ void Config::readGameINI() {
             GUARD(game.scripts = ic.getStringProperty("Game", "Scripts"););
             
             strReplace(game.scripts, '\\', '/');
+
+            /* Only a plain relative path inside the game folder. */
+            GUARD(game.containerArchive = ic.getStringProperty("Container", "RGSSAD"););
+            strReplace(game.containerArchive, '\\', '/');
+            if (game.containerArchive.empty() || game.containerArchive[0] == '/' ||
+                game.containerArchive.find(':') != std::string::npos ||
+                game.containerArchive.find("..") != std::string::npos)
+                game.containerArchive.clear();
             
             if (game.title.empty()) {
                 Debug() << iniFileName + ": Could not find Game.Title";

@@ -58,11 +58,13 @@ static bool vitaOutOfMemory(const Exception &error) {
 // the explicit Ruby method also collects when a game disables auto GC.
 static void vitaReclaimImageMemory(const char *label) {
     vitaErrorMemoryEvent("before-cache-reclaim", label);
-    GFX_GUARD_EXC(shState->texPool().clearCache(); Bitmap::reclaimMemory();)
+    // Images freed here must not be kept for reuse (Bitmap "Reused file images").
+    GFX_GUARD_EXC(Bitmap::suspendImageReuse(true); shState->texPool().clearCache(); Bitmap::reclaimMemory();)
     vitaErrorMemoryEvent("after-cache-reclaim", label);
     vitaReleaseGameImageCache();
     VALUE gc = rb_const_get(rb_cObject, rb_intern("GC"));
     rb_funcall(gc, rb_intern("start"), 0);
+    Bitmap::suspendImageReuse(false);
 }
 
 static Bitmap *vitaBitmapOfSize(int width, int height) {

@@ -256,6 +256,7 @@ SoundBuffer *SoundEmitter::allocateBuffer(const std::string &filename)
 		else
 		{
 			const Uint64 loadBegan = SDL_GetPerformanceCounter();
+			AssetPrefetch::ForegroundLoad first;
 #endif
 		SoundOpenHandler handler;
 		shState->fileSystem().openRead(handler, filename.c_str());

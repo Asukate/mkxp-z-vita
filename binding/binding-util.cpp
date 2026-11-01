@@ -98,6 +98,9 @@ static VALUE vitaPressureCollectDeep(VALUE)
 {
   /* Not reclaimMemory: it moves CPU bitmaps onto the GPU, which is short. */
   GFX_LOCK;
+  /* Images the game's cache and GC let go of now must really be freed, not
+   * kept for reuse; the caller turns reuse back on. */
+  Bitmap::suspendImageReuse(true);
   Bitmap::releaseRecreatableMemory();
   GFX_UNLOCK;
   vitaReleaseGameImageCache();
@@ -144,6 +147,7 @@ void vitaGpuPressureSafePoint(const char *phase)
       collecting = true;
       int state = 0;
       rb_protect(vitaPressureCollectDeep, Qnil, &state);
+      Bitmap::suspendImageReuse(false);
       collecting = false;
       lastDeepUs = lastUs = sceKernelGetProcessTimeWide();
       ceiling = vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
@@ -181,7 +185,15 @@ void vitaGpuPressureSafePoint(const char *phase)
   } else if (phase[0] == 'g' && (++frames & 7)) {
     return;
   }
-  const size_t freeBytes = vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
+  size_t freeBytes = vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
+  if (freeBytes < lowWater) {
+    /* Kept images for reuse go before any collection. */
+    GFX_LOCK;
+    const bool trimmed = Bitmap::trimReusedImages(lowWater + step);
+    GFX_UNLOCK;
+    if (trimmed)
+      freeBytes = vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
+  }
   if (freeBytes > ceiling) ceiling = freeBytes;
   if (freeBytes >= lowWater) return;
   bool collect = ceiling - freeBytes >= (ceiling / 2 < step ? ceiling / 2 : step) &&

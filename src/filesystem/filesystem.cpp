@@ -267,13 +267,31 @@ static int mountPath(const char *path, const char *mountpoint) {
   return mounted;
 }
 
+#ifdef __vita__
+/* Read files through a buffer of up to 64 KB. Decoders read a PNG or an
+ * Ogg in pieces of a few bytes to a few KB, and every piece of an archive
+ * entry costs a seek and up to three reads on the memory card. While the
+ * prefetch worker reads too, each of those waits behind it: a 100 KB fog
+ * took 250 ms instead of 30. */
+static void bufferReads(PHYSFS_File *f) {
+  if (!f) return;
+  const PHYSFS_sint64 length = PHYSFS_fileLength(f);
+  const PHYSFS_uint64 size = length > 0 && length < 64 * 1024 ? PHYSFS_uint64(length) : 64 * 1024;
+  PHYSFS_setBuffer(f, size);
+}
+#endif
+
 static inline PHYSFS_File *sdlPHYS(SDL_RWops *ops) {
   return static_cast<PHYSFS_File *>(ops->hidden.unknown.data1);
 }
 
 #ifdef __vita__
 struct PhysReadIO {
-  static PHYSFS_File *open(const char *path) { return PHYSFS_openRead(path); }
+  static PHYSFS_File *open(const char *path) {
+    PHYSFS_File *f = PHYSFS_openRead(path);
+    bufferReads(f);
+    return f;
+  }
   static bool seek(PHYSFS_File *file, int64_t offset) { return PHYSFS_seek(file, offset) != 0; }
   static void close(PHYSFS_File *file) { PHYSFS_close(file); }
 };
@@ -469,6 +487,7 @@ static void initReadOps(PHYSFS_File *handle, SDL_RWops &ops, bool freeOnClose,
   ops.hidden.unknown.data1 = handle;
   ops.hidden.unknown.data2 = nullptr;
 #ifdef __vita__
+  bufferReads(handle);
   if (path && strlen(path) < sizeof(RecoverRead::path))
     ops.hidden.unknown.data2 = new (std::nothrow) RecoverRead(handle, path, vitaResumeEpoch());
 #endif
@@ -900,6 +919,7 @@ openReadEnumCB(void *d, const char *dirpath, const char *filename) {
 
   const char *ext = findExt(filename);
 
+  data.handler.opening(fullPath);
   if (data.handler.tryRead(data.ops, ext))
     data.stopSearching = true;
 

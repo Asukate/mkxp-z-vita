@@ -132,6 +132,9 @@ public:
 
 	/* <internal> */
 	TEXFBO &getGLTypes() const;
+	/* Cover the whole bitmap with a texture owned elsewhere (a decoded
+	 * video frame), scaled to fit. */
+	void drawExternalTexture(unsigned int glTexture, int texWidth, int texHeight);
     SDL_Surface *surface() const;
 	SDL_Surface *megaSurface() const;
 	void ensureNonMega() const;
@@ -188,6 +191,13 @@ public:
 	static int maxSize();
 	static void reclaimMemory();
 	static void releaseRecreatableMemory();
+	/* Textures of disposed, unchanged file images kept for the next load of
+	 * the same file (see "Reused file images" in bitmap.cpp). */
+	static void releaseReusedImages();
+	static void suspendImageReuse(bool suspend);
+	/* Frees kept images, oldest first, until this much graphics memory is
+	 * free or none are left; true if any were freed. Under GFX_LOCK. */
+	static bool trimReusedImages(size_t wantFree);
 	static void frameTick();
 	static bool cpuPixelsNearBudget();
 	/* True once after a bitmap could not get graphics memory while drawing

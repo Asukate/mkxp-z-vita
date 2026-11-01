@@ -12,6 +12,8 @@
 #include "util/debugwriter.h"
 #if defined(__vita__) || defined(__psp2__)
 #include "util/win32-text.h"
+#include "display/bitmap.h"
+#include "vita_video_decoder.h"
 #include <algorithm>
 #include <string>
 #endif
@@ -410,6 +412,70 @@ static long vitaLongArg(VALUE value) {
     return RB_INTEGER_TYPE_P(value) ? NUM2LONG(value) : 0;
 }
 
+DECL_TYPE(Bitmap);
+
+static VALUE vitaIdToRef(VALUE id) {
+    VALUE objectSpace = rb_const_get(rb_cObject, rb_intern("ObjectSpace"));
+    return rb_funcall(objectSpace, rb_intern("_id2ref"), 1, id);
+}
+
+/* RPGXPVideoDecoder.dll (see vita_video_decoder.h). The DLL is handed the
+ * target Bitmap as `bitmap.object_id << 1`, Ruby 1.8's object address. */
+static bool vitaVideoDecoderCall(VALUE function, VALUE args, VALUE *result) {
+    using namespace VitaVideoDecoder;
+    /* Keeps the target Bitmap alive while a video draws into it. */
+    static VALUE heldBitmap = Qnil;
+    static bool registered = false;
+    if (!registered) {
+        rb_gc_register_address(&heldBitmap);
+        registered = true;
+    }
+
+    const char *name = StringValueCStr(function);
+    const long argc = RARRAY_LEN(args);
+    int code;
+    if (std::strcmp(name, "ViDecCreateContext") == 0 && argc == 3) {
+        VALUE address = rb_ary_entry(args, 2);
+        Bitmap *bitmap = nullptr;
+        VALUE object = Qnil;
+        if (RB_INTEGER_TYPE_P(address)) {
+            int state = 0;
+            VALUE id = rb_funcall(address, rb_intern(">>"), 1, INT2FIX(1));
+            object = rb_protect(vitaIdToRef, id, &state);
+            if (state) {
+                rb_set_errinfo(Qnil);
+                object = Qnil;
+            }
+        }
+        if (!NIL_P(object) && rb_typeddata_is_kind_of(object, &BitmapType))
+            bitmap = getPrivateData<Bitmap>(object);
+        code = createContext(vitaNarrowArg(rb_ary_entry(args, 0)),
+                             (int)vitaLongArg(rb_ary_entry(args, 1)), bitmap);
+        if (code == Success)
+            heldBitmap = object;
+    } else if (std::strcmp(name, "ViDecStartRender") == 0) {
+        code = startRender();
+    } else if (std::strcmp(name, "ViDecGetVideoState") == 0) {
+        code = getVideoState();
+    } else if (std::strcmp(name, "ViDecSetVolume") == 0 && argc == 1) {
+        code = setVolume((int)vitaLongArg(rb_ary_entry(args, 0)));
+    } else if (std::strcmp(name, "ViDecCloseContext") == 0) {
+        code = closeContext();
+        heldBitmap = Qnil;
+    } else if (std::strcmp(name, "ViDecWasBadTermination") == 0) {
+        code = wasBadTermination();
+    } else if (std::strcmp(name, "ViDecGetInternalError") == 0) {
+        code = getInternalError();
+    } else if (std::strcmp(name, "ViDecGetInternalErrorMessage") == 0) {
+        *result = rb_str_new_cstr(getInternalErrorMessage());
+        return true;
+    } else {
+        return false;
+    }
+    *result = INT2NUM(code);
+    return true;
+}
+
 /* kernel32 text conversion (see util/win32-text.h). */
 static bool vitaKernel32Call(VALUE function, VALUE args, VALUE *result) {
     const char *name = StringValueCStr(function);
@@ -555,6 +621,21 @@ static void vitaDLBindingInit() {
 #endif
 
 RB_METHOD_GUARD(MiniFFI_call) {
+#if defined(__vita__) || defined(__psp2__)
+    /* Key polling (GetAsyncKeyState/GetKeyState) is called in tight loops: some input
+     * scripts poll all 255 keys every frame. Answer it without the generic dummy path
+     * (ivar reads, a library-name copy and string compares cost ~20 us per call). */
+    {
+        static ID kindId = rb_intern("@_vkind");
+        VALUE kind = rb_attr_get(self, kindId);
+        if (NIL_P(kind)) {
+            kind = INT2FIX(hardrpgMiniFFIKeyKind(self));
+            rb_ivar_set(self, kindId, kind);
+        }
+        if (kind == INT2FIX(1) && argc == 1)
+            return INT2NUM(vitaVKPressed(NUM2UINT(argv[0])) ? 0x8000 : 0);
+    }
+#endif
     MiniFFIFuncArgs param;
 #define params param.params
     VALUE func = rb_iv_get(self, "_func");
@@ -590,6 +671,11 @@ RB_METHOD_GUARD(MiniFFI_call) {
         if (library == "kernel32.dll" || library == "kernel32") {
             VALUE handled;
             if (vitaKernel32Call(rb_iv_get(self, "_funcname"), args, &handled))
+                return handled;
+        }
+        if (library == "rpgxpvideodecoder.dll" || library == "rpgxpvideodecoder") {
+            VALUE handled;
+            if (vitaVideoDecoderCall(rb_iv_get(self, "_funcname"), args, &handled))
                 return handled;
         }
 #endif

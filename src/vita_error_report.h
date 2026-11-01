@@ -5,6 +5,10 @@
 
 // Fixed report storage is reserved before gameplay. Normal sampling is opt-in.
 size_t vitaMemorySnapshot(char *destination, size_t capacity);
+// vitaGL free space from its counters and from a full heap walk (slow; checks only).
+size_t vitaVglFreeCheck(char *destination, size_t capacity);
+/* Free graphics memory, VRAM and RAM pools together (cheap: no heap walk). */
+size_t vitaGraphicsFreeBytes();
 void vitaErrorSessionStart(const char *gameFolder, int rgssVersion);
 void vitaErrorImageStart();
 void vitaErrorMemoryEvent(const char *phase, const char *filename);
