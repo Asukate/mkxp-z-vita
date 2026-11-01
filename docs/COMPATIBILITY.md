@@ -33,7 +33,7 @@ problems later in those games are still possible.
 | Mogeko Castle (English VX Ace edition) | VX Ace | ✅ Runs | |
 | The Endless Empty | VX Ace | ✅ Runs | |
 | VorlorN | XP | ✅ Runs | |
-| (Mario) The Music Box 1.3.1 (itch.io) | XP | 🟡 Partial | Starts since 0.4.9 (it stopped with "Unable to load scripts" before). Title and intro checked; later progression untested. |
+| (Mario) The Music Box 1.3.1 (itch.io) | XP | 🟡 Partial | Starts since 0.4.9 (it stopped with "Unable to load scripts" before). Title, intro and the mansion checked, including a quick save and resume; later progression untested. |
 | N.P.C. Dreams | VX Ace | ✅ Runs | Frequent frame drops. |
 
 ## RPG Maker 2000 and 2003 (EasyRPG)
