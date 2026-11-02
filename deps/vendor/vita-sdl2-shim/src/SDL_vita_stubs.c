@@ -751,7 +751,7 @@ static SDL_Surface *vita_jpeg_decode(const unsigned char *data, size_t size) {
     SDL_Surface *surface = NULL;
     unsigned char *pixels = NULL;
     int width = 0, height = 0, channels = 0;
-    int x, y;
+    int y;
 
     if (size < 3 || data[0] != 0xff || data[1] != 0xd8 || data[2] != 0xff) {
         vita_img_set_error("not a JPEG");
@@ -769,19 +769,11 @@ static SDL_Surface *vita_jpeg_decode(const unsigned char *data, size_t size) {
         stbi_image_free(pixels);
         return NULL;
     }
-    /* stb delivers RGBA; our surfaces are ABGR8888 — swizzle R<->B. */
-    for (y = 0; y < height; ++y) {
-        unsigned char *dst = (unsigned char *)surface->pixels + y * surface->pitch;
-        const unsigned char *src = pixels + (size_t)y * (size_t)width * 4u;
-        for (x = 0; x < width; ++x) {
-            dst[0] = src[2];
-            dst[1] = src[1];
-            dst[2] = src[0];
-            dst[3] = src[3];
-            dst += 4;
-            src += 4;
-        }
-    }
+    /* stb delivers R,G,B,A bytes. ABGR8888 on little-endian ARM is the same
+     * byte order in memory (and what the PNG path writes), so copy as is. */
+    for (y = 0; y < height; ++y)
+        memcpy((unsigned char *)surface->pixels + y * surface->pitch,
+               pixels + (size_t)y * (size_t)width * 4u, (size_t)width * 4u);
     stbi_image_free(pixels);
     return surface;
 }
