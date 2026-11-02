@@ -179,6 +179,7 @@ TEXFBO TexPool::request(int width, int height)
 		                width, height);
 
 	/* Nope, create it instead */
+	texMakeRoom((size_t)width * height * 4);
 	TEXFBO::init(cnode.obj);
 	try
 	{
@@ -200,6 +201,56 @@ TEXFBO TexPool::request(int width, int height)
 //	Debug() << "TexPool: <?-> (" << width << height << ")";
 
 	return cnode.obj;
+}
+
+TEXFBO TexPool::requestImage(int width, int height, const void *pixels)
+{
+	/* A cached target of this size already has storage: fill it as before. */
+	if (!p->poolHash[Size(width, height)].empty())
+	{
+		TEXFBO obj = request(width, height);
+		TEXFBO::uploadImage(obj, width, height, pixels, GL_RGBA);
+		TEXFBO::linkFBO(obj);
+		return obj;
+	}
+
+	int maxSize = glState.caps.maxTexSize;
+	if (width > maxSize || height > maxSize)
+		throw Exception(Exception::MKXPError,
+		                "Texture dimensions [%d, %d] exceed hardware capabilities",
+		                width, height);
+
+	texMakeRoom((size_t)width * height * 4);
+	TEXFBO obj;
+	TEXFBO::init(obj);
+	try
+	{
+		TEX::uploadImage(width, height, pixels, GL_RGBA);
+	}
+	catch (const Exception &)
+	{
+		TEXFBO::discard(obj);
+		/* Cached objects have no owner; give their storage back and try
+		 * once more before reporting the failure. */
+		if (p->objCount == 0)
+			throw;
+		clearCache();
+		TEXFBO::init(obj);
+		try
+		{
+			TEX::uploadImage(width, height, pixels, GL_RGBA);
+		}
+		catch (const Exception &)
+		{
+			TEXFBO::discard(obj);
+			throw;
+		}
+	}
+	obj.width = width;
+	obj.height = height;
+	TEXFBO::linkFBO(obj);
+	countTarget(width, height, 1);
+	return obj;
 }
 
 void TexPool::releaseUncached(TEXFBO &obj)

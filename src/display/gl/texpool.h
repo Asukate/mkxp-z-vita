@@ -33,6 +33,12 @@ public:
 	~TexPool();
 
 	TEXFBO request(int width, int height);
+	/* A render target holding these RGBA pixels. A new texture gets its
+	 * storage once, straight from the pixels: request() then an upload
+	 * would reserve the image twice (vitaGL replaces the storage on a full
+	 * upload and frees the old one only after the frame), zero-fill the
+	 * first copy, and leave the framebuffer on the replaced storage. */
+	TEXFBO requestImage(int width, int height, const void *pixels);
 	void release(TEXFBO &obj);
 	/* Frees obj now instead of caching it. */
 	void releaseUncached(TEXFBO &obj);
@@ -44,5 +50,10 @@ public:
 private:
 	TexPoolPrivate *p;
 };
+
+/* Called before graphics memory is reserved for a new texture of this many
+ * bytes: gives back images kept only for reuse (Bitmap) so they never cause
+ * the allocation to fail. Defined in bitmap.cpp. */
+void texMakeRoom(size_t bytes);
 
 #endif // TEXPOOL_H

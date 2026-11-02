@@ -895,6 +895,7 @@ static bool cpuSync(BitmapPrivate *p)
         if (reclaimRequested)
             return false;
         ensureDrawFallback();
+        texMakeRoom((size_t)p->gl.width * p->gl.height * 4);
         p->gl.tex = TEX::gen();
         TEX::bind(p->gl.tex);
         TEX::setRepeat(false);
@@ -1570,10 +1571,16 @@ bool reuseSuspended = false;
  * shown pictures: To the Moon keeps ~15 screen-sized ones up), so the pool
  * must hold a whole scene or the oldest are dropped before they come back.
  * Each kept image also holds one of vitaGL's framebuffer slots (1024 in all,
- * shared with live bitmaps and TexPool's 64), so the count stays moderate. */
-constexpr size_t reuseBudget = 40u << 20;
-constexpr size_t reuseCount = 48;
-constexpr size_t reuseImageMax = 8u << 20;
+ * shared with live bitmaps and TexPool's 64), so the count stays moderate.
+ *
+ * Pocket Mirror shows map-sized light and shadow overlays as pictures
+ * (1152x1696 up to 2480x3508, 8-33 MB each) and stock VX Ace disposes them
+ * when the menu opens; decoding them again on close took 1-5 s. Such images
+ * are kept too: the pool only holds memory the scene was already using, and
+ * texMakeRoom gives it back before any new texture could run short. */
+constexpr size_t reuseBudget = 160u << 20;
+constexpr size_t reuseCount = 96;
+constexpr size_t reuseImageMax = 48u << 20;
 #ifdef __vita__
 /* Graphics memory that must stay free (both pools) for an image to be kept. */
 constexpr size_t reuseMemFloor = 32u << 20;
@@ -1618,7 +1625,10 @@ bool keepReused(BitmapPrivate *p)
     if (bytes > reuseImageMax)
         return false;
 #ifdef __vita__
-    if (vitaGraphicsFreeBytes() < reuseMemFloor + bytes)
+    /* Keeping a texture uses no more memory than the scene already had; the
+     * floor only stops the pool from holding on while memory is short.
+     * texMakeRoom frees kept images before a new texture needs the space. */
+    if (vitaGraphicsFreeBytes() < reuseMemFloor)
         return false;
 #endif
     for (auto it = reusedImages.begin(); it != reusedImages.end(); ++it)
@@ -1645,10 +1655,14 @@ bool Bitmap::trimReusedImages(size_t wantFree)
 {
     bool dropped = false;
 #ifdef __vita__
-    /* Freed outright: TexPool would only cache the textures again. */
-    while (!reusedImages.empty() && vitaGraphicsFreeBytes() < wantFree)
+    /* Freed outright: TexPool would only cache the textures again. vitaGL
+     * may hand the storage back only after the frame, so count what was
+     * let go instead of reading the free figure again. */
+    size_t freeNow = vitaGraphicsFreeBytes();
+    while (!reusedImages.empty() && freeNow < wantFree)
     {
         auto last = std::prev(reusedImages.end());
+        freeNow += last->bytes;
         reusedBytes -= last->bytes;
         shState->texPool().releaseUncached(last->tex);
         reusedImages.erase(last);
@@ -1658,6 +1672,16 @@ bool Bitmap::trimReusedImages(size_t wantFree)
     (void)wantFree;
 #endif
     return dropped;
+}
+
+void texMakeRoom(size_t bytes)
+{
+#ifdef __vita__
+    if (!reusedImages.empty())
+        Bitmap::trimReusedImages(bytes + reuseMemFloor);
+#else
+    (void)bytes;
+#endif
 }
 
 void Bitmap::suspendImageReuse(bool suspend)
@@ -2010,8 +2034,7 @@ Bitmap::Bitmap(void *pixeldata, int width, int height)
         
         try
         {
-            tex = shState->texPool().request(surface->w, surface->h);
-            TEXFBO::uploadImage(tex, tex.width, tex.height, surface->pixels, GL_RGBA);
+            tex = shState->texPool().requestImage(surface->w, surface->h, surface->pixels);
         }
         catch (const Exception &e)
         {
@@ -2221,8 +2244,7 @@ void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool for
         
         try
         {
-            tex = shState->texPool().request(imgSurf->w, imgSurf->h);
-            TEXFBO::uploadImage(tex, tex.width, tex.height, imgSurf->pixels, GL_RGBA);
+            tex = shState->texPool().requestImage(imgSurf->w, imgSurf->h, imgSurf->pixels);
         }
         catch (const Exception &e)
         {
