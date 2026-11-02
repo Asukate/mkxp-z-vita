@@ -104,6 +104,26 @@ static unsigned fileWriteGeneration() { return 0; }
 #include <direct.h>
 #endif
 
+#ifdef __vita__
+/* SDL reads files with stdio, and newlib's default stdio buffer turns a big
+ * read into ~1 KB reads of the memory card (BLACK SOULS II's 3 MB Tilesets in
+ * Game.rgss3a took 860 ms). Archives get a 64 KB buffer instead. */
+static SDL_RWops *openArchiveRW(const char *filename) {
+  FILE *fp = fopen(filename, "rb");
+  if (!fp)
+    return SDL_RWFromFile(filename, "rb");
+  setvbuf(fp, nullptr, _IOFBF, 64 * 1024);
+  SDL_RWops *ops = SDL_RWFromFP(fp, SDL_TRUE);
+  if (!ops)
+    fclose(fp);
+  return ops;
+}
+#else
+static SDL_RWops *openArchiveRW(const char *filename) {
+  return SDL_RWFromFile(filename, "r");
+}
+#endif
+
 struct SDLRWIoContext {
   SDL_RWops *ops;
   std::string filename;
@@ -112,7 +132,7 @@ struct SDLRWIoContext {
   unsigned epoch = vitaResumeEpoch();
 
   bool reopen() {
-    SDL_RWops *fresh = SDL_RWFromFile(filename.c_str(), "rb");
+    SDL_RWops *fresh = openArchiveRW(filename.c_str());
     if (!fresh) return false;
     if (position && SDL_RWseek(fresh, position, RW_SEEK_SET) != position) {
       SDL_RWclose(fresh);
@@ -127,7 +147,7 @@ struct SDLRWIoContext {
 #endif
 
   SDLRWIoContext(const char *filename)
-      : ops(SDL_RWFromFile(filename, "r")), filename(filename) {
+      : ops(openArchiveRW(filename)), filename(filename) {
     if (!ops)
       throw Exception(Exception::SDLError, "Failed to open file: %s",
                       SDL_GetError());

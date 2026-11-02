@@ -32,6 +32,8 @@ with tempfile.TemporaryDirectory(prefix='ruby-marshal-', dir=scratch) as directo
     assert not re.search(r'st_\w+\(arg->data\b', load), 'Marshal.load still uses an st_table for links'
     assert 'LOAD_DATA_CHUNK_BITS 12' in source
     assert 'r_path2class(r_unique(arg), arg)' in load and 'arg->ivar_ids' in load, 'class/ivar caches missing'
+    assert 'marshal_file_rest(port, &file)' in source and 'marshal_file_keep' in source, 'plain files are not read at once'
 if args.ruby:
     subprocess.run([str(args.ruby.resolve()), str(root / 'tests/ruby-marshal-load.rb')], check=True, timeout=120)
+    subprocess.run([str(args.ruby.resolve()), str(root / 'tests/ruby-marshal-file.rb')], check=True, timeout=120)
 print('Marshal.load chunked link table checks passed')

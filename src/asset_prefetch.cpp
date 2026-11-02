@@ -148,6 +148,20 @@ std::atomic<Uint32> foregroundEnded{0};
 // this long after each load so the next one in the burst finds it idle.
 constexpr Uint32 quietMs = 150;
 
+std::atomic<int> workerHolds{0};
+std::atomic<Uint32> workerReleased{0};
+
+// Before each new file: wait while the game holds the worker (see holdWorker),
+// and for quietMs after, so the next load_data of a burst still finds it idle.
+void waitWhileHeld(State &s) {
+  constexpr Uint32 longestWaitMs = 15000; // never starve the worker for good
+  const Uint32 waitStart = SDL_GetTicks();
+  while (!s.stopping && (workerHolds.load(std::memory_order_relaxed) > 0 ||
+                         SDL_GetTicks() - workerReleased.load(std::memory_order_relaxed) < quietMs) &&
+         SDL_GetTicks() - waitStart < longestWaitMs)
+    SDL_Delay(2);
+}
+
 // Reads the whole file in 64 KB pieces, waiting before each while the game
 // thread is loading a file (see ForegroundLoad), then closes ops.
 bool readAll(SDL_RWops &ops, std::vector<uint8_t> &out) {
@@ -316,6 +330,7 @@ int runPlan(State &s) {
     if (e.ms < worthMs)
       continue;
     std::string k = key(e.name);
+    waitWhileHeld(s);
     {
       Lock hold(s.lock);
       // Wait while too much prepared data is waiting to be taken.
@@ -571,6 +586,12 @@ void noteImage(const std::string &name, double ms) {
 void noteSound(const std::string &name, double ms) {
   note('S', name, ms);
 }
+void holdWorker() { workerHolds.fetch_add(1, std::memory_order_relaxed); }
+void releaseWorker() {
+  workerReleased.store(SDL_GetTicks(), std::memory_order_relaxed);
+  workerHolds.fetch_sub(1, std::memory_order_relaxed);
+}
+
 ForegroundLoad::ForegroundLoad() { foregroundLoads.fetch_add(1, std::memory_order_relaxed); }
 ForegroundLoad::~ForegroundLoad() {
   foregroundEnded.store(SDL_GetTicks(), std::memory_order_relaxed);

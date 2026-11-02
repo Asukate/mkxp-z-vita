@@ -9,7 +9,7 @@
 class DataStream {
 public:
     explicit DataStream(SDL_RWops *ops)
-        : ops(ops), buffer(new unsigned char[32768]) {}
+        : ops(ops), buffer(new unsigned char[bufferSize]) {}
     ~DataStream() { close(); }
     DataStream(const DataStream &) = delete;
     DataStream &operator=(const DataStream &) = delete;
@@ -37,9 +37,18 @@ public:
         auto out = static_cast<unsigned char *>(destination);
         size_t total = 0;
         while (total < length) {
+            if (cursor == available && length - total >= bufferSize) {
+                // A big read goes straight to its destination in one call: in 32 KB pieces
+                // every piece was its own seek and read on the memory card (BLACK SOULS II's
+                // 3 MB Tilesets took 840 ms that way).
+                size_t got = SDL_RWread(ops, out + total, 1, length - total);
+                if (!got) break;
+                total += got;
+                continue;
+            }
             if (cursor == available) {
                 cursor = 0;
-                available = SDL_RWread(ops, buffer.get(), 1, 32768);
+                available = SDL_RWread(ops, buffer.get(), 1, bufferSize);
                 if (!available) break;
             }
             size_t count = std::min(length - total, available - cursor);
@@ -55,6 +64,7 @@ public:
     }
 
 private:
+    static constexpr size_t bufferSize = 32768;
     SDL_RWops *ops;
     std::unique_ptr<unsigned char[]> buffer;
     size_t cursor = 0, available = 0;

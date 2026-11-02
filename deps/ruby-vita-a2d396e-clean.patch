@@ -435,7 +435,7 @@ diff --git a/marshal.c b/marshal.c
 index c5327fc..6749e5c 100644
 --- a/marshal.c
 +++ b/marshal.c
-@@ -1154,6 +1154,27 @@ rb_marshal_dump_limited(VALUE obj, VALUE port, int limit)
+@@ -1154,6 +1154,27 @@
      return port;
  }
  
@@ -463,7 +463,7 @@ index c5327fc..6749e5c 100644
  struct load_arg {
      VALUE src;
      char *buf;
-@@ -1161,13 +1182,74 @@ struct load_arg {
+@@ -1161,13 +1182,74 @@
      long readable;
      long offset;
      st_table *symbols;
@@ -539,7 +539,7 @@ index c5327fc..6749e5c 100644
  static VALUE
  check_load_arg(VALUE ret, struct load_arg *arg, const char *name)
  {
-@@ -1189,7 +1271,7 @@ mark_load_arg(void *ptr)
+@@ -1189,7 +1271,7 @@
      if (!p->symbols)
          return;
      rb_mark_tbl(p->symbols);
@@ -548,7 +548,7 @@ index c5327fc..6749e5c 100644
      rb_mark_tbl(p->partial_objects);
      rb_mark_hash(p->compat_tbl);
  }
-@@ -1213,7 +1295,7 @@ static const rb_data_type_t load_arg_data = {
+@@ -1213,7 +1295,7 @@
      0, 0, RUBY_TYPED_FREE_IMMEDIATELY
  };
  
@@ -557,7 +557,7 @@ index c5327fc..6749e5c 100644
  static VALUE r_object(struct load_arg *arg);
  static VALUE r_symbol(struct load_arg *arg);
  
-@@ -1227,9 +1309,9 @@ too_short(void)
+@@ -1227,9 +1309,9 @@
  static st_index_t
  r_prepare(struct load_arg *arg)
  {
@@ -569,7 +569,7 @@ index c5327fc..6749e5c 100644
      return idx;
  }
  
-@@ -1543,7 +1625,7 @@ r_entry0(VALUE v, st_index_t num, struct load_arg *arg)
+@@ -1543,7 +1625,7 @@
          /* real_obj is kept if not found */
          st_lookup(arg->compat_tbl, v, &real_obj);
      }
@@ -578,7 +578,19 @@ index c5327fc..6749e5c 100644
      st_insert(arg->partial_objects, (st_data_t)real_obj, Qtrue);
      return v;
  }
-@@ -1626,7 +1708,21 @@ r_ivar(VALUE obj, int *has_encoding, struct load_arg *arg)
+@@ -1577,6 +1659,11 @@
+ static VALUE
+ r_leave(VALUE v, struct load_arg *arg, bool partial)
+ {
++    /* HardRPG: nil, true, false, Integers and Symbols are never partial,
++     * compat or freezable; skip the table work done for every value. */
++    if (SPECIAL_CONST_P(v)) {
++	return partial ? v : r_post_proc(v, arg);
++    }
+     v = r_fixup_compat(v, arg);
+     if (!partial) {
+ 	st_data_t data;
+@@ -1626,7 +1713,21 @@
  	do {
  	    VALUE sym = r_symbol(arg);
  	    VALUE val = r_object(arg);
@@ -601,11 +613,10 @@ index c5327fc..6749e5c 100644
  	    if (idx >= 0) {
                  if (rb_enc_capable(obj)) {
                      rb_enc_associate_index(obj, idx);
-@@ -1696,10 +1792,24 @@ obj_alloc_by_klass(VALUE klass, struct load_arg *arg, VALUE *oldclass)
-     return rb_obj_alloc(klass);
+@@ -1697,9 +1798,23 @@
  }
  
-+static VALUE
+ static VALUE
 +r_path2class(VALUE path, struct load_arg *arg)
 +{
 +    st_data_t klass;
@@ -619,7 +630,7 @@ index c5327fc..6749e5c 100644
 +    return (VALUE)klass;
 +}
 +
- static VALUE
++static VALUE
  obj_alloc_by_path(VALUE path, struct load_arg *arg)
  {
 -    return obj_alloc_by_klass(path2class(path), arg, 0);
@@ -627,7 +638,7 @@ index c5327fc..6749e5c 100644
  }
  
  static VALUE
-@@ -1740,10 +1850,9 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+@@ -1740,10 +1855,9 @@
      switch (type) {
        case TYPE_LINK:
  	id = r_long(arg);
@@ -639,7 +650,7 @@ index c5327fc..6749e5c 100644
  	if (!st_lookup(arg->partial_objects, (st_data_t)v, &link)) {
  	    v = r_post_proc(v, arg);
  	}
-@@ -1796,7 +1905,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+@@ -1796,7 +1910,7 @@
  
        case TYPE_UCLASS:
  	{
@@ -648,7 +659,7 @@ index c5327fc..6749e5c 100644
  
  	    if (FL_TEST(c, FL_SINGLETON)) {
  		rb_raise(rb_eTypeError, "singleton can't be loaded");
-@@ -1976,7 +2085,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+@@ -1976,7 +2090,7 @@
  	    long i;
  	    VALUE slot;
  	    st_index_t idx = r_prepare(arg);
@@ -657,7 +668,7 @@ index c5327fc..6749e5c 100644
  	    long len = r_long(arg);
  
              v = rb_obj_alloc(klass);
-@@ -2026,7 +2135,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+@@ -2026,7 +2140,7 @@
        case TYPE_USERDEF:
          {
  	    VALUE name = r_unique(arg);
@@ -666,7 +677,7 @@ index c5327fc..6749e5c 100644
  	    VALUE data;
  	    st_data_t d;
  
-@@ -2052,7 +2161,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+@@ -2052,7 +2166,7 @@
        case TYPE_USRMARSHAL:
          {
  	    VALUE name = r_unique(arg);
@@ -675,7 +686,7 @@ index c5327fc..6749e5c 100644
  	    VALUE oldclass = 0;
  	    VALUE data;
  
-@@ -2094,7 +2203,7 @@ r_object_for(struct load_arg *arg, bool partial, int *ivp, VALUE extmod, int typ
+@@ -2094,7 +2208,7 @@
        case TYPE_DATA:
  	{
  	    VALUE name = r_unique(arg);
@@ -684,7 +695,7 @@ index c5327fc..6749e5c 100644
  	    VALUE oldclass = 0;
  	    VALUE r;
  
-@@ -2194,8 +2303,15 @@ clear_load_arg(struct load_arg *arg)
+@@ -2194,8 +2308,15 @@
      if (!arg->symbols) return;
      st_free_table(arg->symbols);
      arg->symbols = 0;
@@ -702,7 +713,119 @@ index c5327fc..6749e5c 100644
      st_free_table(arg->partial_objects);
      arg->partial_objects = 0;
      if (arg->compat_tbl) {
-@@ -2226,7 +2342,6 @@ rb_marshal_load_with_proc(VALUE port, VALUE proc, bool freeze)
+@@ -2204,13 +2325,98 @@
+     }
+ }
+ 
++/* HardRPG: Marshal.load(file) on a plain File read the file in many small
++ * IO#read/getbyte calls (a 100 KB save: 430 ms on the Vita, 100 ms from a
++ * string). For a plain, read-only, regular File the rest of the file is read
++ * at once (up to 4 MB) and loaded as a string; the file is then left just
++ * after the object, as a stock load leaves it. The rest is kept on the File
++ * (a hidden ivar) while the next load starts where this one ended, so a file
++ * of many objects is still read once. Anything else is unchanged. */
++#include <sys/stat.h>
++#define MARSHAL_FILE_REST_MAX (4L * 1024 * 1024)
++static ID id_marshal_rest;
++
++struct marshal_file_load {
++    VALUE file;
++    long pos;    /* file position of the string's first byte */
++    long start;  /* where this load starts in the string */
++    long end;
++    long len;
++    struct load_arg *arg;
++};
++
++static VALUE
++marshal_file_rest(VALUE port, struct marshal_file_load *f)
++{
++    rb_io_t *fptr;
++    struct stat st;
++    VALUE at, str, kept;
++    long pos;
++
++    if (!RB_TYPE_P(port, T_FILE) || rb_obj_class(port) != rb_cFile) return Qnil;
++    fptr = RFILE(port)->fptr;
++    if (!fptr || fptr->fd < 0) return Qnil;
++    if (!(fptr->mode & FMODE_READABLE) || (fptr->mode & FMODE_WRITABLE)) return Qnil;
++    if (fstat(fptr->fd, &st) != 0 || !S_ISREG(st.st_mode)) return Qnil;
++    at = rb_funcall(port, rb_intern("pos"), 0);
++    if (!FIXNUM_P(at) || FIX2LONG(at) < 0) return Qnil;
++    pos = FIX2LONG(at);
++    /* [rest, its file position, file size, mtime] from the last load. */
++    kept = rb_attr_get(port, id_marshal_rest);
++    rb_ivar_set(port, id_marshal_rest, Qnil);
++    if (RB_TYPE_P(kept, T_ARRAY) && RARRAY_LEN(kept) == 4) {
++	VALUE rest = RARRAY_AREF(kept, 0);
++	long base = NUM2LONG(RARRAY_AREF(kept, 1));
++	if (RB_TYPE_P(rest, T_STRING) && pos >= base && pos < base + RSTRING_LEN(rest) &&
++	    NUM2LONG(RARRAY_AREF(kept, 2)) == (long)st.st_size &&
++	    NUM2LONG(RARRAY_AREF(kept, 3)) == (long)st.st_mtime) {
++	    f->pos = base;
++	    f->start = pos - base;
++	    f->len = RSTRING_LEN(rest);
++	    return rest;
++	}
++    }
++    if ((long)st.st_size - pos > MARSHAL_FILE_REST_MAX) return Qnil;
++    str = rb_funcall(port, s_read, 0);
++    if (!RB_TYPE_P(str, T_STRING) || RSTRING_LEN(str) == 0) {
++	rb_funcall(port, rb_intern("pos="), 1, at);
++	return Qnil;
++    }
++    rb_str_freeze(str);
++    f->pos = pos;
++    f->start = 0;
++    f->len = RSTRING_LEN(str);
++    return str;
++}
++
++static VALUE
++marshal_file_seek(VALUE p)
++{
++    struct marshal_file_load *f = (struct marshal_file_load *)p;
++    long end = f->end >= 0 ? f->end : f->arg->offset;
++    rb_funcall(f->file, rb_intern("pos="), 1, LONG2NUM(f->pos + end));
++    return Qnil;
++}
++
++static void
++marshal_file_keep(struct marshal_file_load *f, VALUE rest)
++{
++    struct stat st;
++    rb_io_t *fptr = RFILE(f->file)->fptr;
++    if (f->end < 0 || f->end >= f->len || !fptr || fptr->fd < 0 || fstat(fptr->fd, &st) != 0) return;
++    rb_ivar_set(f->file, id_marshal_rest,
++		rb_ary_new_from_args(4, rest, LONG2NUM(f->pos), LONG2NUM((long)st.st_size), LONG2NUM((long)st.st_mtime)));
++}
++
++static VALUE marshal_load_body(VALUE p);
++
+ VALUE
+ rb_marshal_load_with_proc(VALUE port, VALUE proc, bool freeze)
+ {
+-    int major, minor;
+     VALUE v;
+     VALUE wrapper; /* used to avoid memory leak in case of exception */
+     struct load_arg *arg;
++    struct marshal_file_load file = {Qnil, 0, 0, -1, 0, 0};
+ 
+     v = rb_check_string_type(port);
+     if (!NIL_P(v)) {
+@@ -2218,6 +2424,11 @@
+     }
+     else if (rb_respond_to(port, s_getbyte) && rb_respond_to(port, s_read)) {
+ 	rb_check_funcall(port, s_binmode, 0, 0);
++	v = marshal_file_rest(port, &file);
++	if (!NIL_P(v)) {
++	    file.file = port;
++	    port = v;
++	}
+     }
+     else {
+ 	io_needed();
+@@ -2226,7 +2437,6 @@
      arg->src = port;
      arg->offset = 0;
      arg->symbols = st_init_numtable();
@@ -710,6 +833,62 @@ index c5327fc..6749e5c 100644
      arg->partial_objects = rb_init_identtable();
      arg->compat_tbl = 0;
      arg->proc = 0;
+@@ -2238,9 +2448,34 @@
+     else
+ 	arg->buf = 0;
+ 
++    if (!NIL_P(proc)) arg->proc = proc;
++    file.arg = arg;
++    if (NIL_P(file.file)) {
++	v = marshal_load_body((VALUE)&file);
++    }
++    else {
++	arg->offset = file.start;
++	v = rb_ensure(marshal_load_body, (VALUE)&file, marshal_file_seek, (VALUE)&file);
++	marshal_file_keep(&file, port);
++	RB_GC_GUARD(port);
++    }
++    RB_GC_GUARD(wrapper);
++
++    return v;
++}
++
++static VALUE
++marshal_load_body(VALUE p)
++{
++    struct marshal_file_load *f = (struct marshal_file_load *)p;
++    struct load_arg *arg = f->arg;
++    int major, minor;
++    VALUE v;
++
+     major = r_byte(arg);
+     minor = r_byte(arg);
+     if (major != MARSHAL_MAJOR || minor > MARSHAL_MINOR) {
++	f->end = arg->offset;
+ 	clear_load_arg(arg);
+ 	rb_raise(rb_eTypeError, "incompatible marshal file format (can't be read)\n\
+ \tformat version %d.%d required; %d.%d given",
+@@ -2252,11 +2487,9 @@
+ 		MARSHAL_MAJOR, MARSHAL_MINOR, major, minor);
+     }
+ 
+-    if (!NIL_P(proc)) arg->proc = proc;
+     v = r_object(arg);
++    f->end = arg->offset;
+     clear_load_arg(arg);
+-    RB_GC_GUARD(wrapper);
+-
+     return v;
+ }
+ 
+@@ -2392,6 +2625,7 @@
+     set_id(s_alloc);
+     set_id(s_call);
+     set_id(s_getbyte);
++    id_marshal_rest = rb_intern("__hardrpg_marshal_rest");
+     set_id(s_read);
+     set_id(s_write);
+     set_id(s_binmode);
 diff --git a/ruby.c b/ruby.c
 index f63cecd..5b8fd73 100644
 --- a/ruby.c

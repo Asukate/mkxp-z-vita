@@ -27,6 +27,7 @@
 #include "sharedstate.h"
 #include "src/util/util.h"
 #include "data-stream.h"
+#include "asset_prefetch.h"
 #include <climits>
 
 #ifdef __vita__
@@ -269,9 +270,17 @@ static VALUE fileIntRaw(VALUE port) {
 static VALUE fileIntEnsureClose(VALUE port) {
     return fileIntClose(0, nullptr, port);
 }
+static VALUE fileIntEnsureCloseRelease(VALUE port) {
+    AssetPrefetch::releaseWorker();
+    return fileIntClose(0, nullptr, port);
+}
 VALUE kernelLoadDataInt(const char *filename, bool rubyExc, bool raw) {
     VALUE port = fileIntForPath(filename, rubyExc);
-    return rb_ensure(raw ? fileIntRaw : fileIntLoad, port, fileIntEnsureClose, port);
+    if (raw)
+        return rb_ensure(fileIntRaw, port, fileIntEnsureClose, port);
+    /* The prefetch worker starts nothing new while the game loads data (see holdWorker). */
+    AssetPrefetch::holdWorker();
+    return rb_ensure(fileIntLoad, port, fileIntEnsureCloseRelease, port);
 }
 
 RB_METHOD_GUARD(kernelLoadData) {

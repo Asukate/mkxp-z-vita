@@ -33,6 +33,8 @@
 #include "graphics.h"
 #include <SDL.h>
 #include <cstring>
+#include <string>
+#include <ruby/encoding.h>
 #include <map>
 #include <unordered_map>
 #include <string>
@@ -783,6 +785,13 @@ static VALUE ge_near_the_screen(VALUE self, int argc, const VALUE *argv, bool) {
     VALUE ay = nSub(call1(gm, S_GM_adjust_y, IV(self, real_y)), nDiv(nDiv(gfxHeight(), INT2FIX(2)), INT2FIX(32)));
     return rbool(nGe(ax, nNeg(dx)) && nLe(ax, dx) && nGe(ay, nNeg(dy)) && nLe(ay, dy));
 }
+/* The default near_the_screen? with other default margins in its def line (games that widened the
+ * screen write `def near_the_screen?(dx = 15, dy = 10)`); native_events.rb passes them in. */
+static VALUE g_nearDx = INT2FIX(12), g_nearDy = INT2FIX(8);
+static VALUE ge_near_the_screen_margins(VALUE self, int argc, const VALUE *argv, bool fromRuby) {
+    VALUE args[2] = {argc > 0 ? argv[0] : g_nearDx, argc > 1 ? argv[1] : g_nearDy};
+    return ge_near_the_screen(self, 2, args, fromRuby);
+}
 static VALUE ge_stop_count_threshold(VALUE self, int, const VALUE *, bool) {
     return nMul(INT2FIX(30), nSub(INT2FIX(5), IV(self, move_frequency)));
 }
@@ -1316,13 +1325,52 @@ static VALUE sc_update(VALUE self, int, const VALUE *, bool fromRuby) {
     call0(self, S_SC_update_balloon);
     return call0(self, S_SC_setup_new_effect);
 }
+/* Off-screen character sprites (option offscreen_skip, set by vxace_map_speedups.rb when the game
+ * uses the default Sprite_Character#update). A sprite is left as it is while both where it was last
+ * drawn and where its character is now lie more than a whole screen beyond the screen's edges, and it
+ * has no animation or balloon running or waiting: it draws nothing there. Big maps keep most of their
+ * events far away (A New Game's field: 116 sprites, 8 on screen). */
+static bool g_offscreenSkip = false;
+static VALUE g_spriteCharacterClass = Qnil;
+static bool farOut(VALUE vx, VALUE vy, double w, double h) {
+    if (!(FIXNUM_P(vx) || RB_FLOAT_TYPE_P(vx)) || !(FIXNUM_P(vy) || RB_FLOAT_TYPE_P(vy)))
+        return false;
+    double x = NUM2DBL(vx), y = NUM2DBL(vy);
+    return x < -w || x > 2 * w || y < -h || y > 2 * h;
+}
+static bool positive(VALUE v) {
+    return FIXNUM_P(v) ? FIX2LONG(v) > 0 : (RB_FLOAT_TYPE_P(v) && NUM2DBL(v) > 0);
+}
+static bool parkedOffscreen(VALUE spr, double w, double h) {
+    if (rb_obj_class(spr) != g_spriteCharacterClass)
+        return false;
+    VALUE c = IV(spr, character);
+    if (NIL_P(c) || RTEST(IV(spr, animation)) || RTEST(IV(spr, balloon_sprite)) ||
+        positive(IV(spr, balloon_duration)))
+        return false;
+    if (positive(call0(c, S_GCB_animation_id)) || positive(call0(c, S_GCB_balloon_id)))
+        return false;
+    return farOut(call0(spr, S_SPR_x), call0(spr, S_SPR_y), w, h) &&
+           farOut(call0(c, S_GCB_screen_x), call0(c, S_GCB_screen_y), w, h);
+}
 static VALUE sm_update_characters(VALUE self, int, const VALUE *, bool) {
     if (nNe(IV(self, map_id), rb_funcall(gameMap(), rb_intern("map_id"), 0)))
         call0(self, S_SM_refresh_characters);
     VALUE list = IV(self, character_sprites);
     if (RB_TYPE_P(list, T_ARRAY) && rb_class_of(list) == rb_cArray) {
-        for (long i = 0; i < RARRAY_LEN(list); ++i)
-            call0(RARRAY_AREF(list, i), S_SC_update);
+        bool skip = g_offscreenSkip && !NIL_P(g_spriteCharacterClass);
+        double w = 0, h = 0;
+        if (skip) {
+            VALUE gw = gfxWidth(), gh = gfxHeight();
+            skip = FIXNUM_P(gw) && FIXNUM_P(gh);
+            if (skip) { w = FIX2LONG(gw); h = FIX2LONG(gh); }
+        }
+        for (long i = 0; i < RARRAY_LEN(list); ++i) {
+            VALUE spr = RARRAY_AREF(list, i);
+            if (skip && parkedOffscreen(spr, w, h))
+                continue;
+            call0(spr, S_SC_update);
+        }
         return list;
     }
     return callOrig(self, S_SM_update_characters, 0, nullptr);
@@ -1747,6 +1795,8 @@ static const NativeDef g_natives[] = {
     NDA(S_GM_adjust_y, "jitter", gm_adjust_y_jitter, -1, 1, 1),
     /* Yanfly Ace Core Engine */
     NDA(S_GE_near_the_screen, "yanfly", ge_near_the_screen_yanfly, -1, 0, 2),
+    /* The default near_the_screen? with other default margins */
+    NDA(S_GE_near_the_screen, "margins", ge_near_the_screen_margins, -1, 0, 2),
     /* LISA's shift_y; Galv's Region Effects */
     ND(S_GCB_shift_y, "lisa", gcb_shift_y_lisa, -1),
     NDW(S_GM_update_events, "galv", gm_update_events_galv, S_H_GM_ue_galv, S_GM_update_events),
@@ -1939,6 +1989,20 @@ static VALUE nev_set_option(VALUE, VALUE name, VALUE val) {
     std::string n = StringValueCStr(name);
     if (n == "viewport_same_skip")
         g_viewportSameSkip = RTEST(val);
+    else if (n == "offscreen_skip") {
+        g_offscreenSkip = RTEST(val);
+        if (g_offscreenSkip && NIL_P(g_spriteCharacterClass)) {
+            g_spriteCharacterClass = rb_path2class("Sprite_Character");
+            rb_gc_register_address(&g_spriteCharacterClass);
+        }
+    }
+    else if (n == "near_the_screen_margins") {
+        Check_Type(val, T_ARRAY);
+        if (RARRAY_LEN(val) != 2 || !FIXNUM_P(rb_ary_entry(val, 0)) || !FIXNUM_P(rb_ary_entry(val, 1)))
+            rb_raise(rb_eArgError, "near_the_screen_margins wants [dx, dy]");
+        g_nearDx = rb_ary_entry(val, 0);
+        g_nearDy = rb_ary_entry(val, 1);
+    }
     else
         rb_raise(rb_eArgError, "unknown option %s", n.c_str());
     return val;
@@ -1950,6 +2014,43 @@ static VALUE nev_reset_stats(VALUE) {
 }
 static VALUE nev_epoch(VALUE) { return UINT2NUM(g_epoch); }
 static VALUE nev_checks(VALUE) { return UINT2NUM(g_checks); }
+
+/* HardRPGNative.norm_line(line): the same as Norm.norm_line in native_events.rb (drop a # comment
+ * outside quotes, strip, runs of spaces/tabs become one space), which runs for every script line
+ * while a game loads. Byte by byte is the same as character by character: quotes, \ and # are ASCII
+ * and never part of a UTF-8 multibyte character. */
+static VALUE nev_norm_line(VALUE, VALUE line) {
+    Check_Type(line, T_STRING);
+    const char *p = RSTRING_PTR(line);
+    long n = RSTRING_LEN(line), cut = n;
+    char q = 0;
+    bool esc = false;
+    for (long i = 0; i < n; i++) {
+        char c = p[i];
+        if (q) {
+            if (esc) esc = false;
+            else if (c == '\\') esc = true;
+            else if (c == q) q = 0;
+        } else if (c == '"' || c == '\'') q = c;
+        else if (c == '#') { cut = i; break; }
+    }
+    VALUE s = rb_funcall(rb_enc_str_new(p, cut, rb_enc_get(line)), rb_intern("strip"), 0);
+    p = RSTRING_PTR(s);
+    n = RSTRING_LEN(s);
+    bool runs = false;
+    for (long i = 0; i < n && !runs; i++)
+        runs = p[i] == '\t' || (p[i] == ' ' && i + 1 < n && p[i + 1] == ' ');
+    if (!runs) return s;
+    std::string out;
+    out.reserve(n);
+    for (long i = 0; i < n; i++) {
+        if (p[i] == ' ' || p[i] == '\t') {
+            while (i + 1 < n && (p[i + 1] == ' ' || p[i + 1] == '\t')) i++;
+            out += ' ';
+        } else out += p[i];
+    }
+    return rb_enc_str_new(out.data(), (long)out.size(), rb_enc_get(line));
+}
 
 /* Ruby helpers kept in the engine: resolution checks and the change hooks. */
 static const char *kHelpers = R"RUBY(
@@ -2377,6 +2478,7 @@ static VALUE initRuby(VALUE) {
     rb_define_singleton_method(g_module, "known", RUBY_METHOD_FUNC(nev_known), 2);
     rb_define_singleton_method(g_module, "epoch", RUBY_METHOD_FUNC(nev_epoch), 0);
     rb_define_singleton_method(g_module, "checks", RUBY_METHOD_FUNC(nev_checks), 0);
+    rb_define_singleton_method(g_module, "norm_line", RUBY_METHOD_FUNC(nev_norm_line), 1);
     rb_define_singleton_method(g_module, "cbench", RUBY_METHOD_FUNC(nev_cbench), 3);
 
     /* Engine methods the native code calls. */

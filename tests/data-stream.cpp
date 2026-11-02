@@ -55,5 +55,17 @@ int main() {
         assert(buffered.reads == 4);
     }
     assert(buffered.closes == 1);
-    std::cout << "PASS: short reads, mixed byte/block reads, buffered position, EOF and single close\n";
+    Fixture whole; whole.chunk = size_t(-1); whole.bytes = f.bytes;
+    {
+        // A big read is one read of the source, also after a few buffered bytes.
+        DataStream s(open(whole));
+        assert(s.getByte() == whole.bytes[0] && whole.reads == 1);
+        std::vector<unsigned char> head(32766);
+        assert(s.read(head.data(), head.size()) == head.size() && whole.reads == 1);
+        std::vector<unsigned char> rest(100003 - 32767);
+        assert(s.read(rest.data(), rest.size()) == rest.size() && whole.reads == 2);
+        assert(std::equal(rest.begin(), rest.end(), whole.bytes.begin() + 32767));
+        assert(s.position() == 100003 && s.remaining() == 0 && s.getByte() == -1);
+    }
+    std::cout << "PASS: short reads, mixed byte/block reads, buffered position, direct big reads, EOF and single close\n";
 }

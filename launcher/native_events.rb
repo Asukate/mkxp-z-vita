@@ -14,7 +14,12 @@ module HardRPGNative
   module Norm
     module_function
 
+    # The engine's C version of norm_line (binding/native-events.cpp) gives the same text much faster.
+    NATIVE = HardRPGNative.respond_to?(:norm_line)
+
     def strip_comment(line)
+      return line unless (hash = line.index('#'))
+      return line[0, hash] unless line.include?('"') || line.include?("'")
       q = nil; esc = false; i = 0
       while i < line.size
         c = line[i]
@@ -32,6 +37,7 @@ module HardRPGNative
     end
 
     def norm_line(line)
+      return HardRPGNative.norm_line(line) if NATIVE
       strip_comment(line).strip.gsub(/[ \t]+/, ' ')
     end
 
@@ -268,8 +274,56 @@ module HardRPGNative
             'Game_Character' => %i[star_aura_effect_update],
             'Game_Temp' => %i[multi_viewport_accessor],
             'Game_System' => %i[anti_lag] }.freeze
+  # A section is checked only when it opens one of these.
+  NEEDLES = (CLASSES + ATTRS.keys).map { |c| c.sub(/\.self\z/, '') }.uniq.flat_map { |c| ["class #{c}", "module #{c}"] }.freeze
   @swapped = []
   @kept = []
+
+  # The methods Norm finds in a section, kept on the memory card by the section's text, so a game's
+  # next start skips reading its scripts again (BLACK SOULS II: about 2 s of every start on the Vita).
+  # Only the methods of CLASSES are kept; what they mean (swapped or kept) is still decided each start.
+  module SectionCache
+    VERSION = 1 # change it whenever Norm's output changes
+    MAX = 4000  # sections; the ones this start used are kept first
+
+    class << self
+      def path
+        $hardrpg_native_events_cache || 'ux0:/data/hardrpg/cache/native-events.dat'
+      end
+
+      def sections
+        @sections ||= begin
+          d = (Marshal.load(File.binread(path)) if path && File.file?(path)) rescue nil
+          d.is_a?(Hash) && d[:version] == VERSION && d[:sections].is_a?(Hash) ? d[:sections] : {}
+        end
+      end
+
+      def methods(src)
+        k = "#{Zlib.crc32(src)}:#{src.bytesize}"
+        (@used ||= {})[k] = true
+        hit = sections[k]
+        return hit if hit.is_a?(Array)
+        @dirty = true
+        sections[k] = Norm.methods(src).select { |key, _| CLASSES.include?(key.split('#', 2)[0]) }.to_a
+      end
+
+      def save
+        return unless @dirty && path
+        @dirty = false
+        s = sections
+        if s.size > MAX
+          old = s.keys.reject { |k| @used[k] }
+          old.first(s.size - MAX).each { |k| s.delete(k) }
+        end
+        dir = File.dirname(path)
+        [File.dirname(dir), dir].each { |d| Dir.mkdir(d) unless File.directory?(d) }
+        File.binwrite("#{path}.tmp", Marshal.dump({ version: VERSION, sections: s }))
+        File.rename("#{path}.tmp", path)
+      rescue StandardError, NotImplementedError
+        nil
+      end
+    end
+  end
 
   class << self
     attr_reader :swapped, :kept
@@ -279,13 +333,35 @@ module HardRPGNative
       "on (#{@swapped.size} native, #{@kept.size} kept)"
     end
 
+    # Seconds spent here while the game's scripts load, and the span from the first section to the last.
+    def timing
+      return 'none' unless @first_at
+      format('%.0f ms in checks, sections %.0f ms', (@spent || 0) * 1000, (@last_at - @first_at) * 1000)
+    end
+
     def section_loaded(fname, src)
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      @first_at ||= now
+      section_check(fname, src)
+    ensure
+      @last_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      @spent = (@spent || 0) + (@last_at - now)
+    end
+
+    def section_check(fname, src)
       return if $hardrpg_native_events == false
-      return unless (CLASSES + ATTRS.keys).any? { |c| c = c.sub(/\.self\z/, ''); src.include?("class #{c}") || src.include?("module #{c}") }
-      Norm.methods(src).each do |key, (text, line)|
+      return unless NEEDLES.any? { |n| src.include?(n) }
+      SectionCache.methods(src).each do |key, (text, line)|
         cname, name = key.split('#', 2)
-        next unless CLASSES.include?(cname)
         variant = STOCK["#{key}:#{Zlib.crc32(text)}:#{Zlib.adler32(text)}:#{text.bytesize}"]
+        margins = nil
+        if variant.nil? && key == 'Game_Event#near_the_screen?' &&
+           text =~ /\Adef near_the_screen\?\(dx = (\d+), dy = (\d+)\)\n/
+          # The default body with other default margins (a wider screen): native, with those margins.
+          margins = [$1.to_i, $2.to_i]
+          plain = text.sub(/\A[^\n]*/, 'def near_the_screen?(dx = 12, dy = 8)')
+          variant = 'margins' if STOCK["#{key}:#{Zlib.crc32(plain)}:#{Zlib.adler32(plain)}:#{plain.bytesize}"] == ''
+        end
         base = cname.sub(/\.self\z/, '')
         klass = Object.const_defined?(base) ? Object.const_get(base) : nil
         next unless klass.is_a?(Module)
@@ -308,6 +384,7 @@ module HardRPGNative
         if variant && defined_here && klass.public_method_defined?(name, false)
           klass.class_eval(AURA_TAIL, __FILE__, __LINE__) if variant == 'aura'
           if replace(klass, name.to_sym, variant, cname)
+            set_option('near_the_screen_margins', margins) if variant == 'margins'
             @swapped << key
             (@variant_of ||= {})[key] = variant
           else
@@ -317,17 +394,28 @@ module HardRPGNative
           @kept << key # a method we know, but this game's text differs
         end
       end
-      lines = src.lines
+      lines = nil
       ATTRS.each do |cname, names|
         next unless src.include?("class #{cname}") && Object.const_defined?(cname)
         klass = Object.const_get(cname)
         names.each do |n|
           um = (klass.instance_method(n) rescue nil)
           loc = um && um.owner.equal?(klass) && um.source_location
-          next unless loc && loc[0] == fname.to_s && lines[loc[1] - 1].to_s =~ /\A\s*attr_(reader|accessor)\s.*:#{n}\b/
+          next unless loc && loc[0] == fname.to_s && (lines ||= src.lines)[loc[1] - 1].to_s =~ /\A\s*attr_(reader|accessor)\s.*:#{n}\b/
           attr(klass, n)
         end
       end
     end
   end
+end
+
+# The game's Main section calls rgss_main once its other sections have run: keep what was read then.
+if Kernel.respond_to?(:rgss_main, true)
+  Kernel.send(:alias_method, :hardrpg_native_events_rgss_main, :rgss_main)
+  Kernel.send(:private, :hardrpg_native_events_rgss_main)
+  Kernel.send(:define_method, :rgss_main) do |*args, &block|
+    HardRPGNative::SectionCache.save
+    hardrpg_native_events_rgss_main(*args, &block)
+  end
+  Kernel.send(:private, :rgss_main)
 end

@@ -59,6 +59,12 @@ struct ForegroundLoad {
   ForegroundLoad(const ForegroundLoad &) = delete;
   ForegroundLoad &operator=(const ForegroundLoad &) = delete;
 };
+// The game thread is busy with work of its own that the worker slows down
+// (load_data: on the Vita, decoding on another core made BLACK SOULS II's
+// database load 3.5 s slower, Classes 100 ms -> 840 ms). While held, and for
+// a moment after, the worker starts no new file. Calls nest; any thread.
+void holdWorker();
+void releaseWorker();
 // Loads under this cost are not worth preparing.
 constexpr double worthMs = 15.0;
 } // namespace AssetPrefetch
