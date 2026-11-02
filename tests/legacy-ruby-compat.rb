@@ -241,6 +241,42 @@ HardRPGLegacyErrinfo.apply(sections)
 raise 'apply did not rewrite' unless sections[0][3] == fixed && sections[1][3] == 'p 1'
 RubyVM::InstructionSequence.compile(fixed)
 
+# CACAO's Screenshot script (A New Game, issue 13): a class variable in a
+# top-level `class << Graphics` is Object's, as in Ruby 1.9.
+module ShotGraphics; def self.update; :drawn; end; end
+shot = <<~RUBY
+  module Shot; WAIT = 3; end
+  class << ShotGraphics
+    @@shot_count = 0
+    alias _shot_update update
+    def update
+      _shot_update
+      @@shot_count = Shot::WAIT if @@shot_count <= 0
+      @@shot_count -= 1
+    end
+  end
+  class << self; def shot_main; :main; end; end
+RUBY
+begin
+  eval(shot, TOPLEVEL_BINDING, 'Shot')
+  raise 'top-level class variable no longer raises'
+rescue RuntimeError => error
+  raise error unless error.message.include?('class variable access from toplevel')
+end
+fixed = HardRPGToplevelClassVars.rewrite(shot)
+raise 'class variable block not wrapped' unless fixed&.include?("class Object; class << ShotGraphics\n")
+raise 'class variable rewrite changed line count' unless fixed.count("\n") == shot.count("\n")
+raise 'class << self wrapped' if fixed.include?('class Object; class << self')
+eval(fixed, TOPLEVEL_BINDING, 'Shot')
+3.times { ShotGraphics.update }
+raise 'class variable not on Object' unless Object.class_variable_get(:@@shot_count) == 0
+raise 'class << self block changed' unless shot_main == :main
+inside = "class Foo\n  class << Bar\n    @@x = 1\n  end\nend\n"
+raise 'nested class << touched' unless HardRPGToplevelClassVars.rewrite(inside).nil?
+raise 'block without class variable touched' unless HardRPGToplevelClassVars.rewrite("class << X\n  def y; end\nend\n# @@\n").nil?
+raise 'unparsable section touched' unless HardRPGToplevelClassVars.rewrite("class << X\n  @@x = (\n").nil?
+Object.remove_class_variable(:@@shot_count)
+
 if RUBY_VERSION >= '3.4'
   puts "skipped: Ruby #{RUBY_VERSION} parses with Prism; run under Ruby 3.1 (the engine's) to 3.3"
   exit

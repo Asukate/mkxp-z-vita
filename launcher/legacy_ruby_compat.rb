@@ -92,6 +92,67 @@ module HardRPGLegacyErrinfo
 end
 HardRPGLegacyErrinfo.apply($RGSS_SCRIPTS) unless Kernel.respond_to?(:rgss_main, true)
 
+# Ruby 1.8/1.9 read a class variable inside a top-level `class << Graphics`
+# as Object's class variable, with a warning; Ruby 3.0 raises "class variable
+# access from toplevel". CACAO's Screenshot script does it, so A New Game
+# (RJ273807) stopped before its title screen (issue 13). Wrapping the block in
+# `class Object; ... end` on the same lines gives Object's class variable, as
+# 1.9 did. Only blocks on a named class or module are wrapped: on `self`
+# the wrap would change what self is. Ruby's own parser finds the block.
+module HardRPGToplevelClassVars
+  OPEN = 'class Object; '.freeze
+  CLOSE = '; end'.freeze
+  SKIP = %i[CLASS MODULE DEFN DEFS].freeze
+  RECEIVERS = %i[CONST COLON2 COLON3].freeze
+
+  def self.rewrite(source)
+    return nil unless source.include?('@@') && source.include?('class <<')
+    root = begin
+      RubyVM::AbstractSyntaxTree.parse(source)
+    rescue SyntaxError, StandardError
+      return nil
+    end
+    blocks = []
+    collect(root, blocks)
+    return nil if blocks.empty?
+    lines = source.split("\n", -1).map { |line| line.dup.force_encoding(Encoding::BINARY) }
+    # Last block first, so earlier positions still hold.
+    blocks.sort_by { |node| [-node.first_lineno, -node.first_column] }.each do |node|
+      lines[node.last_lineno - 1].insert(node.last_column, CLOSE)
+      lines[node.first_lineno - 1].insert(node.first_column, OPEN)
+    end
+    lines.join("\n").force_encoding(source.encoding)
+  end
+
+  # Top-level `class << Name` blocks holding a class variable. Class, module
+  # and method bodies are not top level, so their contents are left alone.
+  def self.collect(node, found)
+    return unless node.is_a?(RubyVM::AbstractSyntaxTree::Node)
+    return if SKIP.include?(node.type)
+    if node.type == :SCLASS
+      found << node if RECEIVERS.include?(node.children[0]&.type) && class_var?(node)
+      return
+    end
+    node.children.each { |child| collect(child, found) }
+  end
+
+  def self.class_var?(node)
+    return false unless node.is_a?(RubyVM::AbstractSyntaxTree::Node)
+    return true if %i[CVAR CVASGN].include?(node.type)
+    node.children.any? { |child| class_var?(child) }
+  end
+
+  def self.apply(scripts)
+    return unless scripts.is_a?(Array)
+    scripts.each do |section|
+      next unless section.is_a?(Array) && section[3].is_a?(String)
+      fixed = rewrite(section[3])
+      section[3] = fixed if fixed
+    end
+  end
+end
+HardRPGToplevelClassVars.apply($RGSS_SCRIPTS)
+
 # Ruby 3.1's peephole pass sometimes crashes the Vita build while compiling
 # a large script (iseq_peephole_optimize). Shin Megami Tensei VX hit it at
 # boot about one launch in three, on stock 0.4.5 too. Turned off for games on

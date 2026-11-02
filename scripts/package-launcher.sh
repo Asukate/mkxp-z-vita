@@ -118,6 +118,7 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/launcher/sprite_fastpath.rb=sprite_fastpath.rb" \
     -a "$ROOT/launcher/xp_scene_switch.rb=xp_scene_switch.rb" \
     -a "$ROOT/launcher/native_events.rb=native_events.rb" \
+    -a "$ROOT/launcher/vxace_map_speedups.rb=vxace_map_speedups.rb" \
     -a "$ROOT/launcher/vita_controls.rb=vita_controls.rb" \
     -a "$ROOT/launcher/vita_tap_to_walk.rb=vita_tap_to_walk.rb" \
     -a "$ROOT/launcher/crash_rescue.rb=crash_rescue.rb" \
