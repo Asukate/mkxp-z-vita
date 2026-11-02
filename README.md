@@ -178,6 +178,12 @@ terminal in that folder and run the lines for your engine:
   **L + R + Select** or **Back to library** saves the game where it is, and
   **Resume where you left** opens it again.
 - **Performance counter:** a narrow column in the screen border.
+- **A New Game:** starts (it stopped with "class variable access from
+  toplevel"), and VX Ace maps with many events run faster.
+- **Faster loading:** game data and saves load faster; BLACK SOULS II reaches
+  its title in about 12 seconds instead of 17.
+- **Safe saves:** a save that stops part way (the app closed or lost power)
+  no longer replaces the old save with a broken one.
 
 Full list: [0.4.9 release notes](docs/RELEASE-NOTES-0.4.9.md).
 

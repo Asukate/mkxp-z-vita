@@ -49,6 +49,39 @@ and 0.33 s.
 - Quick saves made after a map change no longer fail to resume in some games,
   such as Mario The Music Box.
 
+## A New Game and faster VX Ace maps
+
+- **A New Game (RJ273807, Chinese translation):** starts
+  ([issue #13](https://github.com/Asukate/mkxp-z-vita/issues/13)). Its
+  screenshot script used a class variable inside a top-level
+  `class << Graphics` block, which Ruby 1.9 allowed and newer Ruby stops on
+  with "class variable access from toplevel". Such blocks now run as they did
+  on Windows, for every game.
+- VX Ace maps with many events refresh less often: only when a variable or
+  switch a page checks really changes. Sprites far off screen skip their
+  update. Each change is checked against the game's own scripts first. A New
+  Game's largest field map runs at 60 fps instead of 46.
+- A window and a viewport with the same z now draw in the order they were
+  made, as in RPG Maker VX Ace. In A New Game, a battle portrait no longer
+  covers the status window and the commands.
+
+## Faster loading
+
+- Game archives and saves are read in large pieces. BLACK SOULS II's tilesets
+  load in a third of the time, and a 100 KB save in a quarter.
+- Background image loading pauses while the game loads its data.
+- Checks for popular scripts are cached per game, so BLACK SOULS II reaches
+  its title in about 12 seconds instead of 17.
+
+## Safe saves
+
+- A save is written to a separate file first and replaces the old save only
+  when it is complete. A write that stops part way (the app closed, crashed or
+  lost power) leaves the old save as it was
+  ([issue #14](https://github.com/Asukate/mkxp-z-vita/issues/14): a BLACK
+  SOULS II save that could not be picked). A save already cut off before this
+  version cannot be repaired.
+
 ## Game picture and performance counter
 
 - Games that set their own screen size now get the right picture shape at

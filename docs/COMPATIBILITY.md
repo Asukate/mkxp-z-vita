@@ -19,7 +19,7 @@ end, so problems later in those games are still possible.
 | Game | Engine | Status | Notes |
 | --- | --- | --- | --- |
 | BLACK SOULS | VX Ace | ✅ Runs | |
-| BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). Large weapon upgrade lists render correctly and no longer fail at the texture-size limit (0.4.7). |
+| BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). Large weapon upgrade lists render correctly and no longer fail at the texture-size limit (0.4.7). Reaches its title about 5 seconds sooner, and an interrupted save keeps the old one (0.4.9). |
 | Shin Megami Tensei VX: The Genesis | VX | ✅ Runs | Loading games, 3D dungeons and crash rescue fixed in 0.4.6. |
 | Pocket Mirror (original 2016 VX Ace edition) | VX Ace | 🟡 Partial | Startup crash fixed in 0.4.8. Opening room, movement, item pickup and inventory checked; later progression untested. |
 | Hello Charlotte EP1 (English v2.0) | VX Ace | ✅ Runs | Item popup TypeError fixed in 0.4.8. Played to the true ending on 0.4.8 (itch.io version, community report), 50–60 fps; bad ending untested. Some long dialogue lines are cut off by two or three letters at the right edge (known issue). |
@@ -36,6 +36,7 @@ end, so problems later in those games are still possible.
 | VorlorN | XP | ✅ Runs | |
 | (Mario) The Music Box 1.3.1 (itch.io) | XP | 🟡 Partial | Starts since 0.4.9 (it stopped with "Unable to load scripts" before). Title, intro and the mansion checked, including a quick save and resume; later progression untested. |
 | N.P.C. Dreams | VX Ace | ✅ Runs | Frequent frame drops. |
+| A New Game (RJ273807, Chinese translation) | VX Ace | 🟡 Partial | Starts since 0.4.9 (it stopped with "class variable access from toplevel" before). Later progression untested. |
 
 ## RPG Maker 2000 and 2003 (EasyRPG)
 
