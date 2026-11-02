@@ -29,6 +29,7 @@ ruby tests/vita-controls-overlay.rb 2>&1 | tee "$WS/logs/vita-controls-overlay.l
 ruby tests/legacy-ruby-compat.rb 2>&1 | tee "$WS/logs/legacy-ruby-compat.log"
 ruby tests/vxace-map-speedups.rb 2>&1 | tee "$WS/logs/vxace-map-speedups.log"
 ruby tests/native-events-cache.rb 2>&1 | tee "$WS/logs/native-events-cache.log"
+ruby tests/safe-save.rb 2>&1 | tee "$WS/logs/safe-save.log"
 ruby tests/sprite-fastpath.rb 2>&1 | tee "$WS/logs/sprite-fastpath.log"
 ./scripts/test-midi-host.sh "$WS/host-midi" 2>&1 | tee "$WS/logs/midi.log"
 python3 tests/performance-metrics.py 2>&1 | tee "$WS/logs/performance-metrics.log"

@@ -18,6 +18,7 @@
   "preloadScript": [
     "app0:/legacy_ruby_compat.rb",
     "app0:/time_strftime_guard.rb",
+    "app0:/safe_save.rb",
     "app0:/performance_patch.rb",
     "app0:/sprite_fastpath.rb",
     "app0:/xp_scene_switch.rb",
