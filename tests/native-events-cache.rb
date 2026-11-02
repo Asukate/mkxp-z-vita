@@ -23,8 +23,8 @@ SECTION = <<~RUBY
     end
   end
 RUBY
-dir = File.expand_path("../build/tests/native-events-cache-#{$$}", __dir__)
-[File.dirname(File.dirname(dir)), File.dirname(dir), dir].each { |d| Dir.mkdir(d) unless File.directory?(d) }
+require 'tmpdir'
+dir = Dir.mktmpdir('native-events-cache-')
 begin
   $hardrpg_native_events_cache = File.join(dir, 'cache', 'native-events.dat')
   fresh = HardRPGNative::Norm.methods(SECTION).select { |k, _| k.start_with?('Game_Event#') }.to_a

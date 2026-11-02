@@ -33,6 +33,7 @@ static unsigned generation; static int opens,closes;
 static bool failOpen,failSeek; static SDL_RWops files[64];
 unsigned vitaResumeEpoch() { return generation; }
 SDL_RWops *SDL_RWFromFile(const char*,const char*) { return failOpen ? nullptr : &files[opens++]; }
+static SDL_RWops *openArchiveRW(const char *f) { return SDL_RWFromFile(f,"rb"); }
 int64_t SDL_RWsize(SDL_RWops *f) { return f->stale ? -1 : 8; }
 int64_t SDL_RWseek(SDL_RWops *f,int64_t p,int mode) {
  if(f->stale||failSeek||p<0||p>8)return -1;

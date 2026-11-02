@@ -18,8 +18,8 @@ contents = { map: Array.new(2000) { |i| Point.new(i, "s#{i}" * 3) }, sym: :name,
              custom: Custom.new(7), shared: (s = 'x' * 50; [s, s]), utf8: 'ゲーム' }
 
 # No tmpdir: a miniruby has no standard library.
-dir = File.expand_path("../build/tests/marshal-file-#{$$}", __dir__)
-[File.dirname(File.dirname(dir)), File.dirname(dir), dir].each { |d| Dir.mkdir(d) unless File.directory?(d) }
+dir = File.join(ENV['TMPDIR'] || '/tmp', "hardrpg-marshal-file-#{$$}")
+Dir.mkdir(dir) unless File.directory?(dir)
 begin
   path = File.join(dir, 'Save01.rvdata2')
   File.open(path, 'wb') { |f| Marshal.dump(header, f); Marshal.dump(contents, f); f.write('tail') }

@@ -1,6 +1,6 @@
 # Check launcher/vxace_map_speedups.rb: when each speedup turns on, and that what it computes is what
 # the game's own code computes.
-src = File.read(File.expand_path('../launcher/native_events.rb', __dir__))
+src = File.read(File.expand_path('../launcher/native_events.rb', __dir__), encoding: 'UTF-8')
 eval("module HardRPGNative\n#{src[/  module Norm.*?\n  end\n/m]}\nend")
 module Graphics; def self.update; end; end
 module Kernel; private def rgss_main; end; end
@@ -258,8 +258,8 @@ check('a changed update_other turns it off',
 check('a Ruby update turns it off', O.check(F.definitions(sections(stock_sc)), native.take(1)).include?('not native'))
 # Kept check results: a second start reads them instead of checking the scripts again.
 C = HardRPGVXAceScanCache
-dir = File.expand_path("../build/tests/vxace-scan-#{$$}", __dir__)
-[File.dirname(File.dirname(dir)), File.dirname(dir), dir].each { |d| Dir.mkdir(d) unless File.directory?(d) }
+require 'tmpdir'
+dir = Dir.mktmpdir('vxace-scan-')
 begin
   $hardrpg_vxace_scan_cache = File.join(dir, 'cache', 'scan.dat')
   $RGSS_SCRIPTS = sections(STOCK_VARIABLES, STOCK_EVENT)
