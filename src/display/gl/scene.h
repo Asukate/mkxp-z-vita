@@ -82,7 +82,7 @@ protected:
 class SceneElement
 {
 public:
-	SceneElement(Scene &scene, int z = 0, int spriteY = 0);
+	SceneElement(Scene &scene, int z = 0, int spriteY = 0, bool isViewport = false);
 	virtual ~SceneElement();
 
 	void setScene(Scene &scene);
@@ -144,8 +144,12 @@ private:
 	 * In RGSS3, they tried to fix this for the Window class, badly. It
 	 * now behaves as if it was a sprite with fixed Y of infinity. This
 	 * means that sprites created _after_ a window with the same Z will
-	 * still always be displayed below said window. */
+	 * still always be displayed below said window.
+	 * That rule does not hold between a window and a viewport: there
+	 * the older one is drawn first (MOG/WD battle portraits in a z 100
+	 * window sit behind the z 100 battle info viewport). */
 	int spriteY;
+	const bool isViewport;
 };
 
 #define ABOUT_TO_ACCESS_NOOP \

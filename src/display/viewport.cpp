@@ -100,21 +100,21 @@ struct ViewportPrivate
 };
 
 Viewport::Viewport(int x, int y, int width, int height)
-    : SceneElement(*shState->screen()),
+    : SceneElement(*shState->screen(), 0, 0, true),
       sceneLink(this)
 {
 	initViewport(x, y, width, height);
 }
 
 Viewport::Viewport(Rect *rect)
-    : SceneElement(*shState->screen()),
+    : SceneElement(*shState->screen(), 0, 0, true),
       sceneLink(this)
 {
 	initViewport(rect->x, rect->y, rect->width, rect->height);
 }
 
 Viewport::Viewport()
-    : SceneElement(*shState->screen()),
+    : SceneElement(*shState->screen(), 0, 0, true),
       sceneLink(this)
 {
 	const Graphics &graphics = shState->graphics();

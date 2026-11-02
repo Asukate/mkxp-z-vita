@@ -20,6 +20,8 @@
 */
 
 #include "scene.h"
+
+#include <limits>
 #include "sharedstate.h"
 
 Scene::Scene()
@@ -102,13 +104,14 @@ void Scene::composite()
 }
 
 
-SceneElement::SceneElement(Scene &scene, int z, int spriteY)
+SceneElement::SceneElement(Scene &scene, int z, int spriteY, bool isViewport)
     : link(this),
       creationStamp(shState->genTimeStamp()),
       z(z),
       visible(true),
       scene(&scene),
-      spriteY(spriteY)
+      spriteY(spriteY),
+      isViewport(isViewport)
 {
 	scene.insert(*this);
 }
@@ -176,7 +179,13 @@ bool SceneElement::operator<(const SceneElement &o) const
 				/* RGSS2: If two sprites' Z values collide,
 				 * their Y coordinates decide draw order. Only
 				 * on equal Y does the creation time take effect */
-				if (spriteY != o.spriteY)
+				/* A window against a viewport goes by creation
+				 * time (see scene.h) */
+				const bool windowVsViewport =
+					(isViewport && o.spriteY == std::numeric_limits<int>::max()) ||
+					(o.isViewport && spriteY == std::numeric_limits<int>::max());
+
+				if (spriteY != o.spriteY && !windowVsViewport)
 					return (spriteY < o.spriteY);
 			}
 
