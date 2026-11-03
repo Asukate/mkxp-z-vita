@@ -547,8 +547,9 @@ static bool vitaVideoDecoderCall(VALUE function, VALUE args, VALUE *result) {
 static bool vitaUtilsCall(VALUE function, VALUE args, VALUE *result) {
     if (std::strcmp(StringValueCStr(function), "AVSetEnv") != 0 || RARRAY_LEN(args) != 0)
         return false;
-    if (!hardrpg::prepareWindowsAppData())
-        rb_sys_fail("AVSetEnv");
+    const char *failed = "AVSetEnv";
+    if (!hardrpg::prepareWindowsAppData(&failed))
+        rb_sys_fail(failed);
     *result = INT2NUM(1);
     return true;
 }
