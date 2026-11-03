@@ -37,6 +37,7 @@
 #include <SDL_keyboard.h>
 #include <SDL_mouse.h>
 #include <SDL_clipboard.h>
+#include <SDL_timer.h>
 
 #include <vector>
 #include <cmath>
@@ -1254,6 +1255,10 @@ void Input::update()
 {
     shState->checkShutdown();
     p->checkBindingChange(shState->rtData());
+#ifdef __vita__
+    if (!vitaInputAutoUpdate)
+        vitaGameInputTicks = SDL_GetTicks();
+#endif
     
     p->swapBuffers();
     p->clearBuffer();

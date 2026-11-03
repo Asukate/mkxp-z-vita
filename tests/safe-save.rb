@@ -89,6 +89,20 @@ Dir.mktmpdir do |dir|
     File.open('notes.txt', 'w') { |f| f.write('x') }
     File.open('Save05.rvdata', 'ab') { |f| f.write('+') }
     raise 'append changed' unless File.binread('Save05.rvdata') == 'kw+'
+    # Saves are collected and written in large chunks, not piece by piece,
+    # and every write form keeps its bytes in order.
+    File.open('Save06.rvdata2', 'wb') do |f|
+      Marshal.dump({ small: 1 }, f)
+      raise 'small save written piece by piece' unless File.size(f.path) == 0
+      Marshal.dump(Array.new(60_000) { |i| "piece #{i}" }, f)
+      raise 'big save not written in chunks' unless File.size(f.path) > 0
+    end
+    File.open('Save06.rvdata2', 'rb') do |f|
+      Marshal.load(f)
+      raise 'chunked contents' unless Marshal.load(f) == Array.new(60_000) { |i| "piece #{i}" }
+    end
+    File.open('Save07.rxdata', 'wb') { |f| f.print('a'); f.puts('b'); f << 'c'; f.write('d', 'e'); f.putc('f') }
+    raise 'write forms' unless File.binread('Save07.rxdata') == "ab\ncdef"
     raise 'temp files left' unless Dir.glob('*.hardrpg-*').empty?
   end
 end

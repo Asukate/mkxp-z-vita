@@ -12,8 +12,14 @@
 #include "util/debugwriter.h"
 #if defined(__vita__) || defined(__psp2__)
 #include "util/win32-text.h"
+#include "util/win32-appdata.h"
 #include "display/bitmap.h"
 #include "vita_video_decoder.h"
+#include "sharedstate.h"
+#include "input/input.h"
+#include "input/vita_input.h"
+#include "display/graphics.h"
+#include <climits>
 #include <algorithm>
 #include <string>
 #endif
@@ -357,6 +363,52 @@ static int vitaVKScancode(unsigned int key) {
 /* Set by the input code: keys held through a key mapping in the profile. */
 bool vitaMappedKey(int scancode);
 
+/* Some games replace Input with their own Win32 keyboard reader and never
+ * call the engine's Input.update (Finding Paradise's WASD module), so the
+ * pad was never read and every key looked released. Once the game has not
+ * updated the engine's input for a moment while it polls keys, update it
+ * here once per frame and answer the keys RPG Maker's default keyboard
+ * layout gives each button. Letters a game may also use to walk (WASD, Q)
+ * are left out. */
+static int vitaVKButton(unsigned int key) {
+    switch (key) {
+        case 0x0d: case 0x20: case 'C': return Input::C;
+        case 0x1b: case 'X': case 0x60: return Input::B;
+        case 0x10: case 0xa0: case 0xa1: case 'Z': return Input::A;
+        case 0x21: return Input::L;
+        case 0x22: return Input::R;
+        case 0x25: return Input::Left;
+        case 0x26: return Input::Up;
+        case 0x27: return Input::Right;
+        case 0x28: return Input::Down;
+        default: return 0;
+    }
+}
+
+static bool vitaKeyboardOnlyGame() {
+    if (SDL_GetTicks() - vitaGameInputTicks < 250)
+        return false;
+    static int lastFrame = INT_MIN;
+    const int frame = shState->graphics().getFrameCount();
+    if (frame != lastFrame) {
+        lastFrame = frame;
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            Debug() << "Input: the game reads the keyboard itself; the pad now answers its keys";
+        }
+        vitaInputAutoUpdate = true;
+        try {
+            shState->input().update();
+        } catch (...) {
+            vitaInputAutoUpdate = false;
+            throw;
+        }
+        vitaInputAutoUpdate = false;
+    }
+    return true;
+}
+
 static bool vitaVKPressed(unsigned int key) {
     int count = 0;
     const Uint8 *state = SDL_GetKeyboardState(&count);
@@ -370,7 +422,10 @@ static bool vitaVKPressed(unsigned int key) {
         (key == 0x12 && vitaMappedKey(SDL_SCANCODE_RALT)) ||
         (key == 0x0d && vitaMappedKey(SDL_SCANCODE_KP_ENTER)))
         return true;
-    return state && scancode < count && state[scancode] != 0;
+    if (state && scancode < count && state[scancode] != 0)
+        return true;
+    const int button = vitaVKButton(key);
+    return button && vitaKeyboardOnlyGame() && shState->input().isPressed(button);
 }
 
 /* The last Windows message box a game showed. The Vita cannot display it, so
@@ -380,6 +435,15 @@ static bool vitaVKPressed(unsigned int key) {
 static std::string g_messageBoxCaption, g_messageBoxText;
 static Uint32 g_messageBoxTicks = 0;
 static bool g_messageBoxShown = false;
+
+void hardrpgRememberMessageBox(const std::string &caption, const std::string &text) {
+    g_messageBoxCaption = caption;
+    g_messageBoxText = text;
+    g_messageBoxTicks = SDL_GetTicks();
+    g_messageBoxShown = true;
+    Debug() << "MessageBox (the Vita cannot show it):" << caption << "|"
+            << text.substr(0, 600);
+}
 
 bool hardrpgLastMessageBox(std::string &caption, std::string &text, double &secondsAgo) {
     if (!g_messageBoxShown)
@@ -476,6 +540,44 @@ static bool vitaVideoDecoderCall(VALUE function, VALUE args, VALUE *result) {
     return true;
 }
 
+/* Freebird's Windows utility exports AVSetEnv to tell Ruby where settings
+ * and saves belong. Supply an actual writable application-data directory,
+ * rather than the generic DLL no-op (which leaves ENV['AV_APPDATA'] nil).
+ * The game's own subdirectory keeps its data separate from other games. */
+static bool vitaUtilsCall(VALUE function, VALUE args, VALUE *result) {
+    if (std::strcmp(StringValueCStr(function), "AVSetEnv") != 0 || RARRAY_LEN(args) != 0)
+        return false;
+    if (!hardrpg::prepareWindowsAppData())
+        rb_sys_fail("AVSetEnv");
+    *result = INT2NUM(1);
+    return true;
+}
+
+/* The Vita has no Steam client. Games that call steam_api.dll through
+ * Win32API (Finding Paradise and other Freebird releases) quit unless
+ * SteamAPI_Init reports 1. Report the API as started and make the rest
+ * no-ops, as the Linux builds of those games run without Steam; achievements
+ * stay off because their helper DLLs keep answering 0 (no Steam data). */
+static bool vitaSteamApiCall(VALUE function, VALUE *result) {
+    const char *name = StringValueCStr(function);
+    if (!std::strcmp(name, "SteamAPI_Init") || !std::strcmp(name, "SteamAPI_InitSafe")) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            Debug() << "steam_api: no Steam client on the Vita; reporting" << name << "as started";
+        }
+        *result = INT2NUM(1);
+        return true;
+    }
+    if (!std::strcmp(name, "SteamAPI_RestartAppIfNecessary") ||
+        !std::strcmp(name, "SteamAPI_Shutdown") ||
+        !std::strcmp(name, "SteamAPI_RunCallbacks")) {
+        *result = INT2NUM(0);
+        return true;
+    }
+    return false;
+}
+
 /* kernel32 text conversion (see util/win32-text.h). */
 static bool vitaKernel32Call(VALUE function, VALUE args, VALUE *result) {
     const char *name = StringValueCStr(function);
@@ -534,16 +636,31 @@ static bool vitaUser32Call(VALUE function, VALUE args, VALUE *result) {
             g_messageBoxText = vitaNarrowArg(rb_ary_entry(args, 1));
             g_messageBoxCaption = vitaNarrowArg(rb_ary_entry(args, 2));
         }
-        g_messageBoxTicks = SDL_GetTicks();
-        g_messageBoxShown = true;
-        Debug() << "MessageBox (the Vita cannot show it):" << g_messageBoxCaption << "|"
-                << g_messageBoxText.substr(0, 600);
+        hardrpgRememberMessageBox(g_messageBoxCaption, g_messageBoxText);
         *result = INT2NUM(messageBoxAnswer(static_cast<unsigned long>(vitaLongArg(rb_ary_entry(args, 3)))));
         return true;
     }
     if (std::strcmp(name, "GetAsyncKeyState") == 0 || std::strcmp(name, "GetKeyState") == 0) {
         unsigned int key = NUM2UINT(rb_ary_entry(args, 0));
         *result = INT2NUM(vitaVKPressed(key) ? 0x8000 : 0);
+        return true;
+    }
+    /* There is no mouse: report the cursor as parked outside the game window,
+     * as on a PC whose pointer is elsewhere. Mouse scripts (Finding Paradise's
+     * Near Fantastica/SephirothSpawn module) pack the POINT these fill and
+     * crashed on the nil a failed call left; ScreenToClient keeps the point. */
+    if (std::strcmp(name, "GetCursorPos") == 0 && RARRAY_LEN(args) == 1) {
+        VALUE point = rb_ary_entry(args, 0);
+        if (!RB_TYPE_P(point, RUBY_T_STRING) || RSTRING_LEN(point) < 8)
+            return false;
+        rb_str_modify(point);
+        const int32_t outside[2] = {-32768, -32768};
+        memcpy(RSTRING_PTR(point), outside, sizeof outside);
+        *result = INT2NUM(1);
+        return true;
+    }
+    if (std::strcmp(name, "ScreenToClient") == 0 && RARRAY_LEN(args) == 2) {
+        *result = INT2NUM(1);
         return true;
     }
     if (std::strcmp(name, "GetKeyboardState") == 0) {
@@ -671,6 +788,17 @@ RB_METHOD_GUARD(MiniFFI_call) {
         if (library == "kernel32.dll" || library == "kernel32") {
             VALUE handled;
             if (vitaKernel32Call(rb_iv_get(self, "_funcname"), args, &handled))
+                return handled;
+        }
+        if (library == "utils.dll" || library == "utils") {
+            VALUE handled;
+            if (vitaUtilsCall(rb_iv_get(self, "_funcname"), args, &handled))
+                return handled;
+        }
+        if (library == "steam_api.dll" || library == "steam_api" ||
+            library == "steam_api64.dll" || library == "steam_api64") {
+            VALUE handled;
+            if (vitaSteamApiCall(rb_iv_get(self, "_funcname"), &handled))
                 return handled;
         }
         if (library == "rpgxpvideodecoder.dll" || library == "rpgxpvideodecoder") {

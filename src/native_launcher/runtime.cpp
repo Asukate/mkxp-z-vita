@@ -616,6 +616,20 @@ public:
 };
 } // namespace
 
+bool nativeLauncherDirectBoot() {
+  try {
+    auto conf = json5pp::parse5(hardrpg::readFile("app0:/mkxp.json", 65536));
+    for (auto k : {"gameFolder", "customScript"}) {
+      auto i = conf.as_object().find(k);
+      if (i != conf.as_object().end() && i->second.is_string() &&
+          !i->second.as_string().empty())
+        return true;
+    }
+  } catch (const std::exception &) {
+  }
+  return false;
+}
+
 bool nativeLauncherRequested(int argc, char **argv) {
   for (int i = 1; i < argc; ++i)
     if (!std::strcmp(argv[i], "--hardrpg-play")) {
@@ -625,22 +639,9 @@ bool nativeLauncherRequested(int argc, char **argv) {
       std::map<std::string, std::string> roots;
       int version = 0;
       protoLauncherPick(folder, version, rtps, config, roots, false);
-      if (folder != "app0:/stub")
-        return false;
-      return true;
+      return folder == "app0:/stub";
     }
-  // A configured single-game VPK must keep its direct boot behavior.
-  try {
-    auto conf = json5pp::parse5(hardrpg::readFile("app0:/mkxp.json", 65536));
-    for (auto k : {"gameFolder", "customScript"}) {
-      auto i = conf.as_object().find(k);
-      if (i != conf.as_object().end() && i->second.is_string() &&
-          !i->second.as_string().empty())
-        return false;
-    }
-  } catch (const std::exception &) {
-  }
-  return true;
+  return !nativeLauncherDirectBoot();
 }
 int runNativeLauncher(bool returning) {
   using namespace hardrpg;

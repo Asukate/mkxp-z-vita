@@ -21,8 +21,42 @@ module HardRPGSafeSave
 
   # Writes the temp file and swaps it in on close.
   module Writer
+    # Marshal.dump writes a save in small pieces and each one went to the
+    # Vita's memory card on its own: Finding Paradise's 324 KB autosave froze
+    # the game for 0.7-1.8 s. Pieces are collected and written in chunks of
+    # CHUNK bytes (a bounded copy, as big saves run close to the memory limit).
+    CHUNK = 256 * 1024
+    RAW_WRITE = IO.instance_method(:write)
+
+    def write(*data)
+      return super if @hardrpg_save_abandoned
+      buffer = (@hardrpg_save_buffer ||= String.new(capacity: CHUNK, encoding: Encoding::BINARY))
+      written = 0
+      data.each do |piece|
+        piece = piece.to_s
+        buffer << piece.b
+        written += piece.bytesize
+      end
+      hardrpg_save_flush if buffer.bytesize >= CHUNK
+      written
+    end
+
+    def hardrpg_save_flush
+      buffer = @hardrpg_save_buffer
+      return if buffer.nil? || buffer.empty?
+      RAW_WRITE.bind(self).call(buffer)
+      buffer.clear
+    end
+
+    def flush
+      hardrpg_save_flush unless @hardrpg_save_abandoned
+      super
+    end
+
     def close
       return super if closed? || @hardrpg_save_abandoned
+      hardrpg_save_flush
+      @hardrpg_save_buffer = nil
       super
       HardRPGSafeSave.promote(path, @hardrpg_save_target)
     end
@@ -30,6 +64,7 @@ module HardRPGSafeSave
     # The game's write raised: keep the old file, drop the partial one.
     def hardrpg_abandon
       @hardrpg_save_abandoned = true
+      @hardrpg_save_buffer = nil
       close unless closed?
       File.delete(path) rescue nil
       HardRPGSafeSave.abandoned = @hardrpg_save_target

@@ -294,6 +294,8 @@ namespace {
 bool fastForwardHeld = false;
 }
 void vitaSetFastForwardHeld(bool held) { fastForwardHeld = held; }
+unsigned int vitaGameInputTicks = 0;
+bool vitaInputAutoUpdate = false;
 bool vitaFastForwardHeld() { return fastForwardHeld; }
 bool vitaMappedKey(int scancode) {
   return scancode > 0 && scancode < 256 && mappedKeys[scancode];

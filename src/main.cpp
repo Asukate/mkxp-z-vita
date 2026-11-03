@@ -751,7 +751,14 @@ int main(int argc, char *argv[]) {
     {
         FILE *protoPick = std::fopen("ux0:/data/hardrpg/selection.json", "rb");
         const bool playingGame = conf.gameFolder != "app0:/stub";
-        if (rtData.rqTermAck && (protoPick || playingGame || eventThread.returnToLauncherRequested())) {
+#ifdef MKXPZ_NATIVE_LAUNCHER
+        const bool directBoot = nativeLauncherDirectBoot();
+#else
+        const bool directBoot = false;
+#endif
+        // A package that boots one game (gameFolder in its mkxp.json) exits
+        // when that game ends instead of starting it again.
+        if (!directBoot && rtData.rqTermAck && (protoPick || playingGame || eventThread.returnToLauncherRequested())) {
             if (protoPick)
                 std::fclose(protoPick);
             if (eventThread.returnToLauncherRequested())

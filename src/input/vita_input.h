@@ -30,6 +30,10 @@ void vitaSetMappedKeys(const std::array<bool, 256> &keys);
 bool vitaMappedKey(int scancode);
 // An input mapped to Fast forward is held (read by Graphics each frame).
 void vitaSetFastForwardHeld(bool held);
+// When the game itself last called Input.update (SDL ticks), and whether
+// the current update is one the engine started for a keyboard-only game.
+extern unsigned int vitaGameInputTicks;
+extern bool vitaInputAutoUpdate;
 bool vitaFastForwardHeld();
 
 #endif

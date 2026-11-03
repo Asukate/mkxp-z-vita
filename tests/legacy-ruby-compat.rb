@@ -222,6 +222,11 @@ raise 'Thread.critical not kept' unless Thread.critical == true
 Thread.critical = saved
 raise 'Thread.critical not restored' unless Thread.critical == false
 
+# Ruby 1.8 Object#id (Finding Paradise's caterpillar reads nil.id).
+raise 'nil.id wrong' unless nil.id == 4 && true.id == 2 && false.id == 0
+raise 'Object#id wrong' unless (o = Object.new).id == o.object_id
+raise 'own id changed' unless Struct.new(:id).new(7).id == 7
+
 # Ruby 1.8 Object#to_a (Shin Megami Tensei VX state ids).
 raise 'Integer#to_a missing' unless 77.to_a == [77] && 77.to_a[0] == 77
 raise 'Range#to_a changed' unless (1..3).to_a == [1, 2, 3]
@@ -378,6 +383,48 @@ kinds = repair_and_eval('Section010', <<~RUBY)
   end
 RUBY
 check('when colon', [:one, :two, :many], kinds)
+
+# Ruby 1.8 allowed comma-separated hash keys/values, including across lines.
+# Finding Paradise's message shortcuts still use this form; desktop To the
+# Moon already ships the equivalent explicit => pairs.
+shortcuts = repair_and_eval('Section101', <<~'RUBY')
+  shortcuts = {'\\.', '\\p[4]', '\\|', '\\p[20]',
+               'with,comma', 'and } brace',
+               "quoted\"key", "value", # preserve comments and line numbers
+              }
+  shortcuts
+RUBY
+check('legacy hash pairs', {'\\.' => '\\p[4]', '\\|' => '\\p[20]',
+                            'with,comma' => 'and } brace', 'quoted"key' => 'value'}, shortcuts)
+check('modern hash untouched', nil, HardRPGLegacySyntax.repair(
+  "hash = {'key' => 'value'}\n", "Hash:1: syntax error, unexpected ',', expecting =>"))
+check('odd legacy hash untouched', nil, HardRPGLegacySyntax.repair(
+  "hash = {'key', 'value', 'odd'}\n", "Hash:1: syntax error, unexpected ',', expecting =>"))
+
+# Ruby 1.8 `name (x).width` meant name(x).width (Finding Paradise's
+# paragraph formatter, which also needs the Struct.new (...) syntax repair).
+FakeSize = Struct.new(:width)
+class FakeBitmap; def text_size(s) FakeSize.new(s.size * 10) end; end
+fits = repair_and_eval('Section115', <<~'RUBY')
+  Formatted = Struct.new (:lines, :bitmap)
+  f = Formatted.new ([], FakeBitmap.new)
+  substring = "Technician"
+  wide = f.bitmap.text_size (substring).width > 50
+  width = f.bitmap.text_size (substring).width
+  [wide, width]
+RUBY
+check('spaced call after syntax repair', [true, 100], fits)
+{
+  "w = b.text_size (s).width\n" => "w = b.text_size(s).width\n",
+  "x = foo (a)[0]" => "x = foo(a)[0]",
+  "p (1 + 2).to_s" => "p(1 + 2).to_s",
+  "y = bar (x).y.z(1)" => "y = bar(x).y.z(1)",
+  "x = foo (a.b)" => nil, "x = foo(a).b" => nil, "y = foo (a) + 1" => nil,
+  "return (x).y" => nil, "s = \"text_size (x).width\"" => nil, "if (a).b then end" => nil,
+}.each { |source, want| check("spaced call #{source.inspect}", want, HardRPGSpacedCall.rewrite(source)) }
+scripts = [[1, 'A', '', "v = foo (a).b\n"], [2, 'B', '', "v = foo(a).b\n"]]
+HardRPGSpacedCall.apply(scripts)
+check('spaced call applied', ["v = foo(a).b\n", "v = foo(a).b\n"], scripts.map { |x| x[3] })
 
 # A section that fails for another reason gets no rewrite.
 check('unrelated error', nil, HardRPGLegacySyntax.repair("x = (\n", "{0001}:1: syntax error, unexpected end-of-input"))

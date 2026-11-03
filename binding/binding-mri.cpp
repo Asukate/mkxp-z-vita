@@ -491,8 +491,19 @@ static void mriBindingInit() {
 #endif
 }
 
+#ifdef __vita__
+void hardrpgRememberMessageBox(const std::string &caption, const std::string &text);
+#endif
+
 static void showMsg(const std::string &msg) {
+#ifdef __vita__
+    // Ruby p/print also use desktop message boxes. The Vita SDL backend
+    // cannot display them: preserve the text for the existing quit report,
+    // just as Win32API MessageBox does, without entering a repaint wait.
+    hardrpgRememberMessageBox("Game message", msg);
+#else
     shState->eThread().showMessageBox(msg.c_str());
+#endif
 }
 
 static void showEngineError(const std::string &msg) {

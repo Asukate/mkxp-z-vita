@@ -39,9 +39,10 @@ end unless Kernel.respond_to?(:rgss_main, true) || Object.method_defined?(:to_a)
 # Ruby 1.8 gave every object id, an old name for object_id; 1.9 removed it.
 # Exit Fate's party screen reads the id of all six party slots, empty ones
 # (nil) too, so it quit with NoMethodError whenever the party had fewer than
-# six members (issue 15). nil and true answer what Ruby 1.8 gave them (4 and
-# 2; false and Integers already match), so scripts that keep these ids see
-# the same values as on Windows. Classes with their own id (actors, items,
+# six members (issue 15). Finding Paradise starts with an empty party and
+# its caterpillar script reads $game_party.actors[0].id (issue 17). nil and
+# true answer what Ruby 1.8 gave them (4 and 2; false and Integers already
+# match), so scripts that keep these ids see the same values as on Windows. Classes with their own id (actors, items,
 # events) keep theirs. RGSS1/2 only, like to_a.
 unless Kernel.respond_to?(:rgss_main, true) || Object.method_defined?(:id)
   class Object
@@ -224,6 +225,93 @@ module HardRPGToplevelClassVars
   end
 end
 HardRPGToplevelClassVars.apply($RGSS_SCRIPTS)
+
+# Ruby 1.8 (RGSS1/2) read `name (x).width` as `name(x).width`: a space
+# before the parentheses still made them the argument list. Ruby 1.9 and
+# later read `name((x).width)`. Finding Paradise's paragraph formatter wraps
+# text with `text_size (substring).width > @max_width`, and its menu closed
+# the game with NoMethodError (width for a String). The space is removed
+# where Ruby's parser shows a call whose single argument starts with that
+# parenthesis, closed before a `.` or `[`. Sections that only parse after
+# the legacy syntax repair are rewritten there (HardRPGLegacySyntax.repair).
+module HardRPGSpacedCall
+  CALLS = %i[CALL FCALL QCALL].freeze
+  HINT = /[\w?!] +\([^()\n]*\)[.\[]/
+
+  def self.enabled?
+    !Kernel.respond_to?(:rgss_main, true)
+  end
+
+  def self.rewrite(source)
+    return nil unless source.is_a?(String) && HINT.match?(source)
+    root = begin
+      RubyVM::AbstractSyntaxTree.parse(source)
+    rescue SyntaxError, StandardError
+      return nil
+    end
+    bin = source.dup.force_encoding(Encoding::BINARY)
+    starts = [0]
+    bin.each_line { |line| starts << starts[-1] + line.bytesize }
+    cuts = []
+    walk(root) do |node|
+      next unless CALLS.include?(node.type)
+      args = node.children[-1]
+      next unless args.is_a?(RubyVM::AbstractSyntaxTree::Node) && args.type == :LIST
+      items = args.children.compact
+      next unless items.size == 1
+      arg = items[0]
+      from = starts[node.first_lineno - 1] + node.first_column
+      to = starts[arg.first_lineno - 1] + arg.first_column
+      space = /[\w?!]( +)\z/.match(bin[from...to])
+      next unless space && bin[to] == '('
+      close = matching(bin, to)
+      next unless close && close < starts[arg.last_lineno - 1] + arg.last_column - 1
+      next unless bin[close + 1] == '.' || bin[close + 1] == '['
+      cuts << [to - space[1].size, space[1].size]
+    end
+    return nil if cuts.empty?
+    cuts.uniq.sort.reverse_each { |at, size| bin[at, size] = '' }
+    bin.force_encoding(source.encoding)
+  end
+
+  def self.walk(node, &block)
+    return unless node.is_a?(RubyVM::AbstractSyntaxTree::Node)
+    yield node
+    node.children.each { |child| walk(child, &block) }
+  end
+
+  # The ")" closing the "(" at open (quoted text skipped), or nil.
+  def self.matching(bin, open)
+    depth = 0
+    i = open
+    while i < bin.size
+      c = bin[i]
+      if c == '"' || c == "'"
+        i += 1
+        i += (bin[i] == '\\' ? 2 : 1) while i < bin.size && bin[i] != c
+      elsif c == '('
+        depth += 1
+      elsif c == ')'
+        depth -= 1
+        return i if depth.zero?
+      elsif c == "\n"
+        return nil
+      end
+      i += 1
+    end
+    nil
+  end
+
+  def self.apply(scripts)
+    return unless enabled? && scripts.is_a?(Array)
+    scripts.each do |section|
+      next unless section.is_a?(Array) && section[3].is_a?(String)
+      fixed = rewrite(section[3])
+      section[3] = fixed if fixed
+    end
+  end
+end
+HardRPGSpacedCall.apply($RGSS_SCRIPTS)
 
 # Ruby 3.1's peephole pass sometimes crashes the Vita build while compiling
 # a large script (iseq_peephole_optimize). Shin Megami Tensei VX hit it at
@@ -634,13 +722,25 @@ end
 # The engine calls repair only after a script section raises SyntaxError,
 # before any of that section has run, and evaluates the result in its place,
 # so a section that parses is never touched. Each rewrite keeps the line
-# count and the 1.8/1.9 meaning, and only touches the lines Ruby reported.
+# count and the 1.8/1.9 meaning, and only touches the construct Ruby reported.
 module HardRPGLegacySyntax
   NOT_CALLS = %w[and begin case defined? do else elsif ensure for if in not or
                  rescue return then unless until when while].freeze
 
   # Returns the repaired source, or nil when nothing reported can be fixed.
   def self.repair(source, message)
+    fixed = repair_syntax(source, message)
+    return fixed unless fixed && HardRPGSpacedCall.enabled?
+    HardRPGSpacedCall.rewrite(fixed) || fixed
+  end
+
+  def self.repair_syntax(source, message)
+    if message.include?('expecting =>')
+      message.scan(/:(\d+): .*expecting =>/) do |number|
+        fixed = string_pair_hash(source, number[0].to_i)
+        return fixed if fixed
+      end
+    end
     lines = source.split("\n", -1)
     changed = false
     message.scan(/:(\d+): (.*)$/) do |number, text|
@@ -653,6 +753,44 @@ module HardRPGLegacySyntax
       changed = true
     end
     changed ? lines.join("\n") : nil
+  end
+
+  # Ruby 1.8 read {'key', 'value'} as {'key' => 'value'}. Only repair a
+  # reported assignment whose whole hash consists of quoted string pairs;
+  # quotes, escaped characters, comments and multiline values are preserved.
+  # Other expressions and already explicit hashes keep their original error.
+  def self.string_pair_hash(source, number)
+    lines = source.lines
+    line = lines[number - 1]
+    return unless line
+    start = /\A\s*[@$]?[A-Za-z_]\w*\s*=\s*(\{)/.match(line)
+    return unless start
+    offset = lines.take(number - 1).sum(&:length) + start.end(1)
+    cursor = offset
+    commas = []
+    count = 0
+    loop do
+      space = /\G(?:\s|\#[^\n]*)*/.match(source, cursor)
+      cursor = space.end(0)
+      token = /\G(?:'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")/m.match(source, cursor)
+      return unless token
+      count += 1
+      cursor = token.end(0)
+      cursor = /\G(?:\s|\#[^\n]*)*/.match(source, cursor).end(0)
+      case source[cursor]
+      when ','
+        commas << cursor if count.odd?
+        cursor += 1
+        cursor = /\G(?:\s|\#[^\n]*)*/.match(source, cursor).end(0)
+        break if source[cursor] == '}'
+      when '}' then break
+      else return
+      end
+    end
+    return if count.odd? || commas.empty?
+    fixed = source.dup
+    commas.reverse_each { |index| fixed[index] = ' =>' }
+    fixed
   end
 
   def self.repair_line(line, text)
