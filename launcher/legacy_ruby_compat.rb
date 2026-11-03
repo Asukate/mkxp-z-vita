@@ -36,6 +36,78 @@ class Object
   end
 end unless Kernel.respond_to?(:rgss_main, true) || Object.method_defined?(:to_a)
 
+# Ruby 1.8 gave every object id, an old name for object_id; 1.9 removed it.
+# Exit Fate's party screen reads the id of all six party slots, empty ones
+# (nil) too, so it quit with NoMethodError whenever the party had fewer than
+# six members (issue 15). nil and true answer what Ruby 1.8 gave them (4 and
+# 2; false and Integers already match), so scripts that keep these ids see
+# the same values as on Windows. Classes with their own id (actors, items,
+# events) keep theirs. RGSS1/2 only, like to_a.
+unless Kernel.respond_to?(:rgss_main, true) || Object.method_defined?(:id)
+  class Object
+    def id
+      object_id
+    end
+  end
+
+  class NilClass
+    def id
+      4
+    end
+  end
+
+  class TrueClass
+    def id
+      2
+    end
+  end
+end
+
+# Other Ruby 1.8 methods that 1.9 removed, for RGSS1/2 games (VX Ace already
+# ran on 1.9). Each is added only when nothing defines it, so a class or
+# script with its own keeps it.
+unless Kernel.respond_to?(:rgss_main, true)
+  # Object#type, the old name for class. Rataime's "Sprite Destruction"
+  # (VorlorN) checks `check.type == Fixnum` when the player faces an event.
+  class Object
+    def type
+      self.class
+    end unless method_defined?(:type)
+  end
+
+  # String was Enumerable by lines: `text.each { |line| ... }`.
+  class String
+    def each(separator = $/, &block)
+      return each_line(separator) unless block
+      each_line(separator, &block)
+      self
+    end unless method_defined?(:each)
+  end
+
+  class Array
+    # Number of elements that are not nil (Pokemon Essentials defines its own).
+    def nitems
+      count { |item| !item.nil? }
+    end unless method_defined?(:nitems)
+
+    # Elements at the given indexes, as values_at.
+    def indexes(*indexes)
+      values_at(*indexes)
+    end unless method_defined?(:indexes)
+
+    alias_method :indices, :indexes unless method_defined?(:indices)
+  end
+
+  class Hash
+    # Values for the given keys, as values_at.
+    def indexes(*keys)
+      values_at(*keys)
+    end unless method_defined?(:indexes)
+
+    alias_method :indices, :indexes unless method_defined?(:indices)
+  end
+end
+
 # WF-RGSS, a Japanese script base, tells RPG Maker versions apart by probing
 # Ruby: `defined? BasicObject` means VX Ace and `defined? Graphics.resize_screen`
 # means VX or later. On Ruby 3.1 BasicObject always exists and mkxp-z gives

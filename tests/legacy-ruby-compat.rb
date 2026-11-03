@@ -227,6 +227,33 @@ raise 'Integer#to_a missing' unless 77.to_a == [77] && 77.to_a[0] == 77
 raise 'Range#to_a changed' unless (1..3).to_a == [1, 2, 3]
 raise 'nil.to_a changed' unless nil.to_a == []
 raise 'Hash#to_a changed' unless({1 => 2}.to_a == [[1, 2]])
+
+# Ruby 1.8 Object#id (Exit Fate's party screen reads nil.id, issue 15).
+raise 'nil.id not the Ruby 1.8 value' unless nil.id == 4
+raise 'true.id not the Ruby 1.8 value' unless true.id == 2 && false.id == 0
+raise 'Integer#id not object_id' unless 7.id == 15
+plain = Object.new
+raise 'Object#id not object_id' unless plain.id == plain.object_id
+class TestActorWithId; attr_reader :id; def initialize; @id = 3; end; end
+raise 'own id replaced' unless TestActorWithId.new.id == 3
+old_actors = [TestActorWithId.new, nil].map(&:id)
+raise 'party slots not read as on Windows' unless old_actors == [3, 4]
+
+# Other Ruby 1.8 methods.
+raise 'Object#type not class' unless 5.type == Integer && 'a'.type == String && nil.type == NilClass
+class TestWeather; attr_accessor :type; end
+weather = TestWeather.new
+weather.type = 3
+raise 'own type replaced' unless weather.type == 3
+raise 'RubyVM node type replaced' unless RubyVM::AbstractSyntaxTree.parse('1').type == :SCOPE
+lines = []
+text = "one\ntwo"
+raise 'String#each not self' unless text.each { |line| lines << line }.equal?(text)
+raise 'String#each not by lines' unless lines == ["one\n", 'two']
+raise 'String#each enumerator' unless text.each.to_a == ["one\n", 'two']
+raise 'Array#nitems' unless [1, nil, false, nil].nitems == 2
+raise 'Array#indexes' unless [:a, :b, :c].indexes(0, 2) == [:a, :c] && [:a, :b].indices(1) == [:b]
+raise 'Hash#indexes' unless({ a: 1, b: 2 }.indexes(:b, :x) == [2, nil] && { a: 1 }.indices(:a) == [1])
 raise 'Array() changed' unless Array(5) == [5] && Array(nil) == [] && [*7] == [7]
 
 # WF-RGSS clears $! after each scene (Ruby 1.8 allowed it).
