@@ -42,6 +42,7 @@ check('binary string') { s = '618b80d52574b77700347504a54315b37b93acdc0aff0d0500
 check('binary hash key') { k = 'c447bc9b86f7e45a4884909c6b3980687472b085fdb16eafc07f74bcd41aba06'.b; Marshal.load(Marshal.dump({ k => 1 }))[k] == 1 }
 check('binary array') { a = ['44dfedf8f152a1a39d011285b9c9f1d55d5c938165e78a531749c83a53e4999d'.b, 1]; Marshal.load(Marshal.dump(a)) == a }
 check('binary struct') { S = Struct.new(:v); o = S.new('1c5ea4f8f8d614afec24302aa90e201ecbad1826b57a1c7d7244b9a9d098f5ef'.b); Marshal.load(Marshal.dump(o)).v == o.v }
+check('binary nested') { a = [['aaffc487c8fa217bb291450f33d3b991453c1c9018b78197af00a2f02845d528'.b]]; Marshal.load(Marshal.dump(a)) == a }
 check('values') { loaded[1][19_999].code == 19_999 % 400 && loaded[1][19_999].parameters[3] == '19999' }
 
 # Cycles, user-defined dump formats, and compat loaders (Rational, Complex).
