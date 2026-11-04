@@ -615,18 +615,21 @@ static void vita_img_set_error(const char *message) {
 }
 
 typedef struct VitaPNGReader {
-    const unsigned char *data;
+    SDL_RWops *source;
     size_t size;
     size_t position;
+    volatile int failed;
 } VitaPNGReader;
 
 static void vita_png_read(png_structp png_ptr, png_bytep out, png_size_t length) {
     VitaPNGReader *reader = (VitaPNGReader *)png_get_io_ptr(png_ptr);
-    if (!reader || length > reader->size - reader->position) {
-        png_error(png_ptr, "PNG read outside input");
+    if (!reader || reader->position > reader->size ||
+        length > reader->size - reader->position ||
+        SDL_RWread(reader->source, out, 1, length) != length) {
+        if (reader) reader->failed = 1;
+        png_error(png_ptr, "incomplete image stream read");
         return;
     }
-    memcpy(out, reader->data + reader->position, length);
     reader->position += length;
 }
 
@@ -667,12 +670,13 @@ static void vita_image_failure(const char *stage, unsigned width, unsigned heigh
     if (vitaImageFailure) vitaImageFailure(stage, width, height, size);
 }
 
-static SDL_Surface *vita_png_decode(const unsigned char *data, size_t size) {
+static SDL_Surface *vita_png_decode(SDL_RWops *source, size_t size) {
     png_structp png = NULL;
     png_infop info = NULL;
-    png_bytep *rows = NULL;
-    SDL_Surface *surface = NULL;
-    VitaPNGReader reader = {data, size, 0};
+    /* These values change after setjmp and must survive a libpng longjmp. */
+    png_bytep *volatile rows = NULL;
+    SDL_Surface *volatile surface = NULL;
+    VitaPNGReader reader = {source, size, 0, 0};
     png_uint_32 width;
     png_uint_32 height;
     int bit_depth;
@@ -680,10 +684,6 @@ static SDL_Surface *vita_png_decode(const unsigned char *data, size_t size) {
     png_uint_32 rowbytes;
     unsigned int row;
 
-    if (size < 8 || png_sig_cmp((png_bytep)data, 0, 8)) {
-        vita_img_set_error("not a PNG");
-        return NULL;
-    }
     png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
     info = png ? png_create_info_struct(png) : NULL;
     if (!png || !info) {
@@ -692,7 +692,7 @@ static SDL_Surface *vita_png_decode(const unsigned char *data, size_t size) {
         return NULL;
     }
     if (setjmp(png_jmpbuf(png))) {
-        vita_img_set_error("PNG decode failed");
+        vita_img_set_error(reader.failed ? "incomplete image stream read" : "PNG decode failed");
         free(rows);
         if (surface) SDL_FreeSurface(surface);
         png_destroy_read_struct(&png, &info, NULL);
@@ -788,17 +788,47 @@ SDL_Surface *IMG_Load(const char *file) {
 SDL_Surface *IMG_Load_RW(SDL_RWops *src, int freesrc) { return IMG_LoadTyped_RW(src, freesrc, "PNG"); }
 SDL_Surface *IMG_LoadTyped_RW(SDL_RWops *src, int freesrc, const char *type) {
     unsigned char *data;
+    unsigned char signature[8];
+    Sint64 length;
     size_t size;
     SDL_Surface *surface;
     (void)type;
+    if (!src) {
+        vita_img_set_error("image stream is null");
+        return NULL;
+    }
+    length = SDL_RWsize(src);
+    if (length > 0 && (uint64_t)length <= SIZE_MAX) {
+        if (SDL_RWseek(src, 0, RW_SEEK_SET) < 0) {
+            vita_img_set_error("unable to seek image stream");
+            if (freesrc) SDL_RWclose(src);
+            return NULL;
+        }
+        if (SDL_RWread(src, signature, 1, sizeof(signature)) == sizeof(signature) &&
+            png_sig_cmp(signature, 0, sizeof(signature)) == 0) {
+            if (SDL_RWseek(src, 0, RW_SEEK_SET) < 0) {
+                vita_img_set_error("unable to seek image stream");
+                if (freesrc) SDL_RWclose(src);
+                return NULL;
+            }
+            /* Read PNG chunks directly from the archive/file. Pocket Mirror's
+             * corridor PNG is 16 MB on disk: retaining a full compressed copy
+             * alongside the output pixels needlessly consumes scarce C heap. */
+            surface = vita_png_decode(src, (size_t)length);
+            if (freesrc) SDL_RWclose(src);
+            return surface;
+        }
+    }
     data = vita_read_rw(src, &size, freesrc);
     if (!data) {
         return NULL;
     }
     if (size >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff)
         surface = vita_jpeg_decode(data, size);
-    else
-        surface = vita_png_decode(data, size);
+    else {
+        vita_img_set_error("not a PNG");
+        surface = NULL;
+    }
     free(data);
     return surface;
 }

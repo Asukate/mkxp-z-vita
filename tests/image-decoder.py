@@ -55,7 +55,7 @@ int main(int argc,char **argv) {
  assert(argc==2); FILE *f=fopen(argv[1],"rb"); assert(f); fseek(f,0,SEEK_END); length=ftell(f); rewind(f); bytes=malloc(length); assert(fread(bytes,1,length,f)==length); fclose(f);
  for(int i=0;i<20;++i) { SDL_Surface *s=decode(); if(!s) fprintf(stderr,"valid decode failed: %s\n",SDL_GetError()); assert(s && s->w==960 && s->h==1152); SDL_FreeSurface(s); }
  assert(snapshots==0);
- expect_failure(length,"out of memory reading image");
+ fail_size=length; SDL_Surface *streamed=decode(); assert(streamed); SDL_FreeSurface(streamed); fail_size=0;
  expect_failure(960*1152*4,"out of memory allocating PNG pixels");
  expect_failure(1152*sizeof(void*),"out of memory allocating PNG rows");
  assert(snapshots==2);

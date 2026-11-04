@@ -1425,6 +1425,32 @@ static void cpuBlit(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
     }
 }
 
+static SDL_Surface *readImageStream(SDL_RWops &ops, const char *ext)
+{
+#ifdef __vita__
+    // The Vita decoder reads the archive stream itself. A whole-file vector
+    // here duplicates the compressed input and can exhaust the C heap before
+    // the graphics allocator has a chance to reclaim cached textures.
+    return IMG_LoadTyped_RW(&ops, 1, ext);
+#else
+    std::vector<uint8_t> bytes;
+    const Sint64 length = SDL_RWsize(&ops);
+    if (length > 0 && length < (64 << 20))
+    {
+        bytes.resize(size_t(length));
+        if (SDL_RWread(&ops, bytes.data(), 1, bytes.size()) != bytes.size())
+            bytes.clear();
+    }
+    if (!bytes.empty())
+    {
+        SDL_RWclose(&ops);
+        return IMG_LoadTyped_RW(SDL_RWFromConstMem(bytes.data(), int(bytes.size())), 1, ext);
+    }
+    SDL_RWseek(&ops, 0, RW_SEEK_SET);
+    return IMG_LoadTyped_RW(&ops, 1, ext);
+#endif
+}
+
 struct BitmapOpenHandler : FileSystem::OpenHandler
 {
     // Non-GIF
@@ -1503,25 +1529,7 @@ struct BitmapOpenHandler : FileSystem::OpenHandler
                 return false;
             }
         } else {
-            /* Read the whole file first and decode from memory. */
-            std::vector<uint8_t> bytes;
-            const Sint64 length = SDL_RWsize(&ops);
-            if (length > 0 && length < (64 << 20))
-            {
-                bytes.resize(size_t(length));
-                if (SDL_RWread(&ops, bytes.data(), 1, bytes.size()) != bytes.size())
-                    bytes.clear();
-            }
-            if (!bytes.empty())
-            {
-                SDL_RWclose(&ops);
-                surface = IMG_LoadTyped_RW(SDL_RWFromConstMem(bytes.data(), int(bytes.size())), 1, ext);
-            }
-            else
-            {
-                SDL_RWseek(&ops, 0, RW_SEEK_SET);
-                surface = IMG_LoadTyped_RW(&ops, 1, ext);
-            }
+            surface = readImageStream(ops, ext);
         }
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         if (!surface && !gif)

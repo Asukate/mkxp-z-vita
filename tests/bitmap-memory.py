@@ -58,6 +58,7 @@ static TestSharedState sharedState;
 static TestSharedState *shState = &sharedState;
 static int pixelReclaims = 0;
 struct Bitmap {
+    static void suspendImageReuse(bool suspend) { assert(graphicsLocked == suspend); }
     // Releasing re-creatable pixel copies happens with the pool cache, under the graphics lock.
     static void reclaimMemory() { assert(graphicsLocked); ++pixelReclaims; }
     explicit Bitmap(const char *name) {
