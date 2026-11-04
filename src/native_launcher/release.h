@@ -1,12 +1,20 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.4.9 Alpha"
-#define HARDRPG_VERSION_TAG "v0.4.9-alpha"
-#define HARDRPG_APP_VER "00.49"
-#define HARDRPG_RELEASE_UTC "2026-11-01"
+#define HARDRPG_VERSION "0.5.0 Alpha"
+#define HARDRPG_VERSION_TAG "v0.5.0-alpha"
+#define HARDRPG_APP_VER "00.50"
+#define HARDRPG_RELEASE_UTC "2026-11-04"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.4.9 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.5.0 Alpha - " HARDRPG_RELEASE_UTC,
+    "- Finding Paradise starts and plays (#17)",
+    "- Exit Fate: Change Party crash fixed (#15)",
+    "- More Ruby 1.8 methods for XP and VX games",
+    "- JPEG pictures show their real colours",
+    "- Faster menus in games with large pictures",
+    "- Hello Charlotte EP3 played to the end (#16)",
+    "",
+    "0.4.9 Alpha - 2026-11-01",
     "- Mario The Music Box starts and plays (#11)",
     "- Fixed a random crash while a game starts",
     "- Faster XP maps and scene changes",

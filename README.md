@@ -165,7 +165,19 @@ terminal in that folder and run the lines for your engine:
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.4.9 Alpha** is the current release. New in 0.4.9:
+**0.5.0 Alpha** is the current release. New in 0.5.0:
+
+- **Finding Paradise (Steam):** starts, plays and opens its menu.
+- **Exit Fate:** the Change Party screen no longer crashes.
+- **JPEG colours:** red and blue were swapped in every JPEG picture; they
+  show their real colours now.
+- **Faster menus:** Pocket Mirror's menus close in under half a second
+  instead of up to 5 seconds.
+- **Hello Charlotte EP3:** played from start to finish.
+
+Full list: [0.5.0 release notes](docs/RELEASE-NOTES-0.5.0.md).
+
+New in 0.4.9:
 
 - **Mario The Music Box:** starts and plays. Its custom archive and video
   files are now read on the Vita.
