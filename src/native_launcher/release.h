@@ -1,12 +1,15 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.5.0 Alpha"
-#define HARDRPG_VERSION_TAG "v0.5.0-alpha"
-#define HARDRPG_APP_VER "00.50"
-#define HARDRPG_RELEASE_UTC "2026-11-04"
+#define HARDRPG_VERSION "0.5.1 Alpha"
+#define HARDRPG_VERSION_TAG "v0.5.1-alpha"
+#define HARDRPG_APP_VER "00.51"
+#define HARDRPG_RELEASE_UTC "2026-11-05"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.5.0 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.5.1 Alpha - " HARDRPG_RELEASE_UTC,
+    "- BLACK SOULS II boss fights no longer crash (#18)",
+    "",
+    "0.5.0 Alpha - 2026-11-04",
     "- Finding Paradise starts and plays (#17)",
     "- Exit Fate: Change Party crash fixed (#15)",
     "- More Ruby 1.8 methods for XP and VX games",

@@ -165,7 +165,14 @@ terminal in that folder and run the lines for your engine:
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.5.0 Alpha** is the current release. New in 0.5.0:
+**0.5.1 Alpha** is the current release. New in 0.5.1:
+
+- **BLACK SOULS II:** boss fights with several phases, such as the Deep Sea
+  Knight, no longer crash when the next phase starts.
+
+Full list: [0.5.1 release notes](docs/RELEASE-NOTES-0.5.1.md).
+
+New in 0.5.0:
 
 - **Finding Paradise (Steam):** starts, plays and opens its menu.
 - **Exit Fate:** the Change Party screen no longer crashes.
