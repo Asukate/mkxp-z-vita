@@ -8,6 +8,7 @@ uniform mat4 projMat;
 uniform mat4 spriteMat;
 
 uniform vec2 texSizeInv;
+uniform vec2 texOrigin;
 uniform vec2 sourceOffset;
 uniform vec2 sourceSizeInv;
 uniform vec2 patternSizeInv;
@@ -31,7 +32,7 @@ void main()
 	gl_Position = projMat * spriteMat * vec4(position, 0, 1);
 #endif
     
-    v_texCoord = texCoord * texSizeInv;
+    v_texCoord = (texCoord - texOrigin) * texSizeInv;
     vec2 sourceCoord = texCoord + sourceOffset;
     v_sourceCoord = sourceCoord * sourceSizeInv;
     

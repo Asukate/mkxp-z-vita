@@ -146,6 +146,44 @@ module PocketMirrorMemory
       @busy = false if entered
     end
     def scene_run
+      Array(CONFIG['image_checks']).each do |check|
+        path, w, h, probes = check.values_at('path', 'width', 'height', 'probes')
+        image = Bitmap.new(path)
+        raise "image dimensions changed: #{path}" unless image.width == w && image.height == h
+        probes.each do |x, y, expected|
+          color = image.get_pixel(x, y)
+          actual = [color.red, color.green, color.blue, color.alpha].map(&:to_i)
+          raise "pixel changed: #{path} #{x},#{y} #{actual.inspect}" unless actual == expected
+        end
+        copy = image.clone
+        raise 'sparse copy dimensions changed' unless copy.width == w && copy.height == h
+        probes.each do |x, y, expected|
+          color = copy.get_pixel(x, y)
+          raise 'sparse copy pixels changed' unless [color.red, color.green, color.blue, color.alpha].map(&:to_i) == expected
+        end
+        copy.dispose
+        image.set_pixel(w - 1, h - 1, Color.new(17, 33, 65, 127))
+        copy = image.clone
+        [image, copy].each_with_index do |bitmap, index|
+          color = bitmap.get_pixel(w - 1, h - 1)
+          actual = [color.red, color.green, color.blue, color.alpha].map(&:to_i)
+          log("IMAGECHECK #{path} #{index == 0 ? 'original' : 'copy'} write-pixel=#{actual.inspect}")
+          raise "image write/copy failed: #{path} index=#{index} actual=#{actual.inspect}" unless actual == [17, 33, 65, 127]
+        end
+        probes.each do |x, y, expected|
+          next if x == w - 1 && y == h - 1
+          color = copy.get_pixel(x, y)
+          raise 'edited copy pixels changed' unless [color.red, color.green, color.blue, color.alpha].map(&:to_i) == expected
+        end
+        copy.dispose
+        image.dispose
+        image = Bitmap.new(path)
+        image.clear
+        raise 'deferred image clear failed' unless image.get_pixel(w - 1, h - 1).alpha == 0
+        raise 'logical dimensions changed after clear' unless image.width == w && image.height == h
+        image.dispose
+        log("IMAGECHECK pass #{path} dimensions/pixels/write/copy/clear")
+      end
       load_fixture
       @queue = CONFIG.fetch('maps') * CONFIG.fetch('cycles', 1)
       @index = 0

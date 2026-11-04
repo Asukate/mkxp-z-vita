@@ -1089,7 +1089,8 @@ void Sprite::draw()
     glState.blendMode.pushSet(p->blendType);
     
     Bitmap *renderBitmap = p->megaBitmap ? p->megaBitmap.get() : p->bitmap;
-    renderBitmap->bindTex(*base, false);
+    renderBitmap->bindTex(*base, false,
+                          scalingMethod == NearestNeighbor || scalingMethod == Bilinear);
 
 #ifdef MKXPZ_SSL
     if (scalingMethod == xBRZ)

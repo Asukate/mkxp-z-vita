@@ -21,6 +21,7 @@
 
 #include "asset_prefetch.h"
 #include "bitmap.h"
+#include "image-crop.h"
 #include "frame_profile.h"
 
 #include <list>
@@ -182,6 +183,8 @@ static void cpuPromote(BitmapPrivate *p);
 struct BitmapPrivate
 {
     Bitmap *self;
+    ImageCrop imageCrop;
+    uint32_t directReadVersion = ~0u;
     
     struct {
         int width;
@@ -418,7 +421,7 @@ struct BitmapPrivate
         return result != PIXMAN_REGION_OUT;
     }
     
-    void bindTexture(ShaderBase &shader, bool substituteLoresSize = true)
+    void bindTexture(ShaderBase &shader, bool substituteLoresSize = true, bool allowImageCrop = false)
     {
         if (selfHires) {
             selfHires->bindTex(shader, substituteLoresSize);
@@ -437,6 +440,8 @@ struct BitmapPrivate
         }
         /* Sampling this bitmap as a texture observes its pixels. */
         clearRead(this);
+        if (imageCrop.active() && !allowImageCrop)
+            cpuPromote(this);
         if (cpuSync(this))
             TEX::bind(gl.tex);
         else
@@ -447,6 +452,8 @@ struct BitmapPrivate
         else {
             shader.setTexSize(Vec2i(gl.width, gl.height));
         }
+        if (imageCrop.active())
+            shader.setTexOrigin(Vec2i(imageCrop.x, imageCrop.y));
     }
     
     void bindFBO()
@@ -957,6 +964,41 @@ static void relinkAfterUpload(TEXFBO &target)
 /* Hand the bitmap to the GPU: from here on it is an ordinary render target. */
 static void cpuPromote(BitmapPrivate *p)
 {
+#ifdef __vita__
+    if (p->imageCrop.active())
+    {
+        const ImageCrop crop = p->imageCrop;
+        const FBO::ID bound = FBO::boundFramebufferID;
+        TEXFBO full = shState->texPool().request(crop.logicalWidth, crop.logicalHeight);
+        try
+        {
+            gl.Finish();
+            const void *source = vglGetTexDataPointerByID(p->gl.tex.gl);
+            if (!source)
+                throw Exception(Exception::MKXPError, "Bitmap image storage is unavailable");
+            const int pitch = ((crop.width + 7) & ~7) * 4;
+            std::vector<uint32_t> row(crop.logicalWidth);
+            TEX::bind(full.tex);
+            for (int y = 0; y < crop.logicalHeight; ++y)
+            {
+                copyImageCropRow(crop, source, pitch, y, row.data());
+                TEX::uploadSubImage(0, y, crop.logicalWidth, 1, row.data(), GL_RGBA);
+            }
+            relinkAfterUpload(full);
+        }
+        catch (...)
+        {
+            shState->texPool().releaseUncached(full);
+            FBO::bind(bound);
+            throw;
+        }
+        const FBO::ID restored = bound == p->gl.fbo ? full.fbo : bound;
+        shState->texPool().releaseUncached(p->gl);
+        p->gl = full;
+        p->imageCrop = ImageCrop();
+        FBO::bind(restored);
+    }
+#endif
     if (!p->cpu)
         return;
     SDL_Surface *pixels = p->cpu;
@@ -1082,6 +1124,7 @@ static inline uint32_t cpuLerp(uint32_t a, uint32_t b, uint32_t f)
  * The caller has materialized any pending clear. */
 static bool readbackSurface(BitmapPrivate *p)
 {
+    cpuPromote(p);
     if (p->surface)
     {
         if (p->readListed)
@@ -1153,7 +1196,7 @@ static SDL_Surface *cpuSourcePixels(const Bitmap &source, BitmapPrivate *sp)
         return 0;
     if (sp->cpu)
         return sp->cpu;
-    if ((int64_t)sp->gl.width * sp->gl.height > 2048 * 1024)
+    if ((int64_t)source.width() * source.height() > 2048 * 1024)
         return 0;
     clearRead(sp);
     return readbackSurface(sp) ? sp->surface : 0;
@@ -1571,6 +1614,7 @@ struct ReusedImage
     int64_t size, mtime;
     TEXFBO tex;
     size_t bytes;
+    ImageCrop crop;
 };
 std::list<ReusedImage> reusedImages;
 size_t reusedBytes = 0;
@@ -1645,7 +1689,7 @@ bool keepReused(BitmapPrivate *p)
             dropReused(it);
             break;
         }
-    reusedImages.push_front({p->fileKey, p->filePath, p->fileSize, p->fileTime, p->gl, bytes});
+    reusedImages.push_front({p->fileKey, p->filePath, p->fileSize, p->fileTime, p->gl, bytes, p->imageCrop});
     reusedBytes += bytes;
     while (reusedImages.size() > reuseCount || reusedBytes > reuseBudget)
         dropReused(std::prev(reusedImages.end()));
@@ -1728,6 +1772,7 @@ Bitmap::Bitmap(const char *filename)
         {
             p = new BitmapPrivate(this);
             p->gl = reused.tex;
+            p->imageCrop = reused.crop;
             p->fileKey = reused.key;
             p->filePath = reused.path;
             p->fileSize = reused.size;
@@ -2109,6 +2154,44 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
         /* No room on the CPU side: copy on the GPU, as before. */
         cpuPromote(other.p);
     }
+
+#ifdef __vita__
+    if (!other.isAnimated() && !other.hasHires() &&
+        size_t(other.width()) * other.height() >= 1024u * 1024u)
+    {
+        /* Large RGBA textures are mapped into the CPU address space.
+         * A bitmap copy needs no render pass or large GXM render target.
+         * Keep a sparse source sparse, including its logical dimensions.
+         * Small copies retain the existing asynchronous GPU path. */
+        clearRead(other.p);
+        const FBO::ID bound = FBO::boundFramebufferID;
+        try
+        {
+            p->gl = shState->texPool().request(other.p->gl.width, other.p->gl.height);
+            gl.Finish();
+            const auto *pixels = static_cast<const uint8_t *>(vglGetTexDataPointerByID(other.p->gl.tex.gl));
+            if (!pixels)
+                throw Exception(Exception::MKXPError, "Bitmap copy source storage is unavailable");
+            const size_t pitch = size_t((other.p->gl.width + 7) & ~7) * 4;
+            TEX::bind(p->gl.tex);
+            for (int y = 0; y < p->gl.height; ++y)
+                TEX::uploadSubImage(0, y, p->gl.width, 1, pixels + size_t(y) * pitch, GL_RGBA);
+            relinkAfterUpload(p->gl);
+            p->imageCrop = other.p->imageCrop;
+            p->addTaintedArea(rect());
+        }
+        catch (...)
+        {
+            if (p->gl.tex != TEX::ID(0))
+                shState->texPool().releaseUncached(p->gl);
+            FBO::bind(bound);
+            delete p;
+            throw;
+        }
+        FBO::bind(bound);
+        return;
+    }
+#endif
     
     // TODO: Clean me up
     if (!other.isAnimated() || frame >= -1) {
@@ -2249,10 +2332,19 @@ void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool for
     {
         /* Regular surface */
         TEXFBO tex;
+        ImageCrop crop;
+#ifdef __vita__
+        if (!hiresBitmap)
+            crop = findImageCrop(imgSurf->pixels, imgSurf->w, imgSurf->h, imgSurf->pitch);
+        if (crop.active())
+            packImageCrop(imgSurf->pixels, imgSurf->pitch, crop);
+#endif
         
         try
         {
-            tex = shState->texPool().requestImage(imgSurf->w, imgSurf->h, imgSurf->pixels);
+            tex = shState->texPool().requestImage(crop.active() ? crop.width : imgSurf->w,
+                                                  crop.active() ? crop.height : imgSurf->h,
+                                                  imgSurf->pixels);
         }
         catch (const Exception &e)
         {
@@ -2263,6 +2355,7 @@ void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool for
         }
         
         p = new BitmapPrivate(this);
+        p->imageCrop = crop;
         p->selfHires = hiresBitmap;
         p->gl = tex;
         if (p->selfHires != nullptr) {
@@ -2278,6 +2371,8 @@ void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool for
 int Bitmap::width() const
 {
     guardDisposed();
+    if (p->imageCrop.active())
+        return p->imageCrop.logicalWidth;
     
     if (p->megaSurface) {
         return p->megaSurface->w;
@@ -2293,6 +2388,8 @@ int Bitmap::width() const
 int Bitmap::height() const
 {
     guardDisposed();
+    if (p->imageCrop.active())
+        return p->imageCrop.logicalHeight;
     
     if (p->megaSurface)
         return p->megaSurface->h;
@@ -3382,6 +3479,29 @@ Color Bitmap::getPixel(int x, int y) const
     if (x < 0 || y < 0 || x >= width() || y >= height())
         return Vec4();
 
+    clearRead(p);
+#ifdef __vita__
+    if (!p->cpu && (p->imageCrop.active() || size_t(width()) * height() >= 1024u * 1024u))
+    {
+        /* Observing one pixel of a large image must not allocate a complete
+         * RGBA readback. Synchronize once per content version, then read its
+         * CPU-visible texture storage. Small, frequently sampled windowskins
+         * retain their existing readback cache. */
+        if (p->directReadVersion != p->contentVersion)
+        {
+            gl.Finish();
+            p->directReadVersion = p->contentVersion;
+        }
+        const void *pixels = vglGetTexDataPointerByID(p->gl.tex.gl);
+        if (!pixels)
+            throw Exception(Exception::MKXPError, "Bitmap image storage is unavailable");
+        const int pitch = ((p->gl.width + 7) & ~7) * 4;
+        const uint32_t value = p->imageCrop.active() ? imageCropPixel(p->imageCrop, pixels, pitch, x, y) :
+            reinterpret_cast<const uint32_t *>(static_cast<const uint8_t *>(pixels) + size_t(y) * pitch)[x];
+        return Color(value & 255, (value >> 8) & 255, (value >> 16) & 255, value >> 24);
+    }
+#endif
+
     if (p->cpu)
     {
         const uint32_t pixel = getPixelAt(p->cpu, p->format, x, y);
@@ -3452,6 +3572,7 @@ void Bitmap::setPixel(int x, int y, const Color &color)
         return;
     }
 
+    cpuPromote(p);
     TEX::bind(p->gl.tex);
     TEX::uploadSubImage(x, y, 1, 1, &pixel, GL_RGBA);
     relinkAfterUpload(p->gl);
@@ -5209,11 +5330,11 @@ int Bitmap::kglShadowShaderV(int y1, int y2, int x, bool wall, bool soft)
     return 1;
 }
 
-void Bitmap::bindTex(ShaderBase &shader, bool substituteLoresSize)
+void Bitmap::bindTex(ShaderBase &shader, bool substituteLoresSize, bool allowImageCrop)
 {
     // Hires mode is handled by p->bindTexture.
 
-    p->bindTexture(shader, substituteLoresSize);
+    p->bindTexture(shader, substituteLoresSize, allowImageCrop);
 }
 
 bool Bitmap::drawCpuWindow(ShaderBase &shader, const IntRect &visible, float opacity)

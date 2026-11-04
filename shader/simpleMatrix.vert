@@ -7,6 +7,7 @@ uniform mat4 projMat;
 uniform mat4 matrix;
 
 uniform vec2 texSizeInv;
+uniform vec2 texOrigin;
 
 attribute vec2 position;
 attribute vec2 texCoord;
@@ -23,6 +24,6 @@ void main()
 	gl_Position = projMat * matrix * vec4(position, 0, 1);
 #endif
 
-	v_texCoord = texCoord * texSizeInv;
+	v_texCoord = (texCoord - texOrigin) * texSizeInv;
 	v_color = color;
 }

@@ -875,6 +875,7 @@ void ShaderBase::GLProjMat::apply(const Vec2i &value)
 void ShaderBase::init()
 {
 	GET_U(texSizeInv);
+	GET_U(texOrigin);
 	GET_U(translation);
 
 #ifdef __vita__
@@ -906,6 +907,12 @@ bool ShaderBase::framebufferScalingAllowed()
 void ShaderBase::setTexSize(const Vec2i &value)
 {
 	gl.Uniform2f(u_texSizeInv, 1.f / value.x, 1.f / value.y);
+	setTexOrigin(Vec2i(0, 0));
+}
+
+void ShaderBase::setTexOrigin(const Vec2i &value)
+{
+	gl.Uniform2f(u_texOrigin, value.x, value.y);
 }
 
 void ShaderBase::setTranslation(const Vec2i &value)

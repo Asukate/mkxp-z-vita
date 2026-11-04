@@ -79,9 +79,9 @@ In the two completed runs, the largest sampled C-heap reservation was
 matching checkpoint it was 107.43 MiB and 92.08 MiB respectively. These are
 sampled allocator reservations, not measurements of every transient peak.
 
-## Separate graphics working-set limit
+## Map 63 failure before sparse storage
 
-Extending the sequence through Map 63 reaches another failure:
+Before sparse storage, extending the sequence through Map 63 reached another failure:
 
 ```
 MKXPError: Graphics memory: out of memory allocating 2480x3508 texture
@@ -136,3 +136,63 @@ exact cleanup set before installation. Use the canonical authenticated device
 harness for install, launch, status, collection and close. Collect the progress
 and result files, full native error report when present, screenshots and any
 new dumps. Verify collection before removing the named temporary outputs.
+
+## Map 63 follow-up: sparse image storage
+
+Map 63 (Closed Doors / Harps 1st floor corridor NIGHT) aborts the game session
+through the graphics-memory error handler on the release. The Vita remains
+responsive. The fresh-process failure shows that this does not require hours
+of accumulated memory use.
+
+Several 2480×3508 pictures have a small nonconstant rectangle surrounded by
+a constant transparent RGBA value. A full RGBA texture costs about 33.2 MiB
+even when the visible chandelier occupies only 224×260 pixels.
+
+The Vita image loader now detects large images with such a surround and
+stores a padded rectangle when it saves at least a quarter of the texture
+pixels.
+Every RGBA difference is retained, including RGB beneath zero alpha. Rows
+are packed in-place in the decoder buffer, without another full-image copy.
+Logical bitmap dimensions and picture coordinates are preserved. Sprite
+nearest/bilinear sampling uses the rectangle's texture origin; pattern and
+bush effects keep their original source coordinates.
+
+Direct render-target access, other texture consumers and wider filters
+restore a full RGBA target first, with bounded row staging. Texture reuse
+also retains the logical image metadata. This is a general image-storage
+rule; game assets and scripts are not patched. Writable full-image operations
+still require enough memory for the requested full render target.
+
+Large-image single-pixel reads use mapped texture storage instead of
+allocating a full RGBA readback. Synchronization occurs once per content
+version; small windowskin readback caching retains its existing behavior.
+
+Large ordinary bitmap copies also use mapped texture rows instead of a GPU
+blit, without a complete staging buffer or render pass. Unmodified sparse
+copies retain their crop metadata; small copies keep the prior GPU path.
+A multi-image hardware probe previously returned a zero copied pixel while
+the edited source pixel remained correct, motivating this change.
+
+ASan/UBSan checks cover exact reconstruction, padded rows, hidden RGB and
+single-pixel reads. Mesa comparisons cover plain/effect shaders with 60
+combinations of crop boundaries, filtering and sprite effects. The canonical
+Vita CI build passes.
+
+Two final physical-Vita runs each completed eight Map 63/corridor round trips
+with menus (16 visits and 16 menu cycles per run). One also performed exact
+pixel/dimension, sparse clone, outside-crop write, edited clone and deferred
+clear checks on four original large images before the route. Both runs
+completed without an engine memory error; the independent fresh run used
+the same route as an earlier candidate that failed after two Map 63 visits.
+These bounded passes do not establish a full-game failure-rate guarantee.
+
+The final storage rule requires at least 25% pixel savings. An earlier 50%
+cutoff passed fresh entry but failed a repeated transfer: the parallax plugin
+reloaded a previously evicted old background just to dispose it. The initial
+Map 63 target-memory sample was unchanged by the lower cutoff, so no measured
+16 MiB whole-scene reduction is claimed for that cutoff alone. Allocation
+layout, image reuse and later loads also matter.
+
+A broader run reached a separate 3776×3300 allocation OOM in Map 43 after
+passing Map 63 and its menu return. That failure remains a separate follow-up;
+the Map 63 result does not establish full-game stability.
