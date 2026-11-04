@@ -1086,3 +1086,34 @@ index c3df263..abfa180 100644
  #endif
  #define TRANSIENT_HEAP_ALLOC_MAX   (1024 *    2       ) /* 2 KB */
  #define TRANSIENT_HEAP_BLOCK_NUM   (TRANSIENT_HEAP_TOTAL_SIZE / TRANSIENT_HEAP_BLOCK_SIZE)
+diff --git a/time.c b/time.c
+--- a/time.c
++++ b/time.c
+@@ -705,7 +705,10 @@
+ 	if (tmp) *result = *tmp;
+     }
+ #endif
+-#if defined(HAVE_MKTIME) && defined(LOCALTIME_OVERFLOW_PROBLEM)
++/* Vita localtime_r uses the system RTC timezone, while newlib mktime
++ * uses its separate TZ state. Their round trip can differ for a valid time;
++ * localtime_r already rejects times the Vita RTC cannot represent. */
++#if defined(HAVE_MKTIME) && defined(LOCALTIME_OVERFLOW_PROBLEM) && !defined(__vita__)
+     if (result) {
+         long gmtoff1 = 0;
+         long gmtoff2 = 0;
+@@ -1477,10 +1480,12 @@
+         static int now_isdst = 0;
+         static VALUE now_zone;
+         if (now == 0) {
+-            VALUE zone;
++            /* Conversion may fail without assigning zone (for example when
++             * the platform RTC rejects a date). Keep a valid UTC fallback. */
++            VALUE zone = str_utc;
+             now = time(NULL);
+-            localtime_with_gmtoff_zone(&now, &tm, &now_gmtoff, &zone);
+-            now_isdst = tm.tm_isdst;
++            if (localtime_with_gmtoff_zone(&now, &tm, &now_gmtoff, &zone))
++                now_isdst = tm.tm_isdst;
+             zone = rb_fstring(zone);
+             rb_gc_register_mark_object(zone);
+             now_zone = zone;
