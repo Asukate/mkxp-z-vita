@@ -3293,6 +3293,144 @@ void Bitmap::clearRect(const IntRect &rect)
     p->onModified();
 }
 
+#ifdef __vita__
+bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *layers, size_t count)
+{
+    if (isDisposed() || background.w != 1.f || hasHires() || p->selfLores ||
+        p->animation.enabled || p->megaSurface || count == 0 || count > maxOpaqueLayers)
+        return false;
+
+    IntRect clipped[maxOpaqueLayers];
+    std::vector<int> xs, ys;
+    xs.reserve(count * 2);
+    ys.reserve(count * 2);
+    for (size_t i = 0; i < count; ++i) {
+        const auto &layer = layers[i];
+        auto *source = layer.source;
+        if (!source || source->isDisposed() || source == this || source->hasHires() ||
+            source->p->selfLores || source->isAnimated() || source->megaSurface() ||
+            source->p->cpu || source->p->pendingClear || source->p->gl.tex == TEX::ID(0) ||
+            layer.width <= 0 || layer.height <= 0)
+            return false;
+        if (layer.opacity <= 0)
+            continue;
+        const IntRect dest(layer.x, layer.y, std::min(source->width(), layer.width),
+                           std::min(source->height(), layer.height));
+        const auto r = cpuClip(dest, width(), height());
+        if (!r.w || !r.h)
+            continue;
+        clipped[i] = r;
+        xs.push_back(r.x);
+        xs.push_back(r.x + r.w);
+        ys.push_back(r.y);
+        ys.push_back(r.y + r.h);
+    }
+    // Partition the surface at clipped light edges. Each rectangle has one
+    // constant ordered set of sources, so fragments need no coverage tests.
+    const auto unique = [](std::vector<int> &edges) {
+        std::sort(edges.begin(), edges.end());
+        edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    };
+    unique(xs);
+    unique(ys);
+    struct Region { uint32_t mask; IntRect rect; };
+    std::vector<Region> regions;
+    regions.reserve(32);
+    for (size_t y = 1; y < ys.size(); ++y) {
+        uint32_t row = 0;
+        for (size_t i = 0; i < count; ++i)
+            if (ys[y - 1] >= clipped[i].y && ys[y - 1] < clipped[i].y + clipped[i].h)
+                row |= 1u << i;
+        uint32_t previousMask = 0;
+        for (size_t x = 1; x < xs.size(); ++x) {
+            uint32_t mask = 0;
+            for (uint32_t active = row; active; active &= active - 1) {
+                const unsigned i = __builtin_ctz(active);
+                if (xs[x - 1] >= clipped[i].x && xs[x - 1] < clipped[i].x + clipped[i].w)
+                    mask |= 1u << i;
+            }
+            if (__builtin_popcount(mask) > 4)
+                return false;
+            if (mask) {
+                if (previousMask == mask)
+                    regions.back().rect.w = xs[x] - regions.back().rect.x;
+                else {
+                    if (regions.size() == 96)
+                        return false;
+                    regions.push_back({mask, IntRect(xs[x - 1], ys[y - 1], xs[x] - xs[x - 1], ys[y] - ys[y - 1])});
+                }
+            }
+            previousMask = mask;
+        }
+    }
+    std::sort(regions.begin(), regions.end(), [](const Region &a, const Region &b) {
+        return a.mask < b.mask;
+    });
+
+    // Prepare fallible resources before pushing any draw state. The caller
+    // still has its original bitmap to draw into if allocation fails.
+    const auto previous = FBO::boundFramebufferID;
+    OpaqueComposeShader *shaderPtr;
+    try {
+        OpaqueComposeShader &shader = shState->shaders().opaqueCompose;
+        shaderPtr = &shader;
+        p->bindFBO();
+    } catch (const Exception &) {
+        FBO::bind(previous);
+        return false;
+    }
+    auto &shader = *shaderPtr;
+    clearFullOverwrite(p);
+    const IntRect target(0, 0, p->gl.width, p->gl.height);
+    glState.viewport.pushSet(target);
+    glState.scissorTest.pushSet(false);
+    glState.blend.pushSet(false);
+    const uint32_t packed = cpuPack(background);
+    const Vec4 ambient((packed & 0xff) / 255.f, ((packed >> 8) & 0xff) / 255.f,
+                       ((packed >> 16) & 0xff) / 255.f, 1.f);
+    glState.clearColor.pushSet(ambient);
+    FBO::clear();
+    glState.clearColor.pop();
+    Quad &quad = shState->gpQuad();
+    shader.bind();
+    shader.applyViewportProj();
+    shader.setup(ambient);
+
+    uint32_t lastMask = 0;
+    for (const auto &region : regions) {
+        if (region.mask != lastMask) {
+            lastMask = region.mask;
+            float weights[4] = {};
+            const auto first = __builtin_ctz(lastMask);
+            uint32_t active = lastMask;
+            for (int j = 0; j < 4; ++j) {
+                const auto &layer = layers[active ? __builtin_ctz(active) : first];
+                auto &source = *layer.source;
+                const float invW = 1.f / source.width(), invH = 1.f / source.height();
+                gl.ActiveTexture(GL_TEXTURE0 + j);
+                TEX::bind(source.p->gl.tex);
+                shader.setLayer(j, Vec4(invW, invH, -layer.x * invW, -layer.y * invH));
+                if (active) {
+                    weights[j] = std::min(255, layer.opacity);
+                    active &= active - 1;
+                }
+            }
+            shader.setWeights(weights);
+        }
+        quad.setPosRect(region.rect);
+        quad.draw();
+    }
+    gl.ActiveTexture(GL_TEXTURE0);
+    glState.blend.pop();
+    glState.scissorTest.pop();
+    glState.viewport.pop();
+    FBO::bind(previous);
+    p->addTaintedArea(target);
+    p->onModified();
+    return true;
+}
+#endif
+
 void Bitmap::blur()
 {
     guardDisposed();

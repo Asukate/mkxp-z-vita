@@ -73,6 +73,116 @@ module HardRPGNative
     end
   end
 
+  # Khas redraws an opaque ambient bitmap and then draws its static light
+  # sources in order. Match the two known sections and check that a later
+  # script did not replace the methods before enabling the GPU compositor.
+  module KhasLights
+    SECTIONS = {
+      28672 => [2657479429, 1037494418, [[:Spriteset_Map, :dispose_lights, 931]]],
+      3088 => [949117487, 2832299771, [[:Spriteset_Map, :update_lights, 115],
+        [:Game_Character, :draw_light, 67], [:Game_Event, :draw_light, 99],
+        [:Light_SSource, :draw, 9]]]
+    }.freeze
+
+    def self.observe(fname, source)
+      return unless defined?(Bitmap) && Bitmap.method_defined?(:__hardrpg_compose_opaque)
+      match = SECTIONS[source.bytesize]
+      return unless match && Zlib.crc32(source) == match[0] && Zlib.adler32(source) == match[1]
+      @sections ||= {}
+      @sections[source.bytesize] = match[2].map do |klass, name, line|
+        method = Object.const_get(klass).instance_method(name)
+        method if method.source_location == [fname, line]
+      end
+    end
+
+    def self.install
+      return if @installed || !@sections || @sections.size != SECTIONS.size
+      return unless @sections.values.flatten.all? do |method|
+        method && method.owner.instance_method(method.name) == method
+      end
+      Spriteset_Map.prepend(Updates)
+      @installed = true
+    end
+
+    module Updates
+      def update_lights
+        surface = $game_map.light_surface
+        if surface
+          lights = $game_map.light_sources
+          if $hardrpg_gpu_lights != false && !$game_map.lantern.visible &&
+             !lights.empty? && lights.size <= 16 && surface.bitmap.width == Graphics.width &&
+             surface.bitmap.height == Graphics.height &&
+             lights.all? { |event| event.instance_of?(Game_Event) &&
+               event.instance_variable_get(:@light).instance_of?(Light_SSource) }
+            ambient = $game_map.effect_surface.color
+            if ambient.alpha == 255 && compose_static_lights(surface, lights, ambient)
+              return
+            end
+          end
+        end
+        restore_cpu_lights(surface)
+        super
+      end
+
+      def dispose_lights
+        restore_cpu_lights($game_map.light_surface)
+        @hardrpg_light_gpu.dispose if @hardrpg_light_gpu && !@hardrpg_light_gpu.disposed?
+        @hardrpg_light_rows = @hardrpg_light_gpu = @hardrpg_light_cpu = nil
+        super
+      end
+
+      private
+
+      def restore_cpu_lights(surface)
+        if surface && @hardrpg_light_cpu && surface.bitmap.equal?(@hardrpg_light_gpu)
+          surface.bitmap = @hardrpg_light_cpu
+        end
+      end
+
+      def compose_static_lights(surface, lights, ambient)
+        return false if @hardrpg_light_unavailable
+        unless @hardrpg_light_gpu
+          begin
+            @hardrpg_light_gpu = Bitmap.new(Graphics.width, Graphics.height)
+          rescue MKXPError, SDLError
+            @hardrpg_light_unavailable = true
+            return false
+          end
+        end
+        return false if @hardrpg_light_gpu.disposed? || @hardrpg_light_gpu.width != Graphics.width ||
+                        @hardrpg_light_gpu.height != Graphics.height
+
+        rows = @hardrpg_light_rows
+        rows = @hardrpg_light_rows = Array.new(lights.size) { Array.new(6) } if !rows || rows.size != lights.size
+        lights.each_with_index do |event, i|
+          light = event.instance_variable_get(:@light)
+          row = rows[i]
+          row[0] = light.bitmap
+          row[1] = light.sx.to_i
+          row[2] = light.sy.to_i
+          row[3] = light.w
+          row[4] = light.h
+          row[5] = light.opacity
+        end
+        if @hardrpg_light_gpu.__hardrpg_compose_opaque(ambient, rows)
+          unless surface.bitmap.equal?(@hardrpg_light_gpu)
+            @hardrpg_light_cpu = surface.bitmap
+            surface.bitmap = @hardrpg_light_gpu
+          end
+        else
+          # Replay the already sampled opacities. Calling the original
+          # method now would advance the game's flicker RNG a second time.
+          restore_cpu_lights(surface)
+          target = surface.bitmap
+          target.clear
+          target.fill_rect(0, 0, Graphics.width, Graphics.height, ambient)
+          rows.each { |bitmap, x, y, w, h, opacity| target.blt(x, y, bitmap, Rect.new(0, 0, w, h), opacity) }
+        end
+        true
+      end
+    end
+  end
+
   # "Class#method:crc32:adler32:bytes" of the default text => native variant.
   STOCK = {
     "Game_CharacterBase#moving?:1475832270:784076165:42" => "",
@@ -349,6 +459,7 @@ module HardRPGNative
     end
 
     def section_check(fname, src)
+      KhasLights.observe(fname, src)
       return if $hardrpg_native_events == false
       return unless NEEDLES.any? { |n| src.include?(n) }
       SectionCache.methods(src).each do |key, (text, line)|
@@ -415,6 +526,7 @@ if Kernel.respond_to?(:rgss_main, true)
   Kernel.send(:private, :hardrpg_native_events_rgss_main)
   Kernel.send(:define_method, :rgss_main) do |*args, &block|
     HardRPGNative::SectionCache.save
+    HardRPGNative::KhasLights.install
     hardrpg_native_events_rgss_main(*args, &block)
   end
   Kernel.send(:private, :rgss_main)

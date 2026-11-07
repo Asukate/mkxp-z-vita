@@ -57,6 +57,10 @@ extern "C" void glProgramBinary(GLuint, GLenum, const void *, GLsizei);
 #include "simple.frag.xxd"
 #include "simpleColor.frag.xxd"
 #include "simpleAlpha.frag.xxd"
+#ifdef __vita__
+#include "opaqueCompose.frag.xxd"
+#include "opaqueCompose.vert.xxd"
+#endif
 #include "simpleAlphaUni.frag.xxd"
 #include "tilemap.frag.xxd"
 #include "flashMap.frag.xxd"
@@ -975,6 +979,45 @@ SimpleAlphaShader::SimpleAlphaShader()
 	ShaderBase::init();
 }
 
+
+#ifdef __vita__
+OpaqueComposeShader::OpaqueComposeShader()
+    : ShaderBase("OpaqueComposeShader")
+{
+    INIT_SHADER(opaqueCompose, opaqueCompose, OpaqueComposeShader);
+    ShaderBase::init();
+    GET_U(sourceA);
+    GET_U(sourceB);
+    GET_U(sourceC);
+    GET_U(sourceD);
+    GET_U(mappingA);
+    GET_U(mappingB);
+    GET_U(mappingC);
+    GET_U(mappingD);
+    GET_U(weights);
+    GET_U(background);
+}
+
+void OpaqueComposeShader::setup(const Vec4 &background)
+{
+    gl.Uniform1i(u_sourceA, 0);
+    gl.Uniform1i(u_sourceB, 1);
+    gl.Uniform1i(u_sourceC, 2);
+    gl.Uniform1i(u_sourceD, 3);
+    gl.Uniform4f(u_background, background.x, background.y, background.z, background.w);
+}
+
+void OpaqueComposeShader::setLayer(int i, const Vec4 &mapping)
+{
+    const GLint uniforms[] = {u_mappingA, u_mappingB, u_mappingC, u_mappingD};
+    gl.Uniform4f(uniforms[i], mapping.x, mapping.y, mapping.z, mapping.w);
+}
+
+void OpaqueComposeShader::setWeights(const float *weights)
+{
+    gl.Uniform4f(u_weights, weights[0], weights[1], weights[2], weights[3]);
+}
+#endif
 
 SimpleSpriteShader::SimpleSpriteShader()
 	: ShaderBase("SimpleSpriteShader")

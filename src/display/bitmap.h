@@ -99,6 +99,12 @@ public:
 
 	void clear();
 
+#ifdef __vita__
+    struct OpaqueLayer { Bitmap *source; int x, y, width, height, opacity; };
+    static constexpr size_t maxOpaqueLayers = 16;
+    bool tryComposeOpaque(const Vec4 &background, const OpaqueLayer *layers, size_t count);
+#endif
+
 	Color getPixel(int x, int y) const;
 	void setPixel(int x, int y, const Color &color);
     

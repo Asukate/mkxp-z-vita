@@ -150,6 +150,21 @@ public:
 	SimpleAlphaShader();
 };
 
+#ifdef __vita__
+class OpaqueComposeShader : public ShaderBase
+{
+public:
+    OpaqueComposeShader();
+    void setup(const Vec4 &background);
+    void setLayer(int i, const Vec4 &mapping);
+    void setWeights(const float *weights);
+
+private:
+    GLint u_sourceA, u_sourceB, u_sourceC, u_sourceD;
+    GLint u_mappingA, u_mappingB, u_mappingC, u_mappingD, u_weights, u_background;
+};
+#endif
+
 class SimpleSpriteShader : public ShaderBase
 {
 public:
@@ -531,6 +546,9 @@ struct ShaderSet
 	SHADER_SET_MEMBER(SimpleShader, simple);
 	SHADER_SET_MEMBER(SimpleColorShader, simpleColor);
 	SHADER_SET_MEMBER(SimpleAlphaShader, simpleAlpha);
+#ifdef __vita__
+    SHADER_SET_MEMBER(OpaqueComposeShader, opaqueCompose);
+#endif
 	SHADER_SET_MEMBER(SimpleSpriteShader, simpleSprite);
 	SHADER_SET_MEMBER(AlphaSpriteShader, alphaSprite);
 	SHADER_SET_MEMBER(SpriteShader, sprite);

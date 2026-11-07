@@ -269,6 +269,34 @@ RB_METHOD_GUARD(bitmapStretchBlt) {
 }
 RB_METHOD_GUARD_END
 
+#ifdef __vita__
+RB_METHOD_GUARD(bitmapComposeOpaque) {
+    VALUE colorObj, rows;
+    rb_get_args(argc, argv, "oo", &colorObj, &rows RB_ARG_END);
+    Check_Type(rows, T_ARRAY);
+    const long count = RARRAY_LEN(rows);
+    if (count > Bitmap::maxOpaqueLayers)
+        return Qfalse;
+    Bitmap::OpaqueLayer layers[Bitmap::maxOpaqueLayers];
+    for (long i = 0; i < count; ++i) {
+        VALUE row = rb_ary_entry(rows, i);
+        Check_Type(row, T_ARRAY);
+        if (RARRAY_LEN(row) != 6)
+            rb_raise(rb_eArgError, "invalid composition layer");
+        layers[i] = {getPrivateDataCheck<Bitmap>(rb_ary_entry(row, 0), BitmapType),
+                     NUM2INT(rb_ary_entry(row, 1)), NUM2INT(rb_ary_entry(row, 2)),
+                     NUM2INT(rb_ary_entry(row, 3)), NUM2INT(rb_ary_entry(row, 4)),
+                     NUM2INT(rb_ary_entry(row, 5))};
+    }
+    auto *target = getPrivateData<Bitmap>(self);
+    auto *color = getPrivateDataCheck<Color>(colorObj, ColorType);
+    bool composed = false;
+    GFX_GUARD_EXC(composed = target->tryComposeOpaque(color->norm, layers, count);)
+    return composed ? Qtrue : Qfalse;
+}
+RB_METHOD_GUARD_END
+#endif
+
 RB_METHOD_GUARD(bitmapFillRect) {
     Bitmap *b = getPrivateData<Bitmap>(self);
     
@@ -1013,6 +1041,9 @@ void bitmapBindingInit() {
     _rb_define_method(klass, "draw_text", bitmapDrawText);
     _rb_define_method(klass, "text_size", bitmapTextSize);
     
+#ifdef __vita__
+    _rb_define_method(klass, "__hardrpg_compose_opaque", bitmapComposeOpaque);
+#endif
     _rb_define_method(klass, "raw_data", bitmapGetRawData);
     _rb_define_method(klass, "raw_data=", bitmapSetRawData);
     _rb_define_method(klass, "to_file", bitmapSaveToFile);
