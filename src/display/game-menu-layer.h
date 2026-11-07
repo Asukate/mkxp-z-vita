@@ -11,6 +11,7 @@
 #include "sharedstate.h"
 #include "etc/etc.h"
 #include "native_launcher/view.h"
+#include "input/vita-keyboard.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -43,7 +44,7 @@ class GameMenuLayer {
     uint32_t frame = 0;
     std::unique_ptr<QuadArray<CVertex>> icon;
     int iconBuiltFor = -1, iconHeight = 0;
-    bool iconPressed = false;
+    bool iconPressed = false, keyboardIconOpen = false;
 
     static GLuint compile(GLenum type, const char *source) {
         GLuint s = glCreateShader(type);
@@ -265,6 +266,23 @@ public:
         end();
     }
 
+    void drawKeyboard(const hardrpg::Image &image, const hardrpg::GameKeyboard &keyboard, int winW, int winH) {
+        if (image.empty() || !begin(winW, winH))
+            return;
+        quad(0, hardrpg::GameKeyboard::top, image.width, image.height, 1, 1, 1, 1, 0, &image);
+        const auto &keys = hardrpg::GameKeyboard::layout(keyboard.isSplit(), keyboard.hasFunctions()).keys;
+        for (size_t i = 0; i < keys.size(); ++i) {
+            const auto &key = keys[i];
+            const bool held = key.code == keyboard.downCode() ||
+                              (key.code == SDL_SCANCODE_LSHIFT && keyboard.shifted());
+            if (held || (keyboard.controlledByPad() && int(i) == keyboard.focusIndex())) {
+                const auto &r = key.rect;
+                quad(r.x, r.y, r.w, r.h, 0.88f, 0.18f, 0.31f, held ? 0.42f : 0.26f, 7, nullptr);
+            }
+        }
+        end();
+    }
+
     // Where the icon goes: centred in the left border, near the top. Empty
     // when the border is too narrow to hold it (the game fills the width).
     static bool iconRect(int gameX, int &x, int &y, int &w, int &h) {
@@ -278,14 +296,14 @@ public:
 
     // Three bars, white over a black outline, a little see-through; ruby on
     // a soft plate while pressed, so a touch shows at once.
-    void drawIcon(int winW, int winH, int gameX, bool pressed) {
+    void drawIcons(int winW, int winH, int gameX, bool pressed, bool keyboardOpen) {
         int x, y, w, h;
-        if (!iconRect(gameX, x, y, w, h))
-            return;
+        const bool menuVisible = iconRect(gameX, x, y, w, h);
         if (!icon)
             icon.reset(new QuadArray<CVertex>());
-        if (iconBuiltFor != gameX || iconHeight != winH || iconPressed != pressed) {
+        if (iconBuiltFor != gameX || iconHeight != winH || iconPressed != pressed || keyboardIconOpen != keyboardOpen) {
             iconPressed = pressed;
+            keyboardIconOpen = keyboardOpen;
             icon->clear();
             auto bar = [&](int bx, int by, int bw, int bh, const Vec4 &c) {
                 CVertex v[4];
@@ -300,14 +318,24 @@ public:
                 icon->vertices.insert(icon->vertices.end(), v, v + 4);
                 ++icon->quadCount;
             };
-            if (pressed)
-                bar(x - 9, y - 9, w + 18, h + 18, Vec4(1, 1, 1, 0.22f));
-            const int step = 12, thick = 7;
-            for (int i = 0; i < 3; ++i)
-                bar(x - 2, y + i * step - 2, w + 4, thick + 4, Vec4(0, 0, 0, 0.55f));
-            for (int i = 0; i < 3; ++i)
-                bar(x, y + i * step, w, thick,
-                    pressed ? Vec4(0.86f, 0.13f, 0.25f, 1.f) : Vec4(1, 1, 1, 0.75f));
+            if (menuVisible) {
+                if (pressed)
+                    bar(x - 9, y - 9, w + 18, h + 18, Vec4(1, 1, 1, 0.22f));
+                const int step = 12, thick = 7;
+                for (int i = 0; i < 3; ++i)
+                    bar(x - 2, y + i * step - 2, w + 4, thick + 4, Vec4(0, 0, 0, 0.55f));
+                for (int i = 0; i < 3; ++i)
+                    bar(x, y + i * step, w, thick,
+                        pressed ? Vec4(0.86f, 0.13f, 0.25f, 1.f) : Vec4(1, 1, 1, 0.75f));
+            }
+            const auto kb = hardrpg::GameKeyboard::iconRect(gameX);
+            bar(kb.x - 2, kb.y, kb.w + 4, kb.h, Vec4(0, 0, 0, 0.70f));
+            bar(kb.x, kb.y + 3, kb.w, kb.h - 6,
+                keyboardOpen ? Vec4(0.73f, 0.15f, 0.27f, 0.92f) : Vec4(1, 1, 1, 0.83f));
+            for (int row = 0; row < 2; ++row)
+                for (int column = 0; column < 5; ++column)
+                    bar(kb.x + 4 + column * 6, kb.y + 7 + row * 5, 3, 3, Vec4(0.07f, 0.08f, 0.10f, 1));
+            bar(kb.x + 9, kb.y + 18, 17, 3, Vec4(0.07f, 0.08f, 0.10f, 1));
             icon->commit();
             iconBuiltFor = gameX;
             iconHeight = winH;

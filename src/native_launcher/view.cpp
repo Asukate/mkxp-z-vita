@@ -1,3 +1,4 @@
+#include "input/vita-keyboard.h"
 #include "view.h"
 #include <algorithm>
 #include <png.h>
@@ -179,5 +180,28 @@ const Image &View::statsPanel(const std::string &headline, int tone, const std::
     endLayer();
   }
   return statsLayer.image;
+}
+const Image &View::keyboardPanel(bool split, bool functions) {
+  const auto &layout = GameKeyboard::layout(split, functions);
+  std::string key = split ? "split" : "dock";
+  if (functions)
+    key += "-fn";
+  if (beginLayer(keyboardLayer, key, width, height - GameKeyboard::top)) {
+    for (const auto &panel : layout.panels) {
+      const int y = panel.y - GameKeyboard::top;
+      rect(panel.x, y, panel.w, panel.h, {186, 192, 202}, 124, 14);
+      rect(panel.x + 1, y + 1, panel.w - 2, panel.h - 2, {16, 19, 25}, 206, 13);
+    }
+    for (const auto &keycap : layout.keys) {
+      const auto &r = keycap.rect;
+      const int y = r.y - GameKeyboard::top;
+      rect(r.x, y, r.w, r.h, {198, 206, 218}, 102, 7);
+      rect(r.x + 1, y + 1, r.w - 2, r.h - 2, {27, 31, 39}, 218, 6);
+      rect(r.x + 3, y + 3, r.w - 6, 11, {216, 222, 238}, 25, 4);
+      label(r.x + r.w / 2, y + 10, keycap.label, 17, {239, 242, 247}, 255, false, 0, r.w - 8);
+    }
+    endLayer();
+  }
+  return keyboardLayer.image;
 }
 } // namespace hardrpg

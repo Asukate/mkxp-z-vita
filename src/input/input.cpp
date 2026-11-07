@@ -614,6 +614,9 @@ struct MsBinding : public Binding
     
     bool sourceActive() const
     {
+#ifdef __vita__
+        if (vitaKeyboardCapturesInput()) return false;
+#endif
         return EventThread::mouseState.buttons[index];
     }
     
@@ -1098,6 +1101,7 @@ struct InputPrivate
             for(size_t i=0;i<vitaResult.keys.size() && i<SDL_NUM_SCANCODES;++i)
                 if(vitaResult.keys[i])rawStates[i]=1;
         }
+        vitaApplyKeyboardOverlay(rawStates);
 #endif
         
         for (int i = 0; i < SDL_NUM_SCANCODES; i++)

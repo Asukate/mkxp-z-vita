@@ -36,6 +36,20 @@ themselves (LISA's W/A/S/D combos, F-key menus). Keys reach RGSS input, the
 raw key state and the Win32 key functions games call through Win32API.
 Entries already in use elsewhere are tinted.
 
+## In-game keyboard
+
+Tap the keyboard icon below the menu icon while playing an XP, VX, or VX Ace
+game. On a full-width game the icon sits at the top left. The keyboard
+overlays the game and sends the same key presses as the mapped controls.
+Games that poll Win32 keyboard functions can use it without a custom control
+profile.
+
+Tap a key or use the D-pad and Cross. Split and Dock switch the layout, and
+Fn shows function keys, Ctrl, and Alt. Triangle switches the layout and
+Square toggles the function row when navigating with the D-pad. Shift
+applies to the next key. Tap Hide, tap the keyboard icon again, or press
+Circle to close the keyboard.
+
 ## Touch modes
 
 | Surface | Mode | Behaviour |

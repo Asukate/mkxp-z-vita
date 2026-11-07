@@ -28,6 +28,11 @@ bool vitaControlScancode(int scancode);
 /* Keyboard keys held this frame through a key mapping in the control profile. */
 void vitaSetMappedKeys(const std::array<bool, 256> &keys);
 bool vitaMappedKey(int scancode);
+// In-game overlay keys share the mapped key path, while its pad and touch
+// navigation are withheld from gameplay until the closing inputs are up.
+void vitaSetKeyboardOverlay(const std::array<bool, 256> &keys, bool captures);
+bool vitaKeyboardCapturesInput();
+void vitaApplyKeyboardOverlay(uint8_t *rawKeys);
 // An input mapped to Fast forward is held (read by Graphics each frame).
 void vitaSetFastForwardHeld(bool held);
 // When the game itself last called Input.update (SDL ticks), and whether

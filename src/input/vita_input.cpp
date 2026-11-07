@@ -56,6 +56,8 @@ struct PadFrame {
 	bool valid = false;
 };
 PadFrame padFrame;
+std::array<bool, 256> overlayKeys{};
+bool overlayCaptures = false;
 hardrpg::PadReplay padReplay;
 bool padHistory = true, padTest = false, padPrimed = false;
 uint64_t padLastStamp = 0, padLastFrameUs = 0;
@@ -207,7 +209,7 @@ void vitaPollPads() {
 	if (!padFrame.valid)
 		return;
 	for (size_t i = 0; i < sizeof(buttonMap) / sizeof(buttonMap[0]); ++i) {
-		bool pressed = (padFrame.buttons & (1u << i)) != 0;
+		bool pressed = !overlayCaptures && (padFrame.buttons & (1u << i)) != 0;
 
 		bool &slot = EventThread::controllerState.buttons[buttonMap[i].sdl];
 		if (pressed == slot)
@@ -216,10 +218,10 @@ void vitaPollPads() {
 		vitaDiagControllerButton(buttonMap[i].sdl, pressed);
 	}
 
-	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_LEFTX] = scaleStick(padFrame.lx);
-	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_LEFTY] = scaleStick(padFrame.ly);
-	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_RIGHTX] = scaleStick(padFrame.rx);
-	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_RIGHTY] = scaleStick(padFrame.ry);
+	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_LEFTX] = overlayCaptures ? 0 : scaleStick(padFrame.lx);
+	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_LEFTY] = overlayCaptures ? 0 : scaleStick(padFrame.ly);
+	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_RIGHTX] = overlayCaptures ? 0 : scaleStick(padFrame.rx);
+	EventThread::controllerState.axes[SDL_CONTROLLER_AXIS_RIGHTY] = overlayCaptures ? 0 : scaleStick(padFrame.ry);
 }
 
 namespace {
@@ -249,6 +251,7 @@ void vitaLoadControls(const std::string &configPath) {
 hardrpg::ControlSample vitaReadControls(bool front,bool rear,bool fromFrame) {
   hardrpg::ControlSample sample;sample.milliseconds=sceKernelGetProcessTimeWide()/1000;
   if(fromFrame) {
+    if (overlayCaptures) return sample;
     if(padFrame.valid) {
       sample.buttons=padFrame.buttons;
       sample.lx=padFrame.lx;sample.ly=padFrame.ly;sample.rx=padFrame.rx;sample.ry=padFrame.ry;
@@ -298,7 +301,23 @@ unsigned int vitaGameInputTicks = 0;
 bool vitaInputAutoUpdate = false;
 bool vitaFastForwardHeld() { return fastForwardHeld; }
 bool vitaMappedKey(int scancode) {
-  return scancode > 0 && scancode < 256 && mappedKeys[scancode];
+  return scancode > 0 && scancode < 256 && (overlayCaptures ? overlayKeys[scancode] : mappedKeys[scancode]);
+}
+void vitaSetKeyboardOverlay(const std::array<bool, 256> &keys, bool captures) {
+  if (captures != overlayCaptures) {
+    vitaPadReset();
+    vitaResetControls();
+    mappedKeys.fill(false);
+  }
+  overlayKeys = keys;
+  overlayCaptures = captures;
+}
+bool vitaKeyboardCapturesInput() { return overlayCaptures; }
+void vitaApplyKeyboardOverlay(uint8_t *rawKeys) {
+  if (!overlayCaptures)
+    return;
+  for (size_t i = 0; i < overlayKeys.size(); ++i)
+    rawKeys[i] |= overlayKeys[i];
 }
 bool vitaControlScancode(int code) {
   switch(code) {

@@ -45,6 +45,7 @@ public:
   // framed false: text only, for a dark border beside the game.
   const Image &statsPanel(const std::string &headline, int tone, const std::vector<StatRow> &rows, int width,
                           bool framed = true);
+  const Image &keyboardPanel(bool split, bool functions);
   bool gpu = false;      // the presenter draws scene; pixels hold nothing
   // Drawn over a running game: sheets keep a see-through background and
   // pixels start transparent (premultiplied alpha).
@@ -104,7 +105,7 @@ private:
   std::map<uint64_t, bool> opaqueHeroes; // by Image::id
   bool opaque(const Image *img);
   Image vitaBack; // the console's outline, for the rear pad page
-  Layer statsLayer;
+  Layer statsLayer, keyboardLayer;
   const Image *heroShown = nullptr, *heroFading = nullptr;
   std::string heroKey;
   int loadBudget = 0;

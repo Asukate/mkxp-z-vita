@@ -1462,25 +1462,30 @@ struct GraphicsPrivate {
     hardrpg::GameMenu gameMenu;
     GameMenuLayer gameMenuLayer;
     const hardrpg::View *gameMenuView = nullptr;
-    /* The performance overlay, drawn with the launcher's fonts. */
-    std::unique_ptr<hardrpg::View> statsView;
-    bool statsViewFailed = false;
+    hardrpg::GameKeyboard gameKeyboard;
+    unsigned keyboardEpoch = vitaResumeEpoch();
+    /* The keyboard and performance panel share the launcher's fonts. */
+    std::unique_ptr<hardrpg::View> overlayView;
+    bool overlayViewFailed = false;
     VitaStats vitaStats;
     uint64_t statsSerial = uint64_t(-1);
     int statsLevel = -1, statsTone = 0;
     std::string statsHeadline;
     std::vector<hardrpg::View::StatRow> statsRows;
-    void drawStats() {
-        const int level = threadData->config.performanceMetrics;
-        if (!statsView && !statsViewFailed) {
+    bool ensureOverlayView() {
+        if (!overlayView && !overlayViewFailed) {
             try {
                 hardrpg::useLauncherLanguage();
-                statsView.reset(new hardrpg::View("app0:/font.ttf"));
+                overlayView.reset(new hardrpg::View("app0:/font.ttf"));
             } catch (...) {
-                statsViewFailed = true;
+                overlayViewFailed = true;
             }
         }
-        if (!statsView)
+        return bool(overlayView);
+    }
+    void drawStats() {
+        const int level = threadData->config.performanceMetrics;
+        if (!ensureOverlayView())
             return;
         /* New text twice a second, when the frame sampler has a new reading. */
         const auto &samples = performanceOverlay.samples();
@@ -1494,38 +1499,58 @@ struct GraphicsPrivate {
         /* In the left border, under the menu icon, as plain text when it fits;
          * otherwise on a dark panel over the game's bottom left corner. */
         const bool inBorder = scOffset.x >= width + 8;
-        const hardrpg::Image &panel = statsView->statsPanel(statsHeadline, statsTone, statsRows, width, !inBorder);
+        const hardrpg::Image &panel = overlayView->statsPanel(statsHeadline, statsTone, statsRows, width, !inBorder);
         const int x = inBorder ? (scOffset.x - width) / 2 : 8;
         const int y = winSize.y - panel.height - 8;
         gameMenuLayer.drawImage(panel, x, y, winSize.x, winSize.y);
     }
-    bool menuIconTouching = false;
-    /* The icon was pressed: drawn lit for a frame, then the menu opens. */
+    bool overlayTouching = false;
+    /* The menu icon was pressed: drawn lit for a frame before opening. */
     bool menuIconPressed = false;
     bool playingGame() const { return threadData->config.gameFolder != "app0:/stub"; }
-    /* A press that starts on the icon in the left border. */
-    bool menuIconTapped() {
-        int x, y, w, h;
-        if (!playingGame() || !GameMenuLayer::iconRect(scOffset.x, x, y, w, h))
-            return false;
-        static bool sampling = false;
-        if (!sampling) {
-            sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
-            sampling = true;
+    void updateGameOverlays() {
+        const unsigned epoch = vitaResumeEpoch();
+        if (epoch != keyboardEpoch && gameKeyboard.visible())
+            gameKeyboard.close();
+        keyboardEpoch = epoch;
+        if (menuIconPressed || threadData->ethread->takeGameMenuRequest()) {
+            menuIconPressed = false;
+            if (gameKeyboard.visible()) {
+                gameKeyboard.close();
+                vitaSetKeyboardOverlay({}, true);
+            }
+            runGameMenu();
+            return;
         }
-        SceTouchData data = {};
-        if (sceTouchPeek(SCE_TOUCH_PORT_FRONT, &data, 1) < 0)
-            return false;
-        bool down = data.reportNum > 0;
-        bool began = down && !menuIconTouching;
-        menuIconTouching = down;
+
+        const auto sample = vitaReadControls(true, false);
+        const bool down = !sample.front.empty();
+        const bool began = down && !overlayTouching;
+        overlayTouching = down;
+        gameKeyboard.setGameOffset(scOffset.x);
+        if (gameKeyboard.capturing()) {
+            const char ch = gameKeyboard.step(sample);
+            vitaSetKeyboardOverlay(gameKeyboard.heldKeys(), gameKeyboard.capturing());
+            if (ch && shState->input().getTextInputMode()) {
+                auto &events = *threadData->ethread;
+                events.lockText(true);
+                if (events.textInputBuffer.size() < 512)
+                    events.textInputBuffer += ch;
+                events.lockText(false);
+            }
+            return;
+        }
         if (!began)
-            return false;
-        int tx = data.report[0].x / 2, ty = data.report[0].y / 2;
-        /* The whole border beside the icon counts, generously. */
-        if (tx < scOffset.x && ty < y + h + 40)
+            return;
+        const int tx = int(sample.front[0].x * 960), ty = int(sample.front[0].y * 544);
+        if (hardrpg::GameKeyboard::iconRect(scOffset.x).contains(tx, ty) && ensureOverlayView()) {
+            gameKeyboard.open();
+            vitaSetKeyboardOverlay({}, true);
+            return;
+        }
+        int x, y, w, h;
+        if (GameMenuLayer::iconRect(scOffset.x, x, y, w, h) && tx < scOffset.x && ty < y + h + 12)
             menuIconPressed = true;
-        return false;
     }
     /* Applies what the menu changed: display, speed, overlay and controls. */
     void applyGameMenuSettings() {
@@ -1831,7 +1856,7 @@ struct GraphicsPrivate {
     void swapGLBuffer() {
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
         /* Hidden while the in-game menu is open: it would show through it. */
-        if (threadData->config.performanceMetrics && !gameMenu.isOpen())
+        if (threadData->config.performanceMetrics && !gameMenu.isOpen() && !gameKeyboard.visible())
             drawStats();
 #else
         if (threadData->config.performanceMetrics)
@@ -1844,8 +1869,12 @@ struct GraphicsPrivate {
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
         if (gameMenu.isOpen() && gameMenuView)
             gameMenuLayer.draw(*gameMenuView, winSize.x, winSize.y);
-        else if (playingGame())
-            gameMenuLayer.drawIcon(winSize.x, winSize.y, scOffset.x, menuIconPressed);
+        else if (playingGame()) {
+            if (gameKeyboard.visible())
+                gameMenuLayer.drawKeyboard(overlayView->keyboardPanel(gameKeyboard.isSplit(), gameKeyboard.hasFunctions()),
+                                           gameKeyboard, winSize.x, winSize.y);
+            gameMenuLayer.drawIcons(winSize.x, winSize.y, scOffset.x, menuIconPressed, gameKeyboard.visible());
+        }
 #endif
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("FPS_DELAY_BEGIN");
@@ -2582,7 +2611,12 @@ Graphics::Graphics(RGSSThreadData *data) {
     }
 }
 
-Graphics::~Graphics() { delete p; }
+Graphics::~Graphics() {
+#if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
+    vitaSetKeyboardOverlay({}, false);
+#endif
+    delete p;
+}
 
 double Graphics::getDelta() {
     return shState->runTime() - p->last_update;
@@ -2618,16 +2652,8 @@ void Graphics::update(bool checkForShutdown) {
     p->checkSyncLock();
     p->updateFastForward();
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
-    if (!p->frozen && p->playingGame()) {
-        /* A press on the icon is drawn lit first (this frame), and the menu
-         * opens on the next update. */
-        bool icon = p->menuIconPressed;
-        p->menuIconPressed = false;
-        if (icon || p->threadData->ethread->takeGameMenuRequest())
-            p->runGameMenu();
-        else
-            p->menuIconTapped();
-    }
+    if (!p->frozen && p->playingGame())
+        p->updateGameOverlays();
 #endif
     
 #ifdef MKXPZ_STEAM
