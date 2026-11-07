@@ -101,7 +101,7 @@ public:
 
 #ifdef __vita__
     struct OpaqueLayer { Bitmap *source; int x, y, width, height, opacity; };
-    static constexpr size_t maxOpaqueLayers = 16;
+    static constexpr size_t maxOpaqueCommands = 64;
     bool tryComposeOpaque(const Vec4 &background, const OpaqueLayer *layers, size_t count);
 #endif
 

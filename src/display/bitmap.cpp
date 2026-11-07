@@ -3294,23 +3294,24 @@ void Bitmap::clearRect(const IntRect &rect)
 }
 
 #ifdef __vita__
-bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *layers, size_t count)
+bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *commands, size_t commandCount)
 {
     if (isDisposed() || background.w != 1.f || hasHires() || p->selfLores ||
-        p->animation.enabled || p->megaSurface || count == 0 || count > maxOpaqueLayers)
+        p->animation.enabled || p->megaSurface || commandCount == 0 ||
+        commandCount > maxOpaqueCommands)
         return false;
 
-    IntRect clipped[maxOpaqueLayers];
+    constexpr size_t maxVisibleLayers = 16;
+    OpaqueLayer layers[maxVisibleLayers];
+    IntRect clipped[maxVisibleLayers];
+    size_t count = 0;
     std::vector<int> xs, ys;
-    xs.reserve(count * 2);
-    ys.reserve(count * 2);
-    for (size_t i = 0; i < count; ++i) {
-        const auto &layer = layers[i];
+    xs.reserve(maxVisibleLayers * 2);
+    ys.reserve(maxVisibleLayers * 2);
+    for (size_t i = 0; i < commandCount; ++i) {
+        const auto &layer = commands[i];
         auto *source = layer.source;
-        if (!source || source->isDisposed() || source == this || source->hasHires() ||
-            source->p->selfLores || source->isAnimated() || source->megaSurface() ||
-            source->p->cpu || source->p->pendingClear || source->p->gl.tex == TEX::ID(0) ||
-            layer.width <= 0 || layer.height <= 0)
+        if (!source || source->isDisposed() || layer.width <= 0 || layer.height <= 0)
             return false;
         if (layer.opacity <= 0)
             continue;
@@ -3319,7 +3320,12 @@ bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *layers,
         const auto r = cpuClip(dest, width(), height());
         if (!r.w || !r.h)
             continue;
-        clipped[i] = r;
+        if (count == maxVisibleLayers || source == this || source->hasHires() ||
+            source->p->selfLores || source->isAnimated() || source->megaSurface() ||
+            source->p->cpu || source->p->pendingClear || source->p->gl.tex == TEX::ID(0))
+            return false;
+        layers[count] = layer;
+        clipped[count++] = r;
         xs.push_back(r.x);
         xs.push_back(r.x + r.w);
         ys.push_back(r.y);

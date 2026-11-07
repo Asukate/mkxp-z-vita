@@ -110,7 +110,7 @@ module HardRPGNative
         if surface
           lights = $game_map.light_sources
           if $hardrpg_gpu_lights != false && !$game_map.lantern.visible &&
-             !lights.empty? && lights.size <= 16 && surface.bitmap.width == Graphics.width &&
+             !lights.empty? && lights.size <= 64 && surface.bitmap.width == Graphics.width &&
              surface.bitmap.height == Graphics.height &&
              lights.all? { |event| event.instance_of?(Game_Event) &&
                event.instance_variable_get(:@light).instance_of?(Light_SSource) }

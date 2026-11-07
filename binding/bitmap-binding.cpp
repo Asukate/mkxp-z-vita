@@ -274,11 +274,11 @@ RB_METHOD_GUARD(bitmapComposeOpaque) {
     VALUE colorObj, rows;
     rb_get_args(argc, argv, "oo", &colorObj, &rows RB_ARG_END);
     Check_Type(rows, T_ARRAY);
-    const long count = RARRAY_LEN(rows);
-    if (count > Bitmap::maxOpaqueLayers)
+    const size_t count = RARRAY_LEN(rows);
+    if (count > Bitmap::maxOpaqueCommands)
         return Qfalse;
-    Bitmap::OpaqueLayer layers[Bitmap::maxOpaqueLayers];
-    for (long i = 0; i < count; ++i) {
+    Bitmap::OpaqueLayer layers[Bitmap::maxOpaqueCommands];
+    for (size_t i = 0; i < count; ++i) {
         VALUE row = rb_ary_entry(rows, i);
         Check_Type(row, T_ARRAY);
         if (RARRAY_LEN(row) != 6)
