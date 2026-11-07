@@ -117,6 +117,16 @@ module PocketMirrorMemory
       @frames += 1
       if @phase == :map && @frames == 60
         snapshot('map-settled')
+        Array(CONFIG.fetch('map_image_checks', {})[$game_map.map_id.to_s]).each do |check|
+          image = Cache.picture(check.fetch('name'))
+          raise 'cached image logical size changed' unless image.width == check['width'] && image.height == check['height']
+          check.fetch('probes').each do |x, y, expected|
+            color = image.get_pixel(x, y)
+            actual = [color.red, color.green, color.blue, color.alpha].map(&:to_i)
+            raise "cached image pixel changed: #{check['name']} #{x},#{y}: #{actual.inspect}" unless actual == expected
+          end
+          log("MAPIMAGECHECK pass #{check['name']} logical-size/pixels")
+        end
         if CONFIG['mode'] == 'cold'
           @active = false
           result('pass', 'cold-entry')
@@ -179,8 +189,17 @@ module PocketMirrorMemory
         image.dispose
         image = Bitmap.new(path)
         image.clear
-        raise 'deferred image clear failed' unless image.get_pixel(w - 1, h - 1).alpha == 0
+        cleared = image.get_pixel(w - 1, h - 1)
+        raise 'deferred image clear failed' unless [cleared.red, cleared.green, cleared.blue, cleared.alpha] == [0, 0, 0, 0]
         raise 'logical dimensions changed after clear' unless image.width == w && image.height == h
+        # Force a GPU destination, then sample the cleared source through the
+        # real blit shader. A CPU read alone cannot prove GPU visibility.
+        sample = probes.find { |x, y, rgba| rgba[3] > 0 } || probes.first
+        probe = Bitmap.new(16, 16)
+        probe.blur
+        probe.blt(0, 0, image, Rect.new(sample[0], sample[1], 1, 1))
+        raise 'cleared image still visible to GPU' unless probe.get_pixel(0, 0).alpha == 0
+        probe.dispose
         image.dispose
         log("IMAGECHECK pass #{path} dimensions/pixels/write/copy/clear")
       end

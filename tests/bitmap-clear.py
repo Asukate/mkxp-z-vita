@@ -66,6 +66,7 @@ static void cpuFill(BitmapPrivate::Pixels *,const IntRect &,unsigned){}
 static unsigned cpuPack(const Vec4 &){return 0;}
 static void cpuMarkDirty(BitmapPrivate *,const IntRect &){}
 static void cpuTouch(BitmapPrivate *,const IntRect &){}
+static bool clearMappedImage(BitmapPrivate *,const Vec4 &){return false;}
 struct Bitmap {
  BitmapPrivate *p; void guardDisposed(){} bool hasHires(){return false;} int width(){return 8;}int height(){return 4;}
  void clear();void fillRect(const IntRect &,const Vec4 &);void clearRect(const IntRect &);

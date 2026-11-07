@@ -193,6 +193,57 @@ Map 63 target-memory sample was unchanged by the lower cutoff, so no measured
 16 MiB whole-scene reduction is claimed for that cutoff alone. Allocation
 layout, image reuse and later loads also matter.
 
-A broader run reached a separate 3776×3300 allocation OOM in Map 43 after
-passing Map 63 and its menu return. That failure remains a separate follow-up;
-the Map 63 result does not establish full-game stability.
+## Map 43 follow-up
+
+Map 43 uses several 3776×3300 images. Each full RGBA image takes 47.5 MiB.
+The sparse-storage build entered the room from a fresh process, then failed
+on the first menu return in the repeated route. The engine was reloading
+`[FIXED] fire light`. At the failed texture allocation, about 22 MiB of
+system memory was free. After SDL freed the decoded image, about 69 MiB was
+free. The difference identifies the overlap between decoding and uploading.
+
+When graphics allocation fails, vitaGL can take ownership of a compatible
+decoder buffer and use it directly as texture storage. This avoids a second
+full-size allocation. The handoff checks buffer size, format and alignment.
+The GPU's deferred release queue frees the buffer through its original
+allocator after the GPU has finished using it.
+
+The broader route also exhausted memory while decoding `[FIXED] pumpkin king`.
+Most of this picture's 3776×3300 canvas is a constant transparent color.
+If full pixel allocation fails, the bitmap loader can scan the PNG one row
+at a time, then decode again and keep only the padded rectangle. The bitmap
+keeps its original dimensions and RGBA values. This fallback supports
+noninterlaced PNGs up to 4096×4096.
+
+A focused repeat then ran out of memory decoding the fire-light picture.
+Its padded rectangle saves about 9% of the full RGBA buffer. After a
+full allocation fails, the decoder now tries any smaller padded rectangle.
+Routine cropping still requires a 25% saving. A streamed rectangle can
+also become the texture storage directly if its allocation and layout fit.
+
+The smaller crop and a single graphics RAM region each still hit a
+fire-light allocation failure on the mixed route. The synchronous PNG
+loader now retries a large allocation through vitaGL's existing recovery
+path after the ordinary pools fail. That path finishes the current GPU
+scene and collects deferred storage. Background decoders continue using
+the regular allocator.
+
+The image probe also exposed an existing clear failure on a large bitmap.
+Large transparent clears now synchronize with the GPU and zero the mapped
+pixels directly. For a sparse image, the clear also zeroes the stored
+background color. This avoids a full-size temporary target.
+
+Host regressions deny a second upload allocation and a full PNG decode
+allocation, then check ownership, cleanup, and exact pixels. The first
+streamed-crop build completed 30 physical Vita visits and 30 menu cycles
+in about 350 seconds,
+including two visits each to Maps 43 and 63. The log recorded the streamed
+crop fallback. The three original Map 43 image probes passed dimension,
+pixel, clone, edit and clear checks, including a GPU blit after clear.
+The pumpkin picture also passed size and pixel checks in the running room.
+
+The modest-crop candidate completed the matching focused route on physical
+Vita in 166 seconds. The final recovery build completed the 15-visit mixed
+route and eight additional Map 43 and corridor round trips in one session.
+It passed all 31 visits and menu cycles in 309 seconds. Both Map 43 pictures
+passed size and pixel checks on all nine visits and their menu returns.

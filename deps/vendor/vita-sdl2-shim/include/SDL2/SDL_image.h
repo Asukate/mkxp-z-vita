@@ -20,6 +20,14 @@ void IMG_Quit(void);
 SDL_Surface *IMG_Load(const char *file);
 SDL_Surface *IMG_Load_RW(SDL_RWops *src, int freesrc);
 SDL_Surface *IMG_LoadTyped_RW(SDL_RWops *src, int freesrc, const char *type);
+/* VITA_BITMAP opts into sparse storage if full PNG pixel allocation fails.
+ * The returned surface contains physical pixels; this metadata preserves its
+ * logical image. Ordinary SDL_image requests always return full surfaces. */
+typedef struct SDL_VitaImageCrop {
+    int x, y, width, height, logicalWidth, logicalHeight;
+    Uint32 background;
+} SDL_VitaImageCrop;
+int SDL_VitaGetImageCrop(const SDL_Surface *surface, SDL_VitaImageCrop *crop);
 int IMG_isGIF(SDL_RWops *src);
 int IMG_SaveJPG(SDL_Surface *surface, const char *file, int quality);
 int IMG_SavePNG(SDL_Surface *surface, const char *file);

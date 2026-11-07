@@ -1095,9 +1095,19 @@ diff -ruN --no-dereference a/source/textures.c b/source/textures.c
 +	return vgl_texture_alloc_failures;
 +}
 diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
---- a/source/utils/gpu_utils.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/utils/gpu_utils.c	2026-11-01 04:22:52.162177319 -0300
-@@ -85,16 +85,50 @@
+--- a/source/utils/gpu_utils.c
++++ b/source/utils/gpu_utils.c
+@@ -23,6 +23,9 @@
+ 
+ #include "../shared.h"
+ 
++/* Optional ownership transfer for explicitly offered, disposable RGBA pixels. */
++extern int mkxp_adopt_texture_pixels(const void *, uint32_t) __attribute__((weak));
++
+ #include "texture_swizzler.h"
+ 
+ #ifdef HAVE_TEX_CACHE
+@@ -85,16 +88,50 @@
  }
  
  static int unsafe_allocator_counter = 0;
@@ -1150,7 +1160,35 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
  #endif
  
  	// Allocating requested memblock
-@@ -382,6 +416,16 @@
+@@ -336,10 +373,17 @@
+ 	const int aligned_w = VGL_ALIGN(w, 8);
+ 	const int tex_size = aligned_w * h * bpp;
+ 	void *texture_data = gpu_alloc_mapped(tex_size, VGL_MEM_MAIN);
++	/* Keep ordinary images in the graphics pools when they fit. On allocation
++	 * failure an offered decode buffer avoids the otherwise overlapping copy. */
++	GLboolean adopted = !texture_data && data && fast_store && bpp == 4 && src_bpp == 4 &&
++		aligned_w == w && mkxp_adopt_texture_pixels &&
++		mkxp_adopt_texture_pixels(data, tex_size);
++	if (adopted)
++		texture_data = (void *)data;
+ 
+ 	if (texture_data != NULL) {
+ 		// Initializing texture data buffer
+-		if (data != NULL) {
++		if (data != NULL && !adopted) {
+ 			uint8_t *src = (uint8_t *)data;
+ 			uint8_t *dst;
+ 			if (fast_store) { // Internal Format and Data Format are the same, we can just use vgl_fast_memcpy for better performance
+@@ -364,7 +408,7 @@
+ 					}
+ 				}
+ 			}
+-		} else
++		} else if (!adopted)
+ 			vgl_memset(texture_data, 0, tex_size);
+ 
+ 		// Initializing texture and validating it
+@@ -382,6 +426,16 @@
  #ifdef HAVE_TEX_CACHE
  		mark_as_cacheable(tex)
  #endif
@@ -1167,7 +1205,6 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
  	}
  }
  
-diff -ruN --no-dereference a/source/utils/gpu_utils.h b/source/utils/gpu_utils.h
 --- a/source/utils/gpu_utils.h	2026-05-12 21:04:08.000000000 -0300
 +++ b/source/utils/gpu_utils.h	2026-11-01 04:22:52.162240818 -0300
 @@ -37,6 +37,13 @@
@@ -1185,20 +1222,27 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.h b/source/utils/gpu_utils.h
  static inline __attribute__((always_inline)) void *gpu_alloc_mapped(size_t size, vglMemType type) {
  	return gpu_alloc_mapped_aligned(MEM_ALIGNMENT, size, type);
 diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
---- a/source/utils/mem_utils.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/utils/mem_utils.c	2026-11-01 04:22:52.163419769 -0300
-@@ -24,7 +24,6 @@
+--- a/source/utils/mem_utils.c
++++ b/source/utils/mem_utils.c
+@@ -23,8 +23,12 @@
+ 
  #include "../shared.h"
  
++/* Imported pixel blocks share the normal deferred GPU lifetime, but their
++ * allocation is owned by the image decoder rather than an internal mspace. */
++extern int mkxp_free_texture_pixels(void *) __attribute__((weak));
++extern size_t mkxp_texture_pixels_size(const void *) __attribute__((weak));
++
  #define HEAP_COOKIE 0x13371337
 -
  GLboolean has_cached_mem = GL_FALSE; // Flag for whether to use cached memory for mempools or not
  
  #ifndef HAVE_CUSTOM_HEAP
-@@ -36,6 +35,109 @@
+@@ -35,6 +39,109 @@
+ static size_t mempool_size[VGL_MEM_ALL] = {0, 0, 0, 0, 0}; // sizes of heap memlbocks (VRAM, RAM, PHYCONT RAM, EXTERNAL)
  
  static int mempool_initialized = GL_FALSE;
- 
++
 +#ifndef HAVE_CUSTOM_HEAP
 +/* Deferred tail of the main-memory pool (vglSetRamPoolDeferral). Allocating
 + * uncached main memory costs about 13 ms per MiB in the kernel, so a large
@@ -1301,11 +1345,10 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
 +	ram_eager_size = VGL_ALIGN(eager_size, 1024 * 1024);
 +#endif
 +}
-+
+ 
  #ifdef HAVE_WRAPPED_ALLOCATORS
  void *__real_calloc(uint32_t nmember, uint32_t size);
- void __real_free(void *addr);
-@@ -304,6 +406,20 @@
+@@ -304,6 +411,20 @@
  	heap_destroy();
  #endif
  
@@ -1326,7 +1369,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  	for (int i = 0; i < VGL_MEM_EXTERNAL; i++) {
  #ifndef HAVE_CUSTOM_HEAP
  		sceClibMspaceDestroy(mempool_mspace[i]);
-@@ -333,6 +449,14 @@
+@@ -333,6 +454,14 @@
  	mempool_size[VGL_MEM_SLOW] = VGL_ALIGN(size_phycont, 1024 * 1024);
  #endif
  	mempool_size[VGL_MEM_BUDGET] = VGL_ALIGN(size_cdlg, 4 * 1024);
@@ -1341,7 +1384,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  
  #ifdef HAVE_CUSTOM_HEAP
  	// Initialize heap
-@@ -365,6 +489,7 @@
+@@ -365,6 +494,7 @@
  				sceGxmMapMemory(mempool_addr[i], mempool_size[i], SCE_GXM_MEMORY_ATTRIB_RW);
  #ifndef HAVE_CUSTOM_HEAP
  				mempool_mspace[i] = sceClibMspaceCreate(mempool_addr[i], mempool_size[i]);
@@ -1349,7 +1392,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  #else
  				heap_extend(i, mempool_addr[i], mempool_size[i]);
  #endif
-@@ -401,6 +526,22 @@
+@@ -401,6 +531,22 @@
  	mempool_size[VGL_MEM_EXTERNAL] = info.mappedSize;
  	mempool_addr[VGL_MEM_EXTERNAL] = info.mappedBase;
  
@@ -1372,7 +1415,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  	mempool_initialized = 1;
  }
  
-@@ -414,6 +555,10 @@
+@@ -414,6 +560,10 @@
  		return VGL_MEM_VRAM;
  	else if (addr >= mempool_addr[VGL_MEM_RAM] && (addr < (void *)((uint8_t *)mempool_addr[VGL_MEM_RAM] + mempool_size[VGL_MEM_RAM])))
  		return VGL_MEM_RAM;
@@ -1383,14 +1426,11 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  #ifndef PHYCONT_ON_DEMAND
  	else if (addr >= mempool_addr[VGL_MEM_SLOW] && (addr < (void *)((uint8_t *)mempool_addr[VGL_MEM_SLOW] + mempool_size[VGL_MEM_SLOW])))
  		return VGL_MEM_SLOW;
-@@ -458,15 +603,42 @@
+@@ -458,13 +608,40 @@
  		return tm_free[type];
  	}
  #else
 -	} else if (mempool_size[type]) {
--		SceClibMspaceStats stats;
--		sceClibMspaceMallocStats(mempool_mspace[type], &stats);
--		return stats.capacity - stats.current_in_use;
 +	} else if (mempool_size[type] && mempool_mspace[type]) {
 +		int32_t used = __atomic_load_n(&mspace_used[type], __ATOMIC_RELAXED);
 +		size_t res = (size_t)used < mspace_capacity[type] ? mspace_capacity[type] - (size_t)used : 0;
@@ -1404,17 +1444,21 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
 +				res += ram_ext_size;
 +		}
 +		return res;
- 	} else
- 		return 0;
- #endif
- }
- 
++	} else
++		return 0;
++#endif
++}
++
 +/* The same figure from a full walk of the heap (slow): for checking the counters only. */
 +size_t vgl_mem_get_free_space_walk(vglMemType type) {
 +#ifndef HAVE_CUSTOM_HEAP
 +	if (type < VGL_MEM_EXTERNAL && type != VGL_MEM_SLOW && mempool_size[type] && mempool_mspace[type]) {
-+		SceClibMspaceStats stats;
-+		sceClibMspaceMallocStats(mempool_mspace[type], &stats);
+ 		SceClibMspaceStats stats;
+ 		sceClibMspaceMallocStats(mempool_mspace[type], &stats);
+-		return stats.capacity - stats.current_in_use;
+-	} else
+-		return 0;
+-#endif
 +		size_t res = stats.capacity - stats.current_in_use;
 +		if (type == VGL_MEM_RAM && ram_ext_state == RAM_EXT_ADOPTED) {
 +			sceClibMspaceMallocStats(ram_ext_mspace, &stats);
@@ -1425,18 +1469,17 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
 +	}
 +#endif
 +	return vgl_mem_get_free_space(type);
-+}
-+
+ }
+ 
  size_t vgl_mem_get_total_space(vglMemType type) {
- 	if (type == VGL_MEM_ALL) {
- 		size_t size = 0;
-@@ -474,9 +646,12 @@
+@@ -474,12 +651,20 @@
  			size += vgl_mem_get_total_space(i);
  		}
  		return size;
 -	} else {
 -		return mempool_size[type];
- 	}
+-	}
++	}
 +#ifndef HAVE_CUSTOM_HEAP
 +	if (type == VGL_MEM_RAM && ram_ext_state != RAM_EXT_NONE && ram_ext_state != RAM_EXT_FAILED)
 +		return mempool_size[type] + ram_ext_size;
@@ -1445,16 +1488,26 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  }
  
  size_t vgl_malloc_usable_size(void *ptr) {
-@@ -496,6 +671,8 @@
++	if (mkxp_texture_pixels_size) {
++		size_t imported = mkxp_texture_pixels_size(ptr);
++		if (imported)
++			return imported;
++	}
+ 	vglMemType type = vgl_mem_get_type_by_addr(ptr);
+ 	if (type == VGL_MEM_EXTERNAL)
+ 		return malloc_usable_size(ptr);
+@@ -496,6 +681,10 @@
  }
  
  void vgl_free(void *ptr) {
 +	if (!ptr)
 +		return;
++	if (mkxp_free_texture_pixels && mkxp_free_texture_pixels(ptr))
++		return;
  	vglMemType type = vgl_mem_get_type_by_addr(ptr);
  	if (type == VGL_MEM_EXTERNAL)
  #ifdef HAVE_WRAPPED_ALLOCATORS
-@@ -513,8 +690,13 @@
+@@ -513,8 +702,13 @@
  	else
  		heap_blk_free(ptr);
  #else
@@ -1469,7 +1522,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  #endif
  }
  
-@@ -533,8 +715,10 @@
+@@ -533,8 +727,10 @@
  	else if (size <= tm_free[type])
  		return heap_alloc(type, size, MEM_ALIGNMENT);
  #else
@@ -1481,7 +1534,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  #endif
  	return NULL;
  }
-@@ -554,8 +738,10 @@
+@@ -554,8 +750,10 @@
  	else if (num * size <= tm_free[type])
  		return heap_alloc(type, num * size, MEM_ALIGNMENT);
  #else
@@ -1493,7 +1546,7 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  #endif
  	return NULL;
  }
-@@ -575,8 +761,19 @@
+@@ -575,13 +773,37 @@
  	else if (size <= tm_free[type])
  		return heap_alloc(type, size, alignment);
  #else
@@ -1515,7 +1568,25 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  #endif
  	return NULL;
  }
-@@ -603,8 +800,23 @@
+ 
+ void *vgl_realloc(void *ptr, size_t size) {
++	if (mkxp_texture_pixels_size) {
++		size_t imported = mkxp_texture_pixels_size(ptr);
++		if (imported) {
++			if (size <= imported)
++				return ptr;
++			void *res = vgl_malloc(size, VGL_MEM_RAM);
++			if (res) {
++				vgl_fast_memcpy(res, ptr, imported);
++				vgl_free(ptr);
++			}
++			return res;
++		}
++	}
+ 	vglMemType type = vgl_mem_get_type_by_addr(ptr);
+ 	if (type == VGL_MEM_EXTERNAL)
+ #ifdef HAVE_WRAPPED_ALLOCATORS
+@@ -603,8 +825,23 @@
  	}
  #endif
  #ifndef HAVE_CUSTOM_HEAP
@@ -1541,7 +1612,6 @@ diff -ruN --no-dereference a/source/utils/mem_utils.c b/source/utils/mem_utils.c
  #endif
  	return NULL;
  }
-diff -ruN --no-dereference a/source/utils/mem_utils.h b/source/utils/mem_utils.h
 --- a/source/utils/mem_utils.h	2026-05-12 21:04:08.000000000 -0300
 +++ b/source/utils/mem_utils.h	2026-11-01 04:22:52.164255679 -0300
 @@ -97,6 +97,7 @@

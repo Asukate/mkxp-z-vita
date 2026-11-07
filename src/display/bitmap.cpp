@@ -36,6 +36,8 @@
 
 #ifdef __vita__
 extern "C" void *vglGetTexDataPointerByID(unsigned int texture);
+extern "C" void vitaBeginPixelTransfer(const void *pixels);
+extern "C" void vitaEndPixelTransfer(void);
 extern "C" {
 extern unsigned int vgl_upload_barrier_count;
 extern unsigned long long vgl_upload_barrier_us;
@@ -567,6 +569,28 @@ struct BitmapPrivate
  * below enforce the contract: draws fuse (GPU clear piggybacks on the
  * target bind the draw already needs), reads materialize first, repeated
  * full clears replace, disposal discards. */
+#ifdef __vita__
+/* Large file textures need no render pass or second image just to become
+ * transparent. In particular, do not depend on a large FBO clear reaching
+ * every texel. The GPU must release all earlier reads/writes before the CPU
+ * changes its mapped linear RGBA storage. Small targets keep the GPU path. */
+static bool clearMappedImage(BitmapPrivate *p, const Vec4 &color)
+{
+    if (p->cpu || color.x || color.y || color.z || color.w ||
+        (!p->imageCrop.active() && size_t(p->gl.width) * p->gl.height < 1024u * 1024u))
+        return false;
+    gl.Finish();
+    void *pixels = vglGetTexDataPointerByID(p->gl.tex.gl);
+    if (!pixels)
+        return false;
+    const size_t pitch = size_t((p->gl.width + 7) & ~7) * 4;
+    memset(pixels, 0, pitch * p->gl.height);
+    if (p->imageCrop.active())
+        p->imageCrop.background = 0;
+    return true;
+}
+#endif
+
 static void materializeClear(BitmapPrivate *p)
 {
     if (!p || !p->pendingClear)
@@ -575,6 +599,13 @@ static void materializeClear(BitmapPrivate *p)
     if (p->animation.enabled || p->megaSurface)
         return;
     const Vec4 color = p->pendingColor;
+#ifdef __vita__
+    if (clearMappedImage(p, color))
+    {
+        p->clearTaintedArea();
+        return;
+    }
+#endif
     /* Materialization often runs mid-pass (e.g. getGLTypes/blitSource or
      * bindTexture after the caller bound a *different* destination FBO).
      * Save and restore the bound target so the clear cannot redirect the
@@ -1474,7 +1505,8 @@ static SDL_Surface *readImageStream(SDL_RWops &ops, const char *ext)
     // The Vita decoder reads the archive stream itself. A whole-file vector
     // here duplicates the compressed input and can exhaust the C heap before
     // the graphics allocator has a chance to reclaim cached textures.
-    return IMG_LoadTyped_RW(&ops, 1, ext);
+    (void)ext;
+    return IMG_LoadTyped_RW(&ops, 1, "VITA_BITMAP");
 #else
     std::vector<uint8_t> bytes;
     const Sint64 length = SDL_RWsize(&ops);
@@ -2317,6 +2349,29 @@ Bitmap::~Bitmap()
 
 void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool forceMega)
 {
+    ImageCrop crop;
+#ifdef __vita__
+    SDL_VitaImageCrop decodedCrop;
+    const bool alreadyPacked = SDL_VitaGetImageCrop(imgSurf, &decodedCrop);
+    if (alreadyPacked)
+    {
+        if (hiresBitmap || forceMega || decodedCrop.logicalWidth > glState.caps.maxTexSize ||
+            decodedCrop.logicalHeight > glState.caps.maxTexSize)
+        {
+            delete hiresBitmap;
+            SDL_FreeSurface(imgSurf);
+            throw Exception(Exception::MKXPError, "Sparse image decode requires an ordinary bitmap without a hires companion");
+        }
+        crop.x = decodedCrop.x; crop.y = decodedCrop.y;
+        crop.width = decodedCrop.width; crop.height = decodedCrop.height;
+        crop.logicalWidth = decodedCrop.logicalWidth; crop.logicalHeight = decodedCrop.logicalHeight;
+        crop.background = decodedCrop.background;
+        char geometry[80];
+        snprintf(geometry, sizeof(geometry), "%dx%d -> %dx%d", crop.logicalWidth, crop.logicalHeight,
+                 crop.width, crop.height);
+        vitaErrorMemoryEvent("streamed-sparse", geometry);
+    }
+#endif
     p->ensureFormat(imgSurf, SDL_PIXELFORMAT_ABGR8888);
     
     if (imgSurf->w > glState.caps.maxTexSize || imgSurf->h > glState.caps.maxTexSize || forceMega)
@@ -2332,22 +2387,34 @@ void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool for
     {
         /* Regular surface */
         TEXFBO tex;
-        ImageCrop crop;
 #ifdef __vita__
-        if (!hiresBitmap)
-            crop = findImageCrop(imgSurf->pixels, imgSurf->w, imgSurf->h, imgSurf->pitch);
-        if (crop.active())
-            packImageCrop(imgSurf->pixels, imgSurf->pitch, crop);
+        if (!alreadyPacked)
+        {
+            if (!hiresBitmap)
+                crop = findImageCrop(imgSurf->pixels, imgSurf->w, imgSurf->h, imgSurf->pitch);
+            if (crop.active())
+                packImageCrop(imgSurf->pixels, imgSurf->pitch, crop);
+        }
 #endif
         
         try
         {
+#ifdef __vita__
+            // A streamed crop already has an allocation sized to its rectangle.
+            vitaBeginPixelTransfer(!crop.active() || alreadyPacked ? imgSurf->pixels : nullptr);
+#endif
             tex = shState->texPool().requestImage(crop.active() ? crop.width : imgSurf->w,
                                                   crop.active() ? crop.height : imgSurf->h,
                                                   imgSurf->pixels);
+#ifdef __vita__
+            vitaEndPixelTransfer();
+#endif
         }
         catch (const Exception &e)
         {
+#ifdef __vita__
+            vitaEndPixelTransfer();
+#endif
             if (hiresBitmap)
                 delete hiresBitmap;
             SDL_FreeSurface(imgSurf);
