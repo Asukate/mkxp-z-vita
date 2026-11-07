@@ -23,6 +23,9 @@
 #include "bitmap.h"
 #include "image-crop.h"
 #include "frame_profile.h"
+#if defined(__vita__) && defined(__ARM_NEON)
+#include "cpu-blit-neon.h"
+#endif
 
 #include <list>
 #include <string>
@@ -1380,9 +1383,12 @@ static void cpuBlit(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
             const bool more = y + 1 < cy1;
             const uint8_t *nextIn = (const uint8_t *)in + src->pitch;
             const uint8_t *nextOut = (const uint8_t *)out + dst->pitch;
+            int i = 0;
+#if defined(__vita__) && defined(__ARM_NEON)
+            i = cpuBlitOpaquePrefix(out, in, count, opacity);
+#endif
             if (opacity == 255)
             {
-                int i = 0;
                 /* Four pixels at a time: walls are mostly runs that are all
                  * opaque (copied) or all clear (skipped). Mixed groups go
                  * pixel by pixel below. (Copying opaque runs with memcpy was
@@ -1430,7 +1436,7 @@ static void cpuBlit(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
             }
             else
             {
-                for (int i = 0; i < count; ++i)
+                for (; i < count; ++i)
                 {
                     if (more && (i & 7) == 0)
                     {
