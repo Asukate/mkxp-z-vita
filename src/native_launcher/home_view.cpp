@@ -391,10 +391,7 @@ int View::measure(const std::string &s, int size, bool alt) {
       i += len;
       continue;
     }
-    auto index = FT_Get_Char_Index(f, decode(s, i));
-    if (!index)
-      index = FT_Get_Char_Index(f, '?');
-    pen += glyph(size, index, alt).advance;
+    pen += glyph(size, glyphFor(decode(s, i), alt)).advance;
   }
   return pen;
 }
@@ -439,10 +436,7 @@ void View::label(int x, int y, const std::string &s, int size, Color color, int 
       i += len;
       continue;
     }
-    auto index = FT_Get_Char_Index(f, decode(str, i));
-    if (!index)
-      index = FT_Get_Char_Index(f, '?');
-    const auto &g = glyph(size, index, alt);
+    const auto &g = glyph(size, glyphFor(decode(str, i), alt));
     int gx = pen + g.left, gy = baseline - g.top;
     for (int row = 0; row < g.height; ++row) {
       int py = gy + row;

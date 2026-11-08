@@ -35,6 +35,8 @@ for line in (ROOT / 'launcher/release-payload.sha256').read_text().splitlines():
             path = ROOT / 'LICENSES' / Path(name).name
     elif name == 'font.ttf':
         path = ROOT / 'assets/liberation.ttf'
+    elif name == 'font-cjk.ttf':
+        path = ROOT / 'assets/wqymicrohei.ttf'
     elif name in ('ca-certificates.crt', 'TimGM6mb.sf2'):
         path = ROOT / 'assets' / name
     elif name == 'THIRD-PARTY-NOTICES.md':

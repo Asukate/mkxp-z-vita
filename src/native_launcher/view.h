@@ -64,6 +64,11 @@ private:
   // Rajdhani Bold for titles on the home screen; falls back to the body font.
   std::string displayData;
   FT_Face display = nullptr;
+  // Japanese and Chinese characters the other fonts lack: WenQuanYi Micro Hei,
+  // opened on first use and read from the file as needed.
+  FT_Face cjk = nullptr;
+  bool cjkTried = false;
+  FT_Face cjkFace();
   std::string assets;
   // Everything draws into this surface: the frame, or a cover being built.
   uint8_t *surface = nullptr;
@@ -173,6 +178,13 @@ private:
   };
   std::map<std::pair<int, FT_UInt>, Glyph> glyphCache;
   size_t glyphBytes = 0;
-  const Glyph &glyph(int size, FT_UInt index, bool alt = false);
+  // A character's glyph: from the body (0) or display (1) font, else the CJK
+  // font (2), else a question mark.
+  struct GlyphRef {
+    int font;
+    FT_UInt index;
+  };
+  GlyphRef glyphFor(uint32_t c, bool alt);
+  const Glyph &glyph(int size, GlyphRef ref);
 };
 } // namespace hardrpg

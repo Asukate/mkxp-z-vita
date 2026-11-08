@@ -25,7 +25,7 @@ in source. The source paths below refer to the matching source distribution.
 | Russo One | Its letter outlines form the HardRPG wordmark (`launcher/art/wordmark*.svg`, rendered to `launcher/ui/wordmark-*.png`); Jovanny Lemonad, SIL Open Font License 1.1, [license](LICENSES/RussoOne.txt). The font file is kept only as a build source in `launcher/art/fonts/` and is not packaged. |
 | PlayStation Vita illustration | `launcher/ui/vita-640.png`, Tokyoship, Wikimedia Commons, CC BY 3.0, modified; [notice](LICENSES/Vita-illustration.txt). |
 | Launcher icons and emblem | Project-authored. SVG masters and the scripts that make them are in `launcher/art/`; the emblem is traced from HardRPG's own splash image. |
-| WenQuanYi Micro Hei | Optional CJK fallback; GPL v3 with font embedding exception / Apache 2.0. See [font notices](LICENSES/WenQuanYi.txt). |
+| WenQuanYi Micro Hei | The launcher's font for Japanese and Chinese text; GPL v3 with font embedding exception / Apache 2.0. See [font notices](LICENSES/WenQuanYi.txt). |
 | EasyRPG Player backend | Optional native-launcher backend, Player 0.8.1.1 (`78328fa29f465315291e161130e6682f69410370`), GPL-3.0-or-later. HardRPG entry point and dated patch: `backends/easyrpg/`, `deps/patches/easyrpg/`. Source: https://github.com/EasyRPG/Player. |
 | liblcf | 0.8.1 (`92c4450a1bc1acb58bd02bbb99b57e5036919cdf`), MIT. Source: https://github.com/EasyRPG/liblcf. |
 | EasyRPG embedded fonts and decoders | ttyp0 (ttyp0 license), Shinonome (public domain), Baekmuk (Baekmuk license), WenQuanYi (GPL-2.0-or-later with font exception), FmMidi (BSD-3-Clause), dr_wav (public domain / MIT-0). Exact notices are retained in matching Player sources and packaged under `licenses/easyrpg/`. |

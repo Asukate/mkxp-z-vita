@@ -35,6 +35,8 @@ View::View(const std::string &font)
   }
 }
 View::~View() {
+  if (cjk)
+    FT_Done_Face(cjk);
   if (display)
     FT_Done_Face(display);
   if (face)
@@ -42,12 +44,34 @@ View::~View() {
   if (library)
     FT_Done_FreeType(library);
 }
-const View::Glyph &View::glyph(int size, FT_UInt index, bool alt) {
-  FT_Face f = alt && display ? display : face;
-  auto key = std::make_pair(f == face ? size : -size, index);
+FT_Face View::cjkFace() {
+  if (!cjkTried) {
+    cjkTried = true;
+    for (auto path : {assets + "font-cjk.ttf", std::string("assets/wqymicrohei.ttf")})
+      if (!cjk && FT_New_Face(library, path.c_str(), 0, &cjk))
+        cjk = nullptr;
+  }
+  return cjk;
+}
+View::GlyphRef View::glyphFor(uint32_t c, bool alt) {
+  int font = alt && display ? 1 : 0;
+  FT_Face f = font ? display : face;
+  if (FT_UInt index = FT_Get_Char_Index(f, c))
+    return {font, index};
+  if (c >= 0x80)
+    if (FT_Face fallback = cjkFace())
+      if (FT_UInt index = FT_Get_Char_Index(fallback, c))
+        return {2, index};
+  return {font, FT_Get_Char_Index(f, '?')};
+}
+const View::Glyph &View::glyph(int size, GlyphRef ref) {
+  auto key = std::make_pair(size * 4 + ref.font, ref.index);
   auto found = glyphCache.find(key);
   if (found != glyphCache.end())
     return found->second;
+  FT_Face f = ref.font == 2 ? cjk : ref.font == 1 ? display : face;
+  FT_UInt index = ref.index;
+  FT_Set_Pixel_Sizes(f, 0, size);
   if (FT_Load_Glyph(f, index, FT_LOAD_RENDER))
     throw std::runtime_error("Cannot render launcher glyph");
   auto &b = f->glyph->bitmap;

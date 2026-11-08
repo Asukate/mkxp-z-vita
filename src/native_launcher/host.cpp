@@ -169,7 +169,9 @@ Json commands(Model &m, const Json &script) {
   return out;
 }
 // Every translation, and the characters in them that a launcher font lacks.
-Json strings(const std::vector<std::string> &fonts) {
+// A character the fallback font has is not missing: the launcher draws it
+// from there.
+Json strings(const std::vector<std::string> &fonts, const std::string &fallbackFont) {
   auto out = object();
   auto &o = out.as_object();
   FT_Library library;
@@ -182,6 +184,9 @@ Json strings(const std::vector<std::string> &fonts) {
       throw std::runtime_error("Cannot open font " + path);
     faces.push_back(face);
   }
+  FT_Face fallback = nullptr;
+  if (!fallbackFont.empty() && FT_New_Face(library, fallbackFont.c_str(), 0, &fallback))
+    throw std::runtime_error("Cannot open font " + fallbackFont);
   auto missing = array();
   std::set<uint32_t> reported;
   for (int lang = 0; lang < languageCount; ++lang) {
@@ -197,7 +202,8 @@ Json strings(const std::vector<std::string> &fonts) {
         for (int k = 0; k < n && i < s.size(); ++k, ++i)
           c = (c << 6) | (static_cast<unsigned char>(s[i]) & 63);
         for (size_t f = 0; f < faces.size(); ++f)
-          if (!FT_Get_Char_Index(faces[f], c) && reported.insert(c * 8 + f).second) {
+          if (!FT_Get_Char_Index(faces[f], c) && !(fallback && c >= 0x80 && FT_Get_Char_Index(fallback, c)) &&
+              reported.insert(c * 8 + f).second) {
             auto m = object();
             m.as_object()["font"] = fonts[f];
             m.as_object()["character"] = Json::integer_type(c);
@@ -212,6 +218,8 @@ Json strings(const std::vector<std::string> &fonts) {
   o["rows"] = Json::integer_type(translations(English).size());
   for (auto face : faces)
     FT_Done_Face(face);
+  if (fallback)
+    FT_Done_Face(fallback);
   FT_Done_FreeType(library);
   return out;
 }
@@ -407,6 +415,7 @@ int main(int argc, char **argv) {
     // start); other runs go straight to home without marking it seen.
     std::string welcome = "skip", languageArg;
     std::vector<std::string> stringFonts;
+    std::string stringFallback;
     bool interactive = false, storageSet = false;
     int battery = 78;
     for (int i = 1; i < argc; ++i) {
@@ -482,6 +491,8 @@ int main(int argc, char **argv) {
         languageArg = value;
       else if (arg == "--strings")
         stringFonts.push_back(value);
+      else if (arg == "--strings-fallback")
+        stringFallback = value;
       else if (arg == "--quick-start")
         quickStart = value == "yes"; // as the Vita: the saved library first
       else if (arg == "--returning") {
@@ -492,7 +503,7 @@ int main(int argc, char **argv) {
         throw std::runtime_error("Unknown preview option");
     }
     if (!stringFonts.empty()) {
-      std::cout << strings(stringFonts).stringify() << "\n";
+      std::cout << strings(stringFonts, stringFallback).stringify() << "\n";
       return 0;
     }
     if (!script.empty()) {

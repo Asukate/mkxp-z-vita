@@ -52,26 +52,51 @@ std::vector<std::string> View::wrap(const std::string &text, int size, int maxWi
     auto end = text.find('\n', start);
     auto para = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
     std::string line, word;
-    auto flush = [&] {
-      if (line.empty())
-        line = word;
-      else if (measure(line + " " + word, size, alt) <= maxWidth)
-        line += " " + word;
+    bool space = false, wordSpace = false;
+    // Adds a word, or one CJK character, to the line; sticky stays on it even
+    // when it overflows (closing punctuation never starts a line).
+    auto place = [&](const std::string &piece, bool spaced, bool sticky) {
+      std::string joined = line.empty() ? piece : line + (spaced ? " " : "") + piece;
+      if (line.empty() || sticky || measure(joined, size, alt) <= maxWidth)
+        line = joined;
       else {
         lines.push_back(line);
-        line = word;
+        line = piece;
       }
+    };
+    auto flush = [&] {
+      if (!word.empty())
+        place(word, wordSpace, false);
       word.clear();
     };
-    for (char c : para) {
+    for (size_t i = 0; i < para.size();) {
+      unsigned char b = para[i];
+      size_t n = b < 0x80 ? 1 : b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2;
+      std::string ch = para.substr(i, n);
+      uint32_t c = b < 0x80 ? b : b & (0x3f >> (n - 1));
+      for (size_t k = 1; k < n && i + k < para.size(); ++k)
+        c = (c << 6) | (static_cast<unsigned char>(para[i + k]) & 63);
+      i += n;
       if (c == ' ') {
-        if (!word.empty())
-          flush();
-      } else
-        word += c;
+        flush();
+        space = true;
+      } else if ((c >= 0x2e80 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xff00 && c <= 0xffef)) {
+        flush();
+        static const char *closing[] = {"、", "。", "，", "．", "！", "？", "：", "；", "）", "」", "』", "】", "〉", "》", "ー", "…", "ぁ", "ぃ", "ぅ", "ぇ", "ぉ", "っ", "ゃ", "ゅ", "ょ", "ァ", "ィ", "ゥ", "ェ", "ォ", "ッ", "ャ", "ュ", "ョ"};
+        bool sticky = false;
+        for (auto p : closing)
+          sticky = sticky || ch == p;
+        place(ch, space, sticky);
+        space = false;
+      } else {
+        if (word.empty()) {
+          wordSpace = space;
+          space = false;
+        }
+        word += ch;
+      }
     }
-    if (!word.empty())
-      flush();
+    flush();
     lines.push_back(line);
     if (end == std::string::npos)
       break;
