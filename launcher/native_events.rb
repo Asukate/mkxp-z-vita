@@ -83,16 +83,33 @@ module HardRPGNative
         [:Game_Character, :draw_light, 67], [:Game_Event, :draw_light, 99],
         [:Light_SSource, :draw, 9]]]
     }.freeze
+    # Moving lights and the lantern (script 144's Light_DSource#draw): a fresh copy of the light
+    # with its shadows cut, blitted over the static lights. Checked separately so static lights
+    # keep the GPU path when these differ.
+    DYNAMIC = {
+      28672 => [[:Light_DSource, :get_graphic, 352], [:Light_DSource, :sx, 377], [:Light_DSource, :sy, 380],
+        [:Light_DSource, :x, 383], [:Light_DSource, :y, 386], [:Light_SSource, :opacity, 292],
+        [:Light_SSource, :range, 258]],
+      3088 => [[:Light_DSource, :draw, 28], [:Light_DSource, :set_shadow, 24]]
+    }.freeze
 
     def self.observe(fname, source)
       return unless defined?(Bitmap) && Bitmap.method_defined?(:__hardrpg_compose_opaque)
       match = SECTIONS[source.bytesize]
       return unless match && Zlib.crc32(source) == match[0] && Zlib.adler32(source) == match[1]
       @sections ||= {}
-      @sections[source.bytesize] = match[2].map do |klass, name, line|
-        method = Object.const_get(klass).instance_method(name)
-        method if method.source_location == [fname, line]
+      found = lambda do |list|
+        list.map do |klass, name, line|
+          method = (Object.const_get(klass).instance_method(name) rescue nil)
+          method if method && method.source_location == [fname, line]
+        end
       end
+      @sections[source.bytesize] = found.(match[2])
+      (@dynamic ||= {})[source.bytesize] = found.(DYNAMIC[source.bytesize])
+    end
+
+    class << self
+      attr_reader :dynamic_ok
     end
 
     def self.install
@@ -100,6 +117,13 @@ module HardRPGNative
       return unless @sections.values.flatten.all? do |method|
         method && method.owner.instance_method(method.name) == method
       end
+      # Every one of these runs on a Light_DSource: what it resolves to there must be the checked one.
+      current = lambda do |method|
+        now = method && (Light_DSource.instance_method(method.name) rescue nil)
+        now && now.owner.equal?(method.owner) && now.source_location == method.source_location
+      end
+      @dynamic_ok = @dynamic && @dynamic.size == DYNAMIC.size &&
+                    @dynamic.values.flatten(1).all?(&current) ? true : false
       Spriteset_Map.prepend(Updates)
       @installed = true
     end
@@ -109,22 +133,28 @@ module HardRPGNative
         surface = $game_map.light_surface
         if surface
           lights = $game_map.light_sources
-          if $hardrpg_gpu_lights != false && !$game_map.lantern.visible &&
-             !lights.empty? && lights.size <= 64 && surface.bitmap.width == Graphics.width &&
+          dynamic = KhasLights.dynamic_ok
+          lantern = $game_map.lantern
+          lantern = nil unless lantern.visible
+          if $hardrpg_gpu_lights != false && (!lantern || (dynamic && lantern.instance_of?(Light_DSource))) &&
+             (!lights.empty? || lantern) && lights.size <= 64 && surface.bitmap.width == Graphics.width &&
              surface.bitmap.height == Graphics.height &&
              lights.all? { |event| event.instance_of?(Game_Event) &&
-               event.instance_variable_get(:@light).instance_of?(Light_SSource) }
+               ((light = event.instance_variable_get(:@light)).instance_of?(Light_SSource) ||
+                (dynamic && light.instance_of?(Light_DSource))) }
             ambient = $game_map.effect_surface.color
-            if ambient.alpha == 255 && compose_static_lights(surface, lights, ambient)
+            if ambient.alpha == 255 && compose_static_lights(surface, lights, ambient, lantern)
               return
             end
           end
         end
+        dispose_light_copies
         restore_cpu_lights(surface)
         super
       end
 
       def dispose_lights
+        dispose_light_copies
         restore_cpu_lights($game_map.light_surface)
         @hardrpg_light_gpu.dispose if @hardrpg_light_gpu && !@hardrpg_light_gpu.disposed?
         @hardrpg_light_rows = @hardrpg_light_gpu = @hardrpg_light_cpu = nil
@@ -139,7 +169,50 @@ module HardRPGNative
         end
       end
 
-      def compose_static_lights(surface, lights, ambient)
+      # The copies a moving light draws are kept one frame (the script disposes each right after
+      # its blt), so they can still be sampled when the frame is composed.
+      def dispose_light_copies
+        copies = @hardrpg_light_copies
+        return unless copies && !copies.empty?
+        copies.each { |bitmap| bitmap.dispose unless bitmap.disposed? }
+        copies.clear
+      end
+
+      # Light_DSource#draw (script 144) up to its blt. A light whose blt lands wholly off the
+      # surface draws nothing: its copy and shadows are skipped (get_graphic, visible?, within? only
+      # read; render_shadow only cuts that copy and leaves scratch values its next call recomputes).
+      # The reads, and opacity (the flicker draws a random number), happen as in the script.
+      # False when the light draws nothing.
+      def dynamic_light_row(light, row)
+        x = light.x
+        y = light.y
+        r = light.range
+        sx = x + r
+        sy = y + r
+        dr = r * 2
+        bx = light.sx.to_i
+        by = light.sy.to_i
+        if bx >= Graphics.width || by >= Graphics.height || bx + dr <= 0 || by + dr <= 0
+          light.opacity
+          return false
+        end
+        btr = light.get_graphic
+        @hardrpg_light_copies << btr
+        unless light.instance_variable_get(:@skip_shadow)
+          $game_map.surfaces.each do |s|
+            s.render_shadow(x, y, sx, sy, r, btr) if s.visible?(sx, sy) && s.within?(x, x + dr, y, y + dr)
+          end
+        end
+        row[0] = btr
+        row[1] = bx
+        row[2] = by
+        row[3] = dr
+        row[4] = dr
+        row[5] = light.opacity
+        true
+      end
+
+      def compose_static_lights(surface, lights, ambient, lantern = nil)
         return false if @hardrpg_light_unavailable
         unless @hardrpg_light_gpu
           begin
@@ -152,11 +225,20 @@ module HardRPGNative
         return false if @hardrpg_light_gpu.disposed? || @hardrpg_light_gpu.width != Graphics.width ||
                         @hardrpg_light_gpu.height != Graphics.height
 
+        dispose_light_copies
+        @hardrpg_light_copies ||= []
+        count = lights.size + (lantern ? 1 : 0)
         rows = @hardrpg_light_rows
-        rows = @hardrpg_light_rows = Array.new(lights.size) { Array.new(6) } if !rows || rows.size != lights.size
-        lights.each_with_index do |event, i|
+        rows = @hardrpg_light_rows = Array.new(count) { Array.new(6) } if !rows || rows.size != count
+        n = 0
+        lights.each do |event|
           light = event.instance_variable_get(:@light)
-          row = rows[i]
+          row = rows[n]
+          unless light.instance_of?(Light_SSource)
+            n += 1 if dynamic_light_row(light, row)
+            next
+          end
+          n += 1
           row[0] = light.bitmap
           row[1] = light.sx.to_i
           row[2] = light.sy.to_i
@@ -164,6 +246,9 @@ module HardRPGNative
           row[4] = light.h
           row[5] = light.opacity
         end
+        n += 1 if lantern && dynamic_light_row(lantern, rows[n])
+        rows = rows.first(n) if n < rows.size
+        @hardrpg_light_drawn = rows
         if @hardrpg_light_gpu.__hardrpg_compose_opaque(ambient, rows)
           unless surface.bitmap.equal?(@hardrpg_light_gpu)
             @hardrpg_light_cpu = surface.bitmap
@@ -239,6 +324,12 @@ module HardRPGNative
     "Sprite_Character#move_animation:797681945:346371957:164" => "",
     "Spriteset_Map#update_characters:376579292:3236375906:121" => "",
     "Game_Variables#[]:4203845366:1357909825:43" => "",
+    "Game_Switches#[]:3617574543:1390219188:43" => "",
+    # Yanfly's Stop All Movement (YEA::UTILITY switch checks)
+    "Switch.self#stop_npc_movement:278151810:2788040413:88" => "yanfly",
+    "Game_Event#update_self_movement:2028593028:4135462313:95" => "yanfly",
+    # the default without its near_the_screen? check (Ao Oni R)
+    "Game_Event#update_self_movement:1974632479:4123803390:168" => "always",
     # Popular scripts, each matched by its exact text.
     # symbol encounter (シンボルエンカウント補助)
     "Game_Character#update:3213147346:1473975782:55" => "symbol",
@@ -374,8 +465,8 @@ module HardRPGNative
     "Sprite_Character#update/mog" => :mog_anti_lag_update,
   }.freeze
 
-  CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Map Game_Variables Game_Vehicle Sprite_Base
-               Sprite_Character Spriteset_Map Sprite StarAuraEffect Input.self].freeze
+  CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Map Game_Variables Game_Switches Game_Vehicle
+               Sprite_Base Sprite_Character Spriteset_Map Sprite StarAuraEffect Input.self Switch.self].freeze
   ATTRS = { 'Game_CharacterBase' => %i[tile_id character_name character_index pattern direction opacity blend_type
                                        bush_depth transparent animation_id balloon_id current_floor],
             'Game_Map' => %i[display_x display_y],
@@ -393,7 +484,7 @@ module HardRPGNative
   # next start skips reading its scripts again (BLACK SOULS II: about 2 s of every start on the Vita).
   # Only the methods of CLASSES are kept; what they mean (swapped or kept) is still decided each start.
   module SectionCache
-    VERSION = 1 # change it whenever Norm's output changes
+    VERSION = 2 # change it whenever Norm's output or CLASSES changes
     MAX = 4000  # sections; the ones this start used are kept first
 
     class << self

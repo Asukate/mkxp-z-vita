@@ -60,6 +60,8 @@ extern "C" void glProgramBinary(GLuint, GLenum, const void *, GLsizei);
 #ifdef __vita__
 #include "opaqueCompose.frag.xxd"
 #include "opaqueCompose.vert.xxd"
+#include "opaqueComposeWide.frag.xxd"
+#include "opaqueComposeWide.vert.xxd"
 #endif
 #include "simpleAlphaUni.frag.xxd"
 #include "tilemap.frag.xxd"
@@ -1016,6 +1018,42 @@ void OpaqueComposeShader::setLayer(int i, const Vec4 &mapping)
 void OpaqueComposeShader::setWeights(const float *weights)
 {
     gl.Uniform4f(u_weights, weights[0], weights[1], weights[2], weights[3]);
+}
+
+OpaqueComposeWideShader::OpaqueComposeWideShader()
+    : ShaderBase("OpaqueComposeWideShader")
+{
+    INIT_SHADER(opaqueComposeWide, opaqueComposeWide, OpaqueComposeWideShader);
+    ShaderBase::init();
+    char name[16];
+    for (int i = 0; i < layers; ++i) {
+        snprintf(name, sizeof(name), "source%d", i);
+        u_source[i] = vitaGetUniformLocation(program, diagnosticProgramName, name);
+        snprintf(name, sizeof(name), "mapping%d", i);
+        u_mapping[i] = vitaGetUniformLocation(program, diagnosticProgramName, name);
+    }
+    u_weights[0] = vitaGetUniformLocation(program, diagnosticProgramName, "weightsA");
+    u_weights[1] = vitaGetUniformLocation(program, diagnosticProgramName, "weightsB");
+    u_weights[2] = vitaGetUniformLocation(program, diagnosticProgramName, "weightsC");
+    GET_U(background);
+}
+
+void OpaqueComposeWideShader::setup(const Vec4 &background)
+{
+    for (int i = 0; i < layers; ++i)
+        gl.Uniform1i(u_source[i], i);
+    gl.Uniform4f(u_background, background.x, background.y, background.z, background.w);
+}
+
+void OpaqueComposeWideShader::setLayer(int i, const Vec4 &mapping)
+{
+    gl.Uniform4f(u_mapping[i], mapping.x, mapping.y, mapping.z, mapping.w);
+}
+
+void OpaqueComposeWideShader::setWeights(const float *weights)
+{
+    for (int i = 0; i < 3; ++i)
+        gl.Uniform4f(u_weights[i], weights[i * 4], weights[i * 4 + 1], weights[i * 4 + 2], weights[i * 4 + 3]);
 }
 #endif
 

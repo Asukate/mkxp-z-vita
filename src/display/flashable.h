@@ -55,6 +55,8 @@ public:
 		flashAlpha = flashColor.w;
 	}
 
+	bool isFlashing() const { return flashing; }
+
 	virtual void update()
 	{
 		if (!flashing)

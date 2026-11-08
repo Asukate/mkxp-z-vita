@@ -205,6 +205,7 @@ void CUSLBindingInit();
 void httpBindingInit();
 void nativeEventsInit(int rgssVersion);
 void hardrpgProfInit();
+void spriteScriptsInit();
 void nativeEventsSectionLoaded(VALUE fname, VALUE source);
 
 RB_METHOD(mkxpDelta);
@@ -327,6 +328,7 @@ static void mriBindingInit() {
 
     nativeEventsInit(rgssVer);
     hardrpgProfInit();
+    spriteScriptsInit();
 
 #ifdef __vita__
     /* Vita has no console: fd 1/2 are unusable, so any game-side

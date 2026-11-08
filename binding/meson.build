@@ -35,6 +35,7 @@ binding_source = [files(
     'tilemapvx-binding.cpp',
     'http-binding.cpp',
     'native-events.cpp',
+    'sprite-scripts.cpp',
     'hardrpg-prof.cpp'
 )]
 

@@ -14,6 +14,8 @@ embedded_shaders = [
     'simpleAlpha.frag',
     'opaqueCompose.frag',
     'opaqueCompose.vert',
+    'opaqueComposeWide.frag',
+    'opaqueComposeWide.vert',
     'simpleAlphaUni.frag',
     'tilemap.frag',
     'flashMap.frag',

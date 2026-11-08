@@ -2160,10 +2160,20 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
 
     p = new BitmapPrivate(this);
 
-    if (!other.isAnimated() && other.p->cpu)
+    /* A copy of a loaded image starts CPU-composed from the image's pixels in memory (read back
+     * once and kept while the image is unchanged). Scripts that copy a light or a face every
+     * frame, draw on the copy and blit it into a CPU-composed bitmap no longer wait for the GPU
+     * to read each new copy back (Khas's lantern: a glFinish per frame). */
+    SDL_Surface *loaded = 0;
+    if (!other.isAnimated() && !other.p->cpu && frame == -2 && !other.hasHires() &&
+        !other.megaSurface() && !other.p->selfLores && other.p->gl.tex != TEX::ID(0) &&
+        cpuBitmapEligible(other.width(), other.height()))
+        loaded = cpuSourcePixels(other, other.p);
+
+    if (!other.isAnimated() && (other.p->cpu || loaded))
     {
         /* A copy of a CPU-composed bitmap is CPU-composed too. */
-        SDL_Surface *from = other.p->cpu;
+        SDL_Surface *from = other.p->cpu ? other.p->cpu : loaded;
         if (cpuBitmapEligible(from->w, from->h))
             p->cpu = SDL_CreateRGBSurface(0, from->w, from->h, p->format->BitsPerPixel,
                                           p->format->Rmask, p->format->Gmask,
@@ -2179,11 +2189,11 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
             p->cpuStamp = cpuFrame;
             p->gl.width = from->w;
             p->gl.height = from->h;
-            p->cpuContent = other.p->cpuContent;
+            p->cpuContent = other.p->cpu ? other.p->cpuContent : IntRect(0, 0, from->w, from->h);
             p->addTaintedArea(rect());
             return;
         }
-        if (cpuOversized(other.p))
+        if (other.p->cpu && cpuOversized(other.p))
         {
             delete p;
             throw Exception(Exception::SDLError,
@@ -3293,6 +3303,59 @@ void Bitmap::clearRect(const IntRect &rect)
     p->onModified();
 }
 
+/* Several clear_rect calls at once, with the same result as calling clearRect on each in order
+ * (cleared pixels are all zero, so the order does not matter). On a GPU bitmap one draw of flat
+ * quads replaces a scissored clear per rectangle: Khas's moving shadows clear several hundred
+ * one-pixel strips of a light every frame. */
+void Bitmap::clearRects(const IntRect *rects, size_t count)
+{
+    guardDisposed();
+    if (count == 0)
+        return;
+    if (p->cpu || hasHires() || p->selfLores || p->megaSurface || p->animation.enabled ||
+        p->gl.tex == TEX::ID(0) || count == 1)
+    {
+        for (size_t i = 0; i < count; ++i)
+            clearRect(rects[i]);
+        return;
+    }
+
+    SimpleQuadArray quads;
+    quads.resize(count);
+    size_t used = 0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        const IntRect r = cpuClip(rects[i], p->gl.width, p->gl.height);
+        if (r.w <= 0 || r.h <= 0)
+            continue;
+        Quad::setPosRect(&quads.vertices[used * 4], FloatRect(r.x, r.y, r.w, r.h));
+        ++used;
+    }
+    if (used == 0)
+    {
+        p->onModified();
+        return;
+    }
+    quads.resize(used);
+    quads.commit();
+
+    { FrameProfile::Scope partial(FrameProfile::ClearPartial); }
+    clearBeforePartialWrite(p);
+    p->bindFBO();
+    glState.viewport.pushSet(IntRect(0, 0, p->gl.width, p->gl.height));
+    glState.scissorTest.pushSet(false);
+    glState.blend.pushSet(false);
+    FlatColorShader &shader = shState->shaders().flatColor;
+    shader.bind();
+    shader.applyViewportProj();
+    shader.setColor(Vec4());
+    quads.draw();
+    glState.blend.pop();
+    glState.scissorTest.pop();
+    glState.viewport.pop();
+    p->onModified();
+}
+
 #ifdef __vita__
 bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *commands, size_t commandCount)
 {
@@ -3301,7 +3364,7 @@ bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *command
         commandCount > maxOpaqueCommands)
         return false;
 
-    constexpr size_t maxVisibleLayers = 16;
+    constexpr size_t maxVisibleLayers = 24;
     OpaqueLayer layers[maxVisibleLayers];
     IntRect clipped[maxVisibleLayers];
     size_t count = 0;
@@ -3322,7 +3385,7 @@ bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *command
             continue;
         if (count == maxVisibleLayers || source == this || source->hasHires() ||
             source->p->selfLores || source->isAnimated() || source->megaSurface() ||
-            source->p->cpu || source->p->pendingClear || source->p->gl.tex == TEX::ID(0))
+            source->p->pendingClear || (!source->p->cpu && source->p->gl.tex == TEX::ID(0)))
             return false;
         layers[count] = layer;
         clipped[count++] = r;
@@ -3331,6 +3394,11 @@ bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *command
         ys.push_back(r.y);
         ys.push_back(r.y + r.h);
     }
+    /* A CPU-composed light (a copy of a loaded image) is sampled from its texture copy,
+     * brought up to date here; a static light uploads once. */
+    for (size_t i = 0; i < count; ++i)
+        if (layers[i].source->p->cpu && !cpuSync(layers[i].source->p))
+            return false;
     // Partition the surface at clipped light edges. Each rectangle has one
     // constant ordered set of sources, so fragments need no coverage tests.
     const auto unique = [](std::vector<int> &edges) {
@@ -3355,13 +3423,13 @@ bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *command
                 if (xs[x - 1] >= clipped[i].x && xs[x - 1] < clipped[i].x + clipped[i].w)
                     mask |= 1u << i;
             }
-            if (__builtin_popcount(mask) > 4)
+            if (__builtin_popcount(mask) > OpaqueComposeWideShader::layers)
                 return false;
             if (mask) {
                 if (previousMask == mask)
                     regions.back().rect.w = xs[x] - regions.back().rect.x;
                 else {
-                    if (regions.size() == 96)
+                    if (regions.size() == 384)
                         return false;
                     regions.push_back({mask, IntRect(xs[x - 1], ys[y - 1], xs[x] - xs[x - 1], ys[y] - ys[y - 1])});
                 }
@@ -3369,17 +3437,22 @@ bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *command
             previousMask = mask;
         }
     }
-    std::sort(regions.begin(), regions.end(), [](const Region &a, const Region &b) {
-        return a.mask < b.mask;
+    // Regions of up to four layers first (the narrow shader), then the rest (the wide one).
+    const auto wide = [](uint32_t mask) { return __builtin_popcount(mask) > 4; };
+    std::sort(regions.begin(), regions.end(), [&](const Region &a, const Region &b) {
+        return wide(a.mask) != wide(b.mask) ? !wide(a.mask) : a.mask < b.mask;
     });
 
     // Prepare fallible resources before pushing any draw state. The caller
     // still has its original bitmap to draw into if allocation fails.
     const auto previous = FBO::boundFramebufferID;
     OpaqueComposeShader *shaderPtr;
+    OpaqueComposeWideShader *wideShader = nullptr;
     try {
         OpaqueComposeShader &shader = shState->shaders().opaqueCompose;
         shaderPtr = &shader;
+        if (!regions.empty() && wide(regions.back().mask))
+            wideShader = &shState->shaders().opaqueComposeWide;
         p->bindFBO();
     } catch (const Exception &) {
         FBO::bind(previous);
@@ -3403,7 +3476,38 @@ bool Bitmap::tryComposeOpaque(const Vec4 &background, const OpaqueLayer *command
     shader.setup(ambient);
 
     uint32_t lastMask = 0;
+    bool wideBound = false;
     for (const auto &region : regions) {
+        if (wide(region.mask)) {
+            if (!wideBound) {
+                wideBound = true;
+                wideShader->bind();
+                wideShader->applyViewportProj();
+                wideShader->setup(ambient);
+            }
+            if (region.mask != lastMask) {
+                lastMask = region.mask;
+                float weights[OpaqueComposeWideShader::layers] = {};
+                const auto first = __builtin_ctz(lastMask);
+                uint32_t active = lastMask;
+                for (int j = 0; j < OpaqueComposeWideShader::layers; ++j) {
+                    const auto &layer = layers[active ? __builtin_ctz(active) : first];
+                    auto &source = *layer.source;
+                    const float invW = 1.f / source.width(), invH = 1.f / source.height();
+                    gl.ActiveTexture(GL_TEXTURE0 + j);
+                    TEX::bind(source.p->gl.tex);
+                    wideShader->setLayer(j, Vec4(invW, invH, -layer.x * invW, -layer.y * invH));
+                    if (active) {
+                        weights[j] = std::min(255, layer.opacity);
+                        active &= active - 1;
+                    }
+                }
+                wideShader->setWeights(weights);
+            }
+            quad.setPosRect(region.rect);
+            quad.draw();
+            continue;
+        }
         if (region.mask != lastMask) {
             lastMask = region.mask;
             float weights[4] = {};

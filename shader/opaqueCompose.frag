@@ -12,7 +12,9 @@ varying highp vec2 uvD;
 highp vec3 blendLayer(highp vec3 rgb, highp vec4 color, highp float opacity)
 {
     highp vec4 source = floor(color * 255.0 + 0.5);
-    highp float a = floor((source.a * opacity + 127.0) * (1.0 / 255.0));
+    // (x + 127) / 255 in integers: x + 127.5 keeps every quotient at least 1/510 from an integer,
+    // so a reciprocal of 255 that is an ulp low on the GPU still floors the same.
+    highp float a = floor((source.a * opacity + 127.5) * (1.0 / 255.0));
     highp vec3 sum = source.rgb * a + rgb * (255.0 - a);
     // The CPU's reciprocal[255] is 257 in 16.16. The largest numerator
     // is 65025, so the rounded product fits the exact float32 integer range.

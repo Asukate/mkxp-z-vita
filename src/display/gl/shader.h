@@ -163,6 +163,20 @@ private:
     GLint u_sourceA, u_sourceB, u_sourceC, u_sourceD;
     GLint u_mappingA, u_mappingB, u_mappingC, u_mappingD, u_weights, u_background;
 };
+
+/* The same composition for regions where 5 to 12 light layers overlap. */
+class OpaqueComposeWideShader : public ShaderBase
+{
+public:
+    static constexpr int layers = 12;
+    OpaqueComposeWideShader();
+    void setup(const Vec4 &background);
+    void setLayer(int i, const Vec4 &mapping);
+    void setWeights(const float *weights);
+
+private:
+    GLint u_source[layers], u_mapping[layers], u_weights[3], u_background;
+};
 #endif
 
 class SimpleSpriteShader : public ShaderBase
@@ -548,6 +562,7 @@ struct ShaderSet
 	SHADER_SET_MEMBER(SimpleAlphaShader, simpleAlpha);
 #ifdef __vita__
     SHADER_SET_MEMBER(OpaqueComposeShader, opaqueCompose);
+    SHADER_SET_MEMBER(OpaqueComposeWideShader, opaqueComposeWide);
 #endif
 	SHADER_SET_MEMBER(SimpleSpriteShader, simpleSprite);
 	SHADER_SET_MEMBER(AlphaSpriteShader, alphaSprite);

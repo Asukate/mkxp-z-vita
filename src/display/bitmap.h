@@ -98,6 +98,7 @@ public:
 	void radialBlur(int angle, int divisions);
 
 	void clear();
+	void clearRects(const IntRect *rects, size_t count);
 
 #ifdef __vita__
     struct OpaqueLayer { Bitmap *source; int x, y, width, height, opacity; };

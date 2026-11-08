@@ -40,6 +40,7 @@
 #include <string>
 #include <utility>
 #include <array>
+#include <vector>
 
 extern "C" VALUE rb_gvar_get(ID);
 
@@ -160,7 +161,7 @@ enum SlotId {
     /* popular scripts: symbol encounter, CACAO off-screen movement, 8-direction movement,
      * kure region pass, MOG Anti Lag (and the alias names their wrappers call) */
     S_GC_update, S_GC_update_symbol_opacity, S_GE_update_symbol_opacity, S_GE_self_movable,
-    S_GE_update_anti_lag, S_GE_anti_lag_on_screen, S_GE_can_update, S_GV_aref, S_GS_anti_lag,
+    S_GE_update_anti_lag, S_GE_anti_lag_on_screen, S_GE_can_update, S_GV_aref, S_GSW_aref, S_SW_stop_npc, S_GS_anti_lag,
     S_GM_display_x, S_GM_display_y, S_SC_check_can_update_sprite, S_SPR_visible,
     S_H_GE_update_symbol, S_H_GE_update_mog, S_H_GC_update_symbol, S_H_GE_usm_symbol,
     S_H_GCB_rms_8dir, S_H_SC_update_mog,
@@ -795,6 +796,19 @@ static VALUE ge_near_the_screen_margins(VALUE self, int argc, const VALUE *argv,
 static VALUE ge_stop_count_threshold(VALUE self, int, const VALUE *, bool) {
     return nMul(INT2FIX(30), nSub(INT2FIX(5), IV(self, move_frequency)));
 }
+/* The default with its near_the_screen? check taken out (events also move off screen):
+ *   if @stop_count > stop_count_threshold
+ *     case @move_type when 1; move_type_random when 2; move_type_toward_player when 3; move_type_custom end
+ *   end */
+static VALUE ge_update_self_movement_always(VALUE self, int, const VALUE *, bool) {
+    if (nGt(IV(self, stop_count), call0(self, S_GE_stop_count_threshold))) {
+        VALUE t = IV(self, move_type);
+        if (nEq(INT2FIX(1), t)) return call0(self, S_GE_move_type_random);
+        if (nEq(INT2FIX(2), t)) return call0(self, S_GE_move_type_toward_player);
+        if (nEq(INT2FIX(3), t)) return call0(self, S_GE_move_type_custom);
+    }
+    return Qnil;
+}
 static VALUE ge_update_self_movement(VALUE self, int, const VALUE *, bool) {
     if (RTEST(call0(self, S_GE_near_the_screen)) &&
         nGt(IV(self, stop_count), call0(self, S_GE_stop_count_threshold))) {
@@ -1338,6 +1352,39 @@ static bool farOut(VALUE vx, VALUE vy, double w, double h) {
     double x = NUM2DBL(vx), y = NUM2DBL(vy);
     return x < -w || x > 2 * w || y < -h || y > 2 * h;
 }
+/* Hudell's Character Effects (option park_guard_hudell): its update_other moves the character
+ * when the character's origin changed and plays then clears a flash. A sprite is parked only while
+ * neither is pending, so skipping its update changes nothing. */
+static bool g_parkGuardHudell = false;
+/* Option hudell_direct (an Array of classes): for exactly these classes the three readers resolve to
+ * Hudell's own text, which returns the instance variable (0 for nil). */
+static bool g_hudellDirect = false;
+static VALUE g_hudellClasses = Qnil;
+static bool hudellDirectClass(VALUE k) {
+    for (long i = 0; i < RARRAY_LEN(g_hudellClasses); ++i)
+        if (RARRAY_AREF(g_hudellClasses, i) == k)
+            return true;
+    return false;
+}
+static bool hudellParkable(VALUE spr, VALUE c) {
+    static ID ivx = rb_intern("@origin_x"), ivy = rb_intern("@origin_y"), ox = rb_intern("origin_x"),
+              oy = rb_intern("origin_y"), fd = rb_intern("flash_duration");
+    VALUE sx = rb_ivar_get(spr, ivx), sy = rb_ivar_get(spr, ivy);
+    if (NIL_P(sx)) sx = INT2FIX(0);
+    if (NIL_P(sy)) sy = INT2FIX(0);
+    VALUE cx, cy, f;
+    if (g_hudellDirect && hudellDirectClass(rb_class_of(c))) {
+        /* origin_x / origin_y / flash_duration are the script's own readers (nil reads as 0) */
+        static ID iox = rb_intern("@origin_x"), ioy = rb_intern("@origin_y"), ifd = rb_intern("@flash_duration");
+        cx = rb_ivar_get(c, iox); cy = rb_ivar_get(c, ioy); f = rb_ivar_get(c, ifd);
+        if (NIL_P(cx)) cx = INT2FIX(0);
+        if (NIL_P(cy)) cy = INT2FIX(0);
+        if (NIL_P(f)) f = INT2FIX(0);
+    } else {
+        cx = rb_funcall(c, ox, 0); cy = rb_funcall(c, oy, 0); f = rb_funcall(c, fd, 0);
+    }
+    return FIXNUM_P(sx) && sx == cx && FIXNUM_P(sy) && sy == cy && FIXNUM_P(f) && FIX2LONG(f) <= 0;
+}
 static bool positive(VALUE v) {
     return FIXNUM_P(v) ? FIX2LONG(v) > 0 : (RB_FLOAT_TYPE_P(v) && NUM2DBL(v) > 0);
 }
@@ -1350,8 +1397,272 @@ static bool parkedOffscreen(VALUE spr, double w, double h) {
         return false;
     if (positive(call0(c, S_GCB_animation_id)) || positive(call0(c, S_GCB_balloon_id)))
         return false;
-    return farOut(call0(spr, S_SPR_x), call0(spr, S_SPR_y), w, h) &&
-           farOut(call0(c, S_GCB_screen_x), call0(c, S_GCB_screen_y), w, h);
+    if (!farOut(call0(spr, S_SPR_x), call0(spr, S_SPR_y), w, h) ||
+        !farOut(call0(c, S_GCB_screen_x), call0(c, S_GCB_screen_y), w, h))
+        return false;
+    return !g_parkGuardHudell || hudellParkable(spr, c);
+}
+/* Unchanged character sprites (option steady_skip, set by vxace_map_speedups.rb HardRPGSteadySprites
+ * when every method a Sprite_Character update runs is the default or a known script's). Such an
+ * update reads only: the sprite's own instance variables and engine state, a fixed list of its
+ * character's instance variables, the map's scroll position and tiles, and the screen size. When an
+ * update left all of those exactly as they were before it (it changed nothing), and none has changed
+ * since, the next update would change nothing too: it is skipped. Animations, balloons and the Tall
+ * Sprite Fix's upper copy in use keep a sprite updating. A skipped sprite still runs the engine's
+ * Sprite#update (flash, wave phase) and clears the animation checkers, as the chain's super calls do. */
+static bool g_steadySkip = false;
+static uint32_t g_steadyEpoch = 0;
+static bool g_steadyOk = false;
+static std::vector<ID> g_steadyCharIvars;
+static VALUE g_steadyCharClasses = Qnil; /* Array of the exact classes a character may be */
+static VALUE g_spriteClass = Qnil;
+static ID id_steady_ok, iv_upper_area_sprite, iv_set_upper_area_sprite, iv_tileset_id, gv_data_tilesets;
+struct SteadySnap {
+    VALUE chr;
+    std::vector<uint32_t> w;
+};
+/* Sprites that keep changing are checked less often (only costs time: such a sprite is updated). */
+struct SteadyWait {
+    uint32_t until, step;
+};
+static std::unordered_map<VALUE, SteadyWait> g_steadyWait;
+static uint32_t g_steadyFrame = 0;
+static bool g_steadyGlobalSame = false;
+static std::unordered_map<VALUE, SteadySnap> g_steady;
+static VALUE g_steadyList = Qnil;
+static std::vector<uint32_t> g_steadyGlobal;
+static void snapPush(std::vector<uint32_t> &w, VALUE v) {
+    if (RB_SPECIAL_CONST_P(v)) {
+        w.push_back((uint32_t)v);
+    } else if (RB_FLOAT_TYPE_P(v)) {
+        double d = RFLOAT_VALUE(v);
+        uint32_t b[2];
+        memcpy(b, &d, sizeof b);
+        w.push_back(0xF10A7u);
+        w.push_back(b[0]);
+        w.push_back(b[1]);
+    } else if (RB_TYPE_P(v, T_STRING)) {
+        w.push_back((uint32_t)v);
+        w.push_back((uint32_t)RSTRING_LEN(v));
+        w.push_back((uint32_t)rb_str_hash(v));
+    } else {
+        w.push_back((uint32_t)v);
+    }
+}
+static int snapIvar(ID key, VALUE val, st_data_t arg) {
+    std::vector<uint32_t> &w = *(std::vector<uint32_t> *)arg;
+    w.push_back((uint32_t)key);
+    snapPush(w, val);
+    return ST_CONTINUE;
+}
+static void steadyGlobals(VALUE gw, VALUE gh) {
+    static std::vector<uint32_t> last;
+    std::vector<uint32_t> &w = g_steadyGlobal;
+    last.swap(w);
+    w.clear();
+    g_steadyFrame++;
+    VALUE gm = gameMap();
+    snapPush(w, gw);
+    snapPush(w, gh);
+    snapPush(w, gm);
+    snapPush(w, rb_ivar_get(gm, iv_display_x));
+    snapPush(w, rb_ivar_get(gm, iv_display_y));
+    snapPush(w, rb_ivar_get(gm, iv_map));
+    snapPush(w, rb_ivar_get(gm, iv_tileset_id));
+    snapPush(w, rb_gvar_get(gv_data_tilesets));
+    /* While the map scrolls every sprite moves: nothing can be skipped, so nothing is compared. */
+    g_steadyGlobalSame = w == last;
+}
+/* The words an update of spr reads, or false when spr may not be skipped at all. */
+static uint32_t g_steadyWhy[6];
+static bool steadySnap(VALUE spr, VALUE c, std::vector<uint32_t> &w) {
+    w.clear();
+    if (rb_class_of(spr) != g_spriteCharacterClass || NIL_P(c) || RB_SPECIAL_CONST_P(c))
+        return g_steadyWhy[0]++, false;
+    VALUE ck = rb_class_of(c);
+    bool known = false;
+    for (long i = 0; i < RARRAY_LEN(g_steadyCharClasses); ++i)
+        known = known || RARRAY_AREF(g_steadyCharClasses, i) == ck;
+    if (!known)
+        return g_steadyWhy[1]++, false;
+    if (RTEST(IV(spr, animation)) || RTEST(IV(spr, balloon_sprite)) || positive(IV(spr, balloon_duration)))
+        return g_steadyWhy[2]++, false;
+    /* The Tall Sprite Fix's upper copy: while it is not in use an update only hides it. */
+    VALUE upper = rb_ivar_get(spr, iv_upper_area_sprite);
+    Sprite *up = nullptr;
+    if (RTEST(rb_ivar_get(spr, iv_set_upper_area_sprite)) ||
+        (RTEST(upper) && (rb_class_of(upper) != g_spriteClass || !(up = getPrivateDataNoRaise<Sprite>(upper)) ||
+                          up->isDisposed())))
+        return g_steadyWhy[3]++, false;
+    Sprite *sp = getPrivateDataNoRaise<Sprite>(spr);
+    /* The engine's own Sprite#update (flash and wave) still runs for a skipped sprite. */
+    if (!sp || sp->isDisposed())
+        return g_steadyWhy[4]++, false;
+    w.insert(w.end(), g_steadyGlobal.begin(), g_steadyGlobal.end());
+    w.push_back(up ? (uint32_t)up->getVisible() : 2u);
+    rb_ivar_foreach(spr, snapIvar, (st_data_t)&w);
+    const Rect &r = sp->getSrcRect();
+    float zx = sp->getZoomX(), zy = sp->getZoomY(), an = sp->getAngle();
+    uint32_t f[3];
+    memcpy(&f[0], &zx, 4);
+    memcpy(&f[1], &zy, 4);
+    memcpy(&f[2], &an, 4);
+    uint32_t e[] = {(uint32_t)(uintptr_t)sp->getBitmap(), (uint32_t)r.x, (uint32_t)r.y, (uint32_t)r.width,
+                    (uint32_t)r.height, (uint32_t)sp->getX(), (uint32_t)sp->getY(), (uint32_t)sp->getZ(),
+                    (uint32_t)sp->getOX(), (uint32_t)sp->getOY(), (uint32_t)sp->getOpacity(),
+                    (uint32_t)sp->getBlendType(), (uint32_t)sp->getBushDepth(), (uint32_t)sp->getVisible(),
+                    f[0], f[1], f[2]};
+    w.insert(w.end(), e, e + sizeof e / sizeof *e);
+    for (ID id : g_steadyCharIvars)
+        snapPush(w, rb_ivar_get(c, id));
+    return true;
+}
+static bool steadyOn() {
+    if (!g_steadySkip)
+        return false;
+    if (g_steadyEpoch != g_epoch) {
+        /* Something was (re)defined: the Ruby side checks its methods are still the ones it found. */
+        g_steadyOk = RTEST(rb_funcall(rb_path2class("HardRPGSteadySprites"), id_steady_ok, 0));
+        g_steadyEpoch = g_epoch;
+        if (!g_steadyOk)
+            g_steady.clear();
+    }
+    return g_steadyOk;
+}
+static uint32_t g_steadySkipped = 0, g_steadyUpdated = 0, g_steadyFirstDiff = 0;
+/* Update one sprite of the list, or skip it when it is steady. */
+static void steadyUpdate(VALUE spr) {
+    static std::vector<uint32_t> pre, post;
+    VALUE c = IV(spr, character);
+    if (!g_steadyGlobalSame) {
+        g_steady.erase(spr);
+        g_steadyUpdated++;
+        call0(spr, S_SC_update);
+        return;
+    }
+    auto wait = g_steadyWait.find(spr);
+    if (wait != g_steadyWait.end() && (int32_t)(g_steadyFrame - wait->second.until) < 0) {
+        g_steadyUpdated++;
+        call0(spr, S_SC_update);
+        return;
+    }
+    bool can = steadySnap(spr, c, pre);
+    if (can) {
+        auto it = g_steady.find(spr);
+        if (it != g_steady.end() && it->second.chr == c && it->second.w == pre) {
+            g_steadySkipped++;
+            getPrivateDataNoRaise<Sprite>(spr)->update();
+            clearArray(rb_cvar_get(g_spriteBase, cv_ani_checker));
+            clearArray(rb_cvar_get(g_spriteBase, cv_ani_spr_checker));
+            return;
+        }
+    }
+    g_steadyUpdated++;
+    call0(spr, S_SC_update);
+    if (can && steadySnap(spr, IV(spr, character), post) && post == pre) {
+        g_steady[spr] = SteadySnap{c, post};
+        g_steadyWait.erase(spr);
+    } else {
+        SteadyWait &sw = g_steadyWait[spr];
+        sw.step = sw.step ? (sw.step < 8 ? sw.step * 2 : 8) : 1;
+        sw.until = g_steadyFrame + sw.step;
+        if (can && post.size() == pre.size()) {
+            /* which word changed (harness diagnostics) */
+            for (size_t i = 0; i < pre.size(); ++i)
+                if (pre[i] != post[i]) { g_steadyFirstDiff = (uint32_t)i; break; }
+        }
+        g_steadyWhy[5] += can;
+        g_steady.erase(spr);
+    }
+}
+static VALUE nev_steady_stats(VALUE) {
+    VALUE why = rb_ary_new();
+    for (uint32_t &n : g_steadyWhy) {
+        rb_ary_push(why, UINT2NUM(n));
+        n = 0;
+    }
+    rb_ary_push(why, UINT2NUM(g_steadyFirstDiff));
+    VALUE a = rb_ary_new_from_args(4, UINT2NUM(g_steadySkipped), UINT2NUM(g_steadyUpdated), UINT2NUM(g_steady.size()), why);
+    g_steadySkipped = g_steadyUpdated = 0;
+    return a;
+}
+/* HardRPGNative.steady_debug(sprite): [label, words] of what a skip compares (harness diagnostics). */
+static VALUE wordsAry(const std::vector<uint32_t> &w) {
+    VALUE a = rb_ary_new();
+    for (uint32_t x : w) rb_ary_push(a, UINT2NUM(x));
+    return a;
+}
+static int debugIvar(ID key, VALUE val, st_data_t arg) {
+    std::vector<uint32_t> w;
+    snapPush(w, val);
+    rb_ary_push((VALUE)arg, rb_assoc_new(rb_id2str(key), wordsAry(w)));
+    return ST_CONTINUE;
+}
+static VALUE nev_steady_debug(VALUE, VALUE spr) {
+    VALUE out = rb_ary_new();
+    std::vector<uint32_t> all;
+    VALUE c = IV(spr, character);
+    rb_ary_push(out, rb_assoc_new(rb_str_new_cstr("ok"), steadySnap(spr, c, all) ? Qtrue : Qfalse));
+    rb_ary_push(out, rb_assoc_new(rb_str_new_cstr("global"), wordsAry(g_steadyGlobal)));
+    rb_ivar_foreach(spr, debugIvar, (st_data_t)out);
+    VALUE cv = rb_ary_new();
+    for (ID id : g_steadyCharIvars) {
+        std::vector<uint32_t> w;
+        snapPush(w, rb_ivar_get(c, id));
+        rb_ary_push(cv, rb_assoc_new(rb_id2str(id), wordsAry(w)));
+    }
+    rb_ary_push(out, rb_assoc_new(rb_str_new_cstr("char"), cv));
+    rb_ary_push(out, rb_assoc_new(rb_str_new_cstr("all"), wordsAry(all)));
+    return out;
+}
+/* The sprites now taken as steady (for the harness's check). */
+static VALUE nev_steady_sprites(VALUE) {
+    VALUE a = rb_ary_new();
+    for (auto &kv : g_steady)
+        rb_ary_push(a, kv.first);
+    return a;
+}
+/* HardRPGNative.steady_setup([character classes], [character ivar names]) */
+static VALUE nev_steady_setup(VALUE, VALUE classes, VALUE ivars) {
+    Check_Type(classes, T_ARRAY);
+    Check_Type(ivars, T_ARRAY);
+    g_steadyCharClasses = rb_ary_dup(classes);
+    g_spriteClass = rb_path2class("Sprite");
+    g_steadyCharIvars.clear();
+    g_steadyWait.clear();
+    for (long i = 0; i < RARRAY_LEN(ivars); ++i)
+        g_steadyCharIvars.push_back(rb_intern_str(rb_String(RARRAY_AREF(ivars, i))));
+    g_steady.clear();
+    g_steadyEpoch = 0;
+    return Qtrue;
+}
+
+/* Galv's shadow sprites (option shadow_park, with offscreen_skip): a shadow whose last drawn place and
+ * whose character both lie more than a screen beyond the edges draws nothing; its update is skipped as a
+ * parked character sprite's is. The engine's Sprite#update (flash, wave phase) and Sprite_Base's
+ * animation checker clears still run. Called by HardRPGNative::SpriteScripts::GalvShadowPark#update. */
+extern bool (*hardrpgShadowParkHook)(VALUE);
+static VALUE g_shadowClass = Qnil;
+static bool parkShadow(VALUE spr) {
+    if (!g_offscreenSkip || NIL_P(g_shadowClass) || rb_class_of(spr) != g_shadowClass)
+        return false;
+    VALUE c = IV(spr, character);
+    if (NIL_P(c) || RTEST(IV(spr, animation)))
+        return false;
+    VALUE gw = gfxWidth(), gh = gfxHeight();
+    if (!FIXNUM_P(gw) || !FIXNUM_P(gh))
+        return false;
+    double w = FIX2LONG(gw), h = FIX2LONG(gh);
+    if (!farOut(call0(spr, S_SPR_x), call0(spr, S_SPR_y), w, h) ||
+        !farOut(call0(c, S_GCB_screen_x), call0(c, S_GCB_screen_y), w, h))
+        return false;
+    Sprite *sp = getPrivateDataNoRaise<Sprite>(spr);
+    if (!sp || sp->isDisposed())
+        return false;
+    sp->update();
+    clearArray(rb_cvar_get(g_spriteBase, cv_ani_checker));
+    clearArray(rb_cvar_get(g_spriteBase, cv_ani_spr_checker));
+    return true;
 }
 static VALUE sm_update_characters(VALUE self, int, const VALUE *, bool) {
     if (nNe(IV(self, map_id), rb_funcall(gameMap(), rb_intern("map_id"), 0)))
@@ -1365,11 +1676,23 @@ static VALUE sm_update_characters(VALUE self, int, const VALUE *, bool) {
             skip = FIXNUM_P(gw) && FIXNUM_P(gh);
             if (skip) { w = FIX2LONG(gw); h = FIX2LONG(gh); }
         }
+        bool steady = skip && steadyOn();
+        if (steady) {
+            if (list != g_steadyList) {
+                g_steady.clear();
+                g_steadyWait.clear();
+                g_steadyList = list;
+            }
+            steadyGlobals(INT2FIX((long)w), INT2FIX((long)h));
+        }
         for (long i = 0; i < RARRAY_LEN(list); ++i) {
             VALUE spr = RARRAY_AREF(list, i);
             if (skip && parkedOffscreen(spr, w, h))
                 continue;
-            call0(spr, S_SC_update);
+            if (steady)
+                steadyUpdate(spr);
+            else
+                call0(spr, S_SC_update);
         }
         return list;
     }
@@ -1537,6 +1860,36 @@ static VALUE gv_aref(VALUE self, int argc, const VALUE *argv, bool) {
     else
         v = rb_funcall(d, id_aref, 1, argv[0]);
     return RTEST(v) ? v : INT2FIX(0);
+}
+/* Game_Switches#[]:  @data[switch_id] || false */
+static VALUE gsw_aref(VALUE self, int argc, const VALUE *argv, bool) {
+    checkArity(argc, 1, 1);
+    VALUE d = IV(self, data), v;
+    if (FIXNUM_P(argv[0]) && RB_TYPE_P(d, T_ARRAY) && rb_class_of(d) == rb_cArray && builtinOk(S_ARY_aref, d))
+        v = rb_ary_entry(d, FIX2LONG(argv[0]));
+    else
+        v = rb_funcall(d, id_aref, 1, argv[0]);
+    return RTEST(v) ? v : Qfalse;
+}
+/* Yanfly's Stop All Movement:
+ *   module Switch
+ *     def self.stop_npc_movement
+ *       return $game_switches[YEA::UTILITY::STOP_NPC_MOVEMENT_SWITCH]
+ *   class Game_Event: alias game_event_update_self_movement_sam update_self_movement
+ *     def update_self_movement
+ *       return if Switch.stop_npc_movement
+ *       game_event_update_self_movement_sam */
+static ID id_YEA, id_UTILITY, id_STOP_NPC, id_Switch, id_usm_sam;
+static VALUE sw_stop_npc_yanfly(VALUE self, int, const VALUE *, bool) {
+    VALUE yea = rb_const_get(self, id_YEA); /* from inside module Switch */
+    VALUE id = rb_const_get_from(rb_const_get_from(yea, id_UTILITY), id_STOP_NPC);
+    return call1(rb_gvar_get(gv_game_switches), S_GSW_aref, id);
+}
+static VALUE ge_update_self_movement_yanfly(VALUE self, int, const VALUE *, bool) {
+    VALUE sw = rb_const_get(g_slots[S_GE_update_self_movement].owner, id_Switch);
+    if (RTEST(call0(sw, S_SW_stop_npc)))
+        return Qnil;
+    return rb_funcall(self, id_usm_sam, 0);
 }
 /* Game_CharacterBase: alias real_move_speed_8direction real_move_speed
  *   def real_move_speed
@@ -1834,6 +2187,11 @@ static const NativeDef g_natives[] = {
     ND(S_GE_self_movable, "cacao", ge_self_movable_cacao, -1),
     /* 8-direction */
     NDA(S_GV_aref, "", gv_aref, -1, 1, 1),
+    NDA(S_GSW_aref, "", gsw_aref, -1, 1, 1),
+    /* Yanfly's Stop All Movement */
+    ND(S_SW_stop_npc, "yanfly", sw_stop_npc_yanfly, -1),
+    ND(S_GE_update_self_movement, "yanfly", ge_update_self_movement_yanfly, -1),
+    ND(S_GE_update_self_movement, "always", ge_update_self_movement_always, -1),
     NDW(S_GCB_real_move_speed, "8dir", gcb_real_move_speed_8dir, S_H_GCB_rms_8dir, S_GCB_real_move_speed),
     /* kure */
     ND(S_GCB_screen_z, "kure", gcb_screen_z_kure, -1),
@@ -1996,6 +2354,25 @@ static VALUE nev_set_option(VALUE, VALUE name, VALUE val) {
             rb_gc_register_address(&g_spriteCharacterClass);
         }
     }
+    else if (n == "steady_skip") {
+        g_steadySkip = RTEST(val) && !NIL_P(g_steadyCharClasses);
+        g_steady.clear();
+        g_steadyEpoch = 0;
+    }
+    else if (n == "shadow_park") {
+        if (NIL_P(g_shadowClass))
+            rb_gc_register_address(&g_shadowClass);
+        g_shadowClass = RTEST(val) ? rb_path2class("Sprite_Shadow") : Qnil;
+        hardrpgShadowParkHook = RTEST(val) ? parkShadow : nullptr;
+    }
+    else if (n == "hudell_direct") {
+        if (NIL_P(g_hudellClasses))
+            rb_gc_register_address(&g_hudellClasses);
+        g_hudellDirect = RB_TYPE_P(val, T_ARRAY) && RARRAY_LEN(val) > 0;
+        g_hudellClasses = g_hudellDirect ? rb_ary_dup(val) : Qnil;
+    }
+    else if (n == "park_guard_hudell")
+        g_parkGuardHudell = RTEST(val);
     else if (n == "near_the_screen_margins") {
         Check_Type(val, T_ARRAY);
         if (RARRAY_LEN(val) != 2 || !FIXNUM_P(rb_ary_entry(val, 0)) || !FIXNUM_P(rb_ary_entry(val, 1)))
@@ -2253,6 +2630,11 @@ void nativeEventsInit(int rgssVersion) {
     slotDef(S_GE_anti_lag_on_screen, "Game_Event", "anti_lag_event_on_screen");
     slotDef(S_GE_can_update, "Game_Event", "can_update");
     slotDef(S_GV_aref, "Game_Variables", "[]");
+    slotDef(S_GSW_aref, "Game_Switches", "[]");
+    slotDef(S_SW_stop_npc, "Switch.self", "stop_npc_movement");
+    id_YEA = rb_intern("YEA"); id_UTILITY = rb_intern("UTILITY");
+    id_STOP_NPC = rb_intern("STOP_NPC_MOVEMENT_SWITCH"); id_Switch = rb_intern("Switch");
+    id_usm_sam = rb_intern("game_event_update_self_movement_sam");
     slotDef(S_GS_anti_lag, "Game_System", "anti_lag");
     slotDef(S_GM_display_x, "Game_Map", "display_x");
     slotDef(S_GM_setup_autorun_common_event, "Game_Map", "setup_autorun_common_event");
@@ -2475,6 +2857,18 @@ static VALUE initRuby(VALUE) {
     rb_define_singleton_method(g_module, "stats", RUBY_METHOD_FUNC(nev_stats), 0);
     rb_define_singleton_method(g_module, "reset_stats", RUBY_METHOD_FUNC(nev_reset_stats), 0);
     rb_define_singleton_method(g_module, "set_option", RUBY_METHOD_FUNC(nev_set_option), 2);
+    rb_define_singleton_method(g_module, "steady_setup", RUBY_METHOD_FUNC(nev_steady_setup), 2);
+    rb_define_singleton_method(g_module, "steady_stats", RUBY_METHOD_FUNC(nev_steady_stats), 0);
+    rb_define_singleton_method(g_module, "steady_sprites", RUBY_METHOD_FUNC(nev_steady_sprites), 0);
+    rb_gc_register_address(&g_steadyCharClasses);
+    rb_gc_register_address(&g_spriteClass);
+    rb_define_singleton_method(g_module, "steady_debug", RUBY_METHOD_FUNC(nev_steady_debug), 1);
+    rb_gc_register_address(&g_steadyList);
+    id_steady_ok = rb_intern("steady_ok?");
+    iv_upper_area_sprite = rb_intern("@upper_area_sprite");
+    iv_set_upper_area_sprite = rb_intern("@set_upper_area_sprite");
+    iv_tileset_id = rb_intern("@tileset_id");
+    gv_data_tilesets = rb_intern("$data_tilesets");
     rb_define_singleton_method(g_module, "known", RUBY_METHOD_FUNC(nev_known), 2);
     rb_define_singleton_method(g_module, "epoch", RUBY_METHOD_FUNC(nev_epoch), 0);
     rb_define_singleton_method(g_module, "checks", RUBY_METHOD_FUNC(nev_checks), 0);

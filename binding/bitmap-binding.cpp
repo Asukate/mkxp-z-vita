@@ -31,6 +31,8 @@
 #include "vita_error_report.h"
 #include "texpool.h"
 #endif
+#include <cmath>
+#include <vector>
 
 #if RAPI_FULL > 187
 DEF_TYPE(Bitmap);
@@ -296,6 +298,84 @@ RB_METHOD_GUARD(bitmapComposeOpaque) {
 }
 RB_METHOD_GUARD_END
 #endif
+
+/* Khas Awesome Light Effects: the loop of Block_*#render_shadow, which clears one strip of a light
+ * per pixel column (or row) the shadow covers. vxace_map_speedups.rb computes the slopes exactly as
+ * the script does and passes them here; this runs the same Float arithmetic in the same order and
+ * clears the same rectangles. False (nothing done) when a value is not a plain Integer or Float or
+ * a result would not convert like clear_rect's arguments: the script's own loop then runs.
+ *   mode 0: x in from..to: iy = m1*x+n1; rect(x-phx, iy-phy, 1, (m2*x+n2)-iy+pad)
+ *   mode 1: x in from..to: i = (m1*x+n1).floor; rect(x-phx, i-3-phy, 1, (m2*x+n2)-i+3)
+ *   mode 2: y in from..to: ix = m1 ? (y-n1)/m1 : x1; fx = m2 ? (y-n2)/m2 : x2;
+ *           rect(ix-phx, y-phy, fx-ix+1, 1) */
+static bool khasNum(VALUE v, double &out) {
+    if (FIXNUM_P(v)) { out = (double)FIX2LONG(v); return true; }
+    if (RB_FLOAT_TYPE_P(v)) { out = RFLOAT_VALUE(v); return true; }
+    return false;
+}
+/* clear_rect takes a Float through NUM2LONG and an Integer through FIX2INT; within this range
+ * both are the value truncated toward zero. */
+static bool khasInt(double v, int &out) {
+    if (!(v > -1073741824.0 && v < 1073741824.0)) return false;
+    out = (int)v;
+    return true;
+}
+#pragma GCC push_options
+#pragma GCC optimize("fp-contract=off")
+static bool khasStrips(int mode, long from, double to, VALUE vm1, VALUE vn1, VALUE vm2, VALUE vn2,
+                       double phx, double phy, double pad, double x1, double x2,
+                       std::vector<IntRect> &rects) {
+    double m1 = 0, n1 = 0, m2 = 0, n2 = 0;
+    const bool hasM1 = !(mode == 2 && NIL_P(vm1)), hasM2 = !(mode == 2 && NIL_P(vm2));
+    /* (y-n)/m with an Integer m would be Ruby's floored Integer division. */
+    if (mode == 2 && ((hasM1 && !RB_FLOAT_TYPE_P(vm1)) || (hasM2 && !RB_FLOAT_TYPE_P(vm2))))
+        return false;
+    if ((hasM1 && (!khasNum(vm1, m1) || !khasNum(vn1, n1))) ||
+        (hasM2 && (!khasNum(vm2, m2) || !khasNum(vn2, n2))))
+        return false;
+    if (!std::isfinite(to) || to - (double)from > 4096.0)
+        return false;
+    for (long i = from; (double)i <= to; ++i) {
+        const double c = (double)i;
+        double rx, ry, rw, rh;
+        if (mode == 0) {
+            const double iy = m1 * c + n1, fy = m2 * c + n2;
+            rx = c - phx; ry = iy - phy; rw = 1; rh = (fy - iy) + pad;
+        } else if (mode == 1) {
+            const double v = m1 * c + n1;
+            if (!std::isfinite(v)) return false;
+            const double init = std::floor(v), fy = m2 * c + n2;
+            rx = c - phx; ry = (init - 3.0) - phy; rw = 1; rh = (fy - init) + 3.0;
+        } else {
+            const double ix = hasM1 ? (c - n1) / m1 : x1, fx = hasM2 ? (c - n2) / m2 : x2;
+            rx = ix - phx; ry = c - phy; rw = (fx - ix) + 1.0; rh = 1;
+        }
+        IntRect r;
+        if (!khasInt(rx, r.x) || !khasInt(ry, r.y) || !khasInt(rw, r.w) || !khasInt(rh, r.h))
+            return false;
+        rects.push_back(r);
+    }
+    return true;
+}
+#pragma GCC pop_options
+
+RB_METHOD_GUARD(bitmapKhasStrips) {
+    rb_check_arity(argc, 12, 12);
+    const VALUE mode = argv[0], from = argv[1], to = argv[2], m1 = argv[3], n1 = argv[4], m2 = argv[5],
+                n2 = argv[6], phx = argv[7], phy = argv[8], pad = argv[9], x1 = argv[10], x2 = argv[11];
+    double dto, dphx, dphy, dpad, dx1, dx2;
+    if (!FIXNUM_P(mode) || !FIXNUM_P(from) || !khasNum(to, dto) || !khasNum(phx, dphx) ||
+        !khasNum(phy, dphy) || !khasNum(pad, dpad) || !khasNum(x1, dx1) || !khasNum(x2, dx2))
+        return Qfalse;
+    std::vector<IntRect> rects;
+    rects.reserve(512);
+    if (!khasStrips(FIX2INT(mode), FIX2LONG(from), dto, m1, n1, m2, n2, dphx, dphy, dpad, dx1, dx2, rects))
+        return Qfalse;
+    Bitmap *b = getPrivateData<Bitmap>(self);
+    GFX_GUARD_EXC(b->clearRects(rects.data(), rects.size()););
+    return Qtrue;
+}
+RB_METHOD_GUARD_END
 
 RB_METHOD_GUARD(bitmapFillRect) {
     Bitmap *b = getPrivateData<Bitmap>(self);
@@ -1050,6 +1130,7 @@ void bitmapBindingInit() {
     
     _rb_define_method(klass, "gradient_fill_rect", bitmapGradientFillRect);
     _rb_define_method(klass, "clear_rect", bitmapClearRect);
+    _rb_define_method(klass, "__hardrpg_khas_strips", bitmapKhasStrips);
     _rb_define_method(klass, "blur", bitmapBlur);
     _rb_define_method(klass, "radial_blur", bitmapRadialBlur);
     
