@@ -19,6 +19,10 @@
  ** along with mkxp.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#ifdef __vita__
+#include "asset_prefetch.h"
+#include "display/bitmap.h"
+#endif
 #include "audio/audio.h"
 #include "filesystem/filesystem.h"
 #include "display/graphics.h"
@@ -238,6 +242,7 @@ RB_METHOD(mkxpSettingsMenu);
 RB_METHOD(mkxpCpuCount);
 RB_METHOD(mkxpSystemMemory);
 RB_METHOD(mkxpVitaMemorySnapshot);
+RB_METHOD(mkxpPrefetchAsset);
 RB_METHOD(mkxpVitaVglFreeCheck);
 #ifdef __vita__
 RB_METHOD(mkxpVitaPadScript);
@@ -423,6 +428,7 @@ static void mriBindingInit() {
     _rb_define_module_function(mod, "nproc", mkxpCpuCount);
     _rb_define_module_function(mod, "memory", mkxpSystemMemory);
     _rb_define_module_function(mod, "vita_memory_snapshot", mkxpVitaMemorySnapshot);
+    _rb_define_module_function(mod, "prefetch_asset", mkxpPrefetchAsset);
     _rb_define_module_function(mod, "vita_vgl_free_check", mkxpVitaVglFreeCheck);
 #ifdef __vita__
     /* Benchmark packages: scripted pad presses (needs vitaPadTest). */
@@ -769,6 +775,25 @@ RB_METHOD(mkxpVitaVglFreeCheck) {
     char text[256];
     const size_t size = vitaVglFreeCheck(text, sizeof(text));
     return rb_utf8_str_new(text, size);
+}
+
+/* System.prefetch_asset(:image or :sound, name, urgent = false): the game will soon load this
+ * file; the prefetch worker decodes it on another core (see AssetPrefetch). */
+RB_METHOD(mkxpPrefetchAsset) {
+    RB_UNUSED_PARAM;
+    rb_check_arity(argc, 2, 3);
+    VALUE name = argv[1];
+    if (!RB_TYPE_P(name, T_STRING) || RSTRING_LEN(name) == 0)
+        return Qfalse;
+#ifdef __vita__
+    const char kind = argv[0] == ID2SYM(rb_intern("sound")) ? 'S' : 'I';
+    if (kind == 'I' && Bitmap::hasReusedImage(RSTRING_PTR(name)))
+        return Qfalse;
+    AssetPrefetch::request(kind, std::string(RSTRING_PTR(name), RSTRING_LEN(name)), argc > 2 && RTEST(argv[2]));
+    return Qtrue;
+#else
+    return Qfalse;
+#endif
 }
 
 RB_METHOD(mkxpVitaMemorySnapshot) {

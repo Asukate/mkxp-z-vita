@@ -352,6 +352,436 @@ module HardRPGSwitchSkip
   end
 end
 
+# Note formulas compiled once. Two popular scripts by Hoshigata (星潟) read formulas from the notes of
+# equipment, states and actors, and run them with eval on every stat read: "能力値増加特徴" (stat bonus
+# features, Game_BattlerBase#ppf_param_plus) and "条件特徴付与" (conditional features,
+# Game_Battler#add_fo_by_condition). Every max HP read evals one formula per feature object, and a
+# missing tag still evals "0". A battle reads stats thousands of times a second (status window,
+# gauges, damage), and eval compiles its text each time: three quarters of N.P.C. Dreams' battle
+# time, with 400-700 ms stalls at every action. Here a number is read once, and any other formula
+# becomes a method of the same class, compiled once, so it runs with the same self and constants.
+# A formula that names one of the method's local variables (or could depend on where it runs) is
+# still eval'ed in place, as before. Only when the game's methods are exactly these scripts' text.
+#
+# The conditional features list is also built once per stat read. A stat read (param, xparam,
+# sparam) asks for the feature objects three to five times, and each time every condition runs; a
+# condition on HP (hp_rate) reads max HP, which builds the list again. Within one stat read nothing
+# can change, so the first list is kept until that read returns. Only when every condition in the
+# database is a plain query (no assignment, rand, or ! method): those give the same answer each time.
+module HardRPGNoteEval
+  STOCK = {
+    'Game_BattlerBase#ppf_param_plus' => <<~'RUBY'.chomp,
+      def ppf_param_plus(type,param_id)
+      data = 0
+      feature_objects.each {|f|
+      case type
+      when 0..3
+      text = f.ex_p_data[0 + type][param_id]
+      if text
+      sub_data = eval(f.ex_p_data[0 + type][param_id])
+      data += sub_data if sub_data
+      end
+      next unless $game_party.in_battle
+      text = f.ex_p_data[4 + type][param_id]
+      if text
+      sub_data = eval(text)
+      data += sub_data if sub_data
+      end
+      when 4..5
+      text = f.ex_r_data[type - 4][param_id]
+      if text
+      sub_data = eval(f.ex_r_data[type - 4][param_id])
+      data += sub_data if sub_data
+      end
+      next unless $game_party.in_battle
+      text = f.ex_r_data[type - 2][param_id]
+      if text
+      sub_data = eval(text)
+      data += sub_data if sub_data
+      end
+      end}
+      data / (type == 0 ? 1 : 100.0)
+    RUBY
+    'Game_Battler#add_fo_by_condition' => <<~'RUBY'.chomp,
+      def add_fo_by_condition(fo)
+      fa = []
+      @add_fo_by_condition_flag = true
+      fo.each {|f| f.add_fo_by_condition.each {|a|
+      f = $data_armors[a[0]]
+      fa.push(f) if f && eval(a[1])}}
+      @add_fo_by_condition_flag = nil
+      fo + fa
+    RUBY
+    'Game_Actor#feature_objects' => <<~'RUBY'.chomp,
+      def feature_objects
+      if @add_fo_by_condition_flag
+      return feature_objects_add_fo_by_condition
+      else
+      add_fo_by_condition(feature_objects_add_fo_by_condition)
+      end
+    RUBY
+  }.freeze
+  # Local variables of the two methods, and words whose meaning depends on the place they run.
+  IN_PLACE = /(?<![.@$:\w])(?:type|param_id|data|f|text|sub_data|fo|fa|a|binding|local_variables|
+               __method__|__LINE__|__FILE__|caller|return|yield|super|block_given\?)(?![\w?!])/x
+  NUMBER = /\A\s*-?(?:0|[1-9]\d*)(?:\.\d+)?\s*\z/
+  LIMIT = 512
+  SEEN_LIMIT = 65536
+  IN_PLACE_MARK = :in_place
+  # Words that make a condition more than a query.
+  NOT_A_QUERY = /(?<![=!<>])=(?![=~])|<<|\w!(?!=)|\brand\b|Random|\$game_temp|SceneManager|\bp\b|print|puts/
+
+  @status = nil
+  @cache = {}.compare_by_identity
+  @seen = {}.compare_by_identity
+  class << self
+    attr_reader :status
+
+    # The formula's value, or the block's (an eval in the calling method) when it must run in place.
+    # The note strings are the same objects on every call (each item keeps its parsed notes), so
+    # they are looked up by identity first: hashing the text was a fifth of the battle time.
+    def value(obj, owner, text)
+      entry = @seen[owner]&.[](text)
+      if entry.nil?
+        entry = @cache[owner]&.[](text) || compile(owner, text)
+        seen = (@seen[owner] ||= {}.compare_by_identity)
+        seen[text] = entry if seen.size < SEEN_LIMIT
+      end
+      return entry if entry.is_a?(Numeric)
+      return yield(text) if entry.equal?(IN_PLACE_MARK)
+      obj.__send__(entry)
+    end
+
+    def compile(owner, text)
+      table = (@cache[owner] ||= {})
+      return IN_PLACE_MARK if !text.is_a?(String) || table.size >= LIMIT
+      table[text.dup.freeze] =
+        if text.match?(NUMBER)
+          text.include?('.') ? Float(text) : Integer(text, 10)
+        elsif text.match?(IN_PLACE) || text.include?("\n")
+          IN_PLACE_MARK
+        else
+          name = :"hardrpg_note_formula_#{owner.name.downcase}_#{table.size}"
+          begin
+            owner.class_eval("def #{name}\n#{text}\nend", '(note formula)', 0)
+            name
+          rescue SyntaxError
+            IN_PLACE_MARK # the in-place eval raises it, as before
+          end
+        end
+    end
+
+    # Every conditional feature formula in the database, as create_add_fo_by_condition reads them.
+    def conditions
+      word = defined?(AddFOCondition::Word) ? AddFOCondition::Word : nil
+      return nil unless word.is_a?(String)
+      pattern = /<#{word}[:：](\d+),(\S+)>/
+      found = []
+      [$data_actors, $data_classes, $data_weapons, $data_armors, $data_states, $data_enemies].each do |list|
+        return nil unless list.is_a?(Array)
+        list.each do |item|
+          next unless item.respond_to?(:note) && item.note.is_a?(String)
+          item.note.each_line { |l| found << $2.to_s if pattern =~ l }
+        end
+      end
+      found
+    end
+
+    def install_feature_memo(found)
+      list = conditions
+      return false unless list && list.none? { |c| c.match?(NOT_A_QUERY) || c.match?(IN_PLACE) }
+      %w[Game_Actor Game_Enemy].each do |cname|
+        section = found["#{cname}#feature_objects"]
+        return false unless section && current?(cname, :feature_objects, section)
+      end
+      # The conditional list is also kept between calls (see StateEpoch): reused while no
+      # battler, party, variable or switch changed since, and the base list is the same objects.
+      text = <<~RUBY
+        def feature_objects
+        if @add_fo_by_condition_flag
+        return (@hardrpg_feature_memo ? (@hardrpg_feature_base ||= feature_objects_add_fo_by_condition).dup : feature_objects_add_fo_by_condition)
+        else
+        memo = @hardrpg_feature_memo
+        return memo.dup if memo && !memo.equal?(true)
+        base = feature_objects_add_fo_by_condition
+        c = @hardrpg_fo_cache
+        if c && c[0] == $hardrpg_state_epoch && HardRPGNoteEval.same_list?(c[1], base)
+        list = c[2]
+        else
+        e = $hardrpg_state_epoch
+        list = add_fo_by_condition(base)
+        @hardrpg_fo_cache = [e, base, list] if e == $hardrpg_state_epoch
+        end
+        @hardrpg_feature_memo = list if memo
+        list.dup
+        end
+        end
+      RUBY
+      Game_Actor.class_eval(text, '(note formula speedup)', 1)
+      Game_Enemy.class_eval(text, '(note formula speedup)', 1)
+      StateEpoch.install
+      Game_BattlerBase.prepend(FeatureMemo)
+      Game_Actor.prepend(ActorFeatureMemo)
+      true
+    end
+
+    def same_list?(a, b)
+      return false unless a.size == b.size
+      i = 0
+      n = a.size
+      while i < n
+        return false unless a[i].equal?(b[i])
+        i += 1
+      end
+      true
+    end
+
+    # The section of the method's definition when it is the scripts' text. A wrapper (feature_objects)
+    # only needs its own text to match: the methods it wraps stay as the game has them.
+    def check(defs, key, stock = STOCK[key], wrapper = false)
+      list = defs[key]
+      return nil if list.empty?
+      return nil unless wrapper ? list.last[0] == stock : list.all? { |t, _| t == stock }
+      list.last[1]
+    end
+
+    # The method in use must be the one the matched section defined (no later rewrite or alias).
+    def current?(cname, name, section)
+      um = Object.const_get(cname).instance_method(name)
+      loc = um.source_location
+      loc && loc[0] == format('{%04d}', section)
+    rescue StandardError
+      false
+    end
+
+    def install
+      return @status if @status
+      return @status = 'off (disabled)' if $hardrpg_vxace_map_speedups == false
+      return @status = 'off (not VX Ace)' unless Kernel.respond_to?(:rgss_main, true)
+      return @status = 'off (no native events)' unless defined?(HardRPGNative::Norm)
+      return @status = 'off (no battlers)' unless defined?(Game_BattlerBase) && defined?(Game_Battler)
+      found = HardRPGVXAceScanCache.fetch(:hoshigata_formulas_v3) do
+        defs = HardRPGRefreshFilter.definitions($RGSS_SCRIPTS || [], %w[Game_BattlerBase Game_Battler Game_Actor Game_Enemy RPG])
+        keys = STOCK.keys.map { |key| [key, check(defs, key, STOCK[key], key.end_with?('#feature_objects'))] }
+        keys << ['Game_Enemy#feature_objects', check(defs, 'Game_Enemy#feature_objects', STOCK['Game_Actor#feature_objects'], true)]
+        %w[ex_p_data ex_r_data].each do |name|
+          list = defs["RPG##{name}"]
+          ok = list.size == 1 && list[0][0].start_with?("def #{name}\nreturn @#{name} if @#{name} != nil\n")
+          keys << ["RPG::BaseItem##{name}", ok ? list[0][1] : nil]
+        end
+        keys.to_h
+      end
+      out = []
+      if (section = found['Game_BattlerBase#ppf_param_plus']) && current?('Game_BattlerBase', :ppf_param_plus, section)
+        # Defined from text inside the class, so an in-place eval finds constants as the original did.
+        Game_BattlerBase.class_eval(STOCK['Game_BattlerBase#ppf_param_plus']
+          .gsub(/eval\((f\.ex_[pr]_data\[[^\]]+\]\[param_id\]|text)\)/) { "HardRPGNoteEval.value(self, Game_BattlerBase, #{$1}) { |hardrpg_formula| eval(hardrpg_formula) }" } + "\nend",
+          '(note formula speedup)', 1)
+        out << 'stat bonus'
+        # Their notes are read with `return @ex_p_data if @ex_p_data != nil`: != on a Hash runs a
+        # Hash comparison on every stat read (7% of a battle). The same test with nil?.
+        readers = %w[ex_p_data ex_r_data].select do |name|
+          (sec = found["RPG::BaseItem##{name}"]) && current?('RPG::BaseItem', name.to_sym, sec)
+        end
+        unless readers.empty?
+          RPG::BaseItem.prepend(Module.new do
+            readers.each do |name|
+              module_eval("def #{name}\n(v = @#{name}).nil? ? super : v\nend", '(note formula speedup)', 1)
+            end
+          end)
+          out << 'note readers'
+        end
+      end
+      if (section = found['Game_Battler#add_fo_by_condition']) && current?('Game_Battler', :add_fo_by_condition, section)
+        Game_Battler.class_eval(STOCK['Game_Battler#add_fo_by_condition']
+          .sub('eval(a[1])', 'HardRPGNoteEval.value(self, Game_Battler, a[1]) { |hardrpg_formula| eval(hardrpg_formula) }') + "\nend",
+          '(note formula speedup)', 1)
+        out << 'conditional features'
+      end
+      out << 'feature lists kept until something changes' if out.include?('conditional features') && install_feature_memo(found)
+      @status = out.empty? ? 'off (none)' : "on (#{out.join(', ')})"
+    rescue StandardError => e
+      @status = "off (#{e.class})"
+    end
+  end
+end
+
+# One stat read keeps the first conditional feature list it builds (see HardRPGNoteEval).
+module HardRPGNoteEval
+  # One feature list per call of these methods: they only read the battler (stat reads, the
+  # equipment check run on every HP change, the skill checks of the command window).
+  def self.feature_memo(names)
+    Module.new do
+      names.each do |name|
+        define_method(name) do |*args|
+          return super(*args) if @hardrpg_feature_memo
+          @hardrpg_feature_memo = true
+          begin
+            super(*args)
+          ensure
+            @hardrpg_feature_memo = nil
+            @hardrpg_feature_base = nil
+          end
+        end
+      end
+    end
+  end
+  FeatureMemo = feature_memo(%i[param xparam sparam equippable? usable?])
+
+  # A counter bumped before and after every method that changes what a battler's conditional
+  # features can depend on, and once per frame: a kept list is used only while it is unchanged.
+  # Each class that defines one of these methods itself gets its own wrapper, so a subclass's
+  # version is covered as a whole.
+  module StateEpoch
+    METHODS = {
+      'Game_BattlerBase' => %i[hp= mp= tp= add_param clear_states erase_state clear_buffs refresh recover_all],
+      'Game_Battler' => %i[add_state add_new_state remove_state clear_states die revive add_buff add_debuff
+                           remove_buff erase_buff on_battle_start on_battle_end],
+      'Game_Actor' => %i[setup change_equip force_change_equip trade_item_with_party discard_equip
+                         release_unequippable_items refresh change_exp change_level level_up level_down
+                         learn_skill forget_skill change_class add_param actor_preserve actor_reverse],
+      'Game_Enemy' => %i[transform],
+      'Game_Unit' => %i[on_battle_start on_battle_end],
+      'Game_Party' => %i[gain_item add_actor remove_actor setup_starting_members add_field_state remove_field_state],
+      'Game_Troop' => %i[setup],
+      'Game_Variables' => %i[[]=],
+      'Game_Switches' => %i[[]=],
+      'Game_SelfSwitches' => %i[[]=],
+      'Game_BaseItem' => %i[object= set_equip],
+      'Game_Interpreter' => %i[execute_command]
+    }.freeze
+
+    def self.install
+      return if @installed
+      @installed = true
+      $hardrpg_state_epoch = 0
+      METHODS.each do |cname, names|
+        cls = (Object.const_get(cname) rescue nil)
+        next unless cls.is_a?(Class)
+        hidden = cls.private_instance_methods(false)
+        own = names.select { |n| cls.instance_methods(false).include?(n) || hidden.include?(n) }
+        next if own.empty?
+        cls.prepend(Module.new do
+          own.each do |name|
+            define_method(name) do |*args, &block|
+              $hardrpg_state_epoch += 1
+              begin
+                super(*args, &block)
+              ensure
+                $hardrpg_state_epoch += 1
+              end
+            end
+            private name if hidden.include?(name)
+          end
+        end)
+      end
+      return unless defined?(Graphics)
+      Graphics.singleton_class.prepend(Module.new do
+        def update(*args)
+          $hardrpg_state_epoch += 1
+          super
+        end
+      end)
+    end
+  end
+  ActorFeatureMemo = feature_memo(%i[equip_slots])
+end
+
+# Battle animation files ahead of use. Stock VX Ace disposes an animation's
+# images when it ends and loads them again on its next use; the first load of
+# a sheet decodes up to 7 MB (100-400 ms on the Vita, N.P.C. Dreams), and the
+# first play of its sound effects reads and decodes them too. Once an action
+# is chosen (or a battle starts) its animation is known, so the engine's
+# prefetch worker prepares those files on another core. Nothing the game does
+# changes: it loads the same files, they are only ready sooner.
+module HardRPGBattlePrefetch
+  @status = nil
+  class << self
+    attr_reader :status
+
+    def animation(id, subject = nil, urgent = false)
+      ids = if id.to_i >= 0 then [id]
+            elsif subject.respond_to?(:actor?) && subject.actor? && subject.respond_to?(:atk_animation_id1)
+              [subject.atk_animation_id1, subject.atk_animation_id2]
+            else []
+            end
+      ids.each do |i|
+        a = i.to_i > 0 && $data_animations && $data_animations[i]
+        next unless a
+        [a.animation1_name, a.animation2_name].each do |n|
+          System.prefetch_asset(:image, "Graphics/Animations/#{n}", urgent) unless n.to_s.empty?
+        end
+        (a.timings || []).each do |t|
+          n = t.se && t.se.name
+          System.prefetch_asset(:sound, "Audio/SE/#{n}", urgent) unless n.to_s.empty?
+        end
+      end
+    rescue StandardError
+      nil
+    end
+
+    def action(act)
+      obj = act.item
+      animation(obj.animation_id, act.subject, true) if obj.respond_to?(:animation_id)
+    rescue StandardError
+      nil
+    end
+
+    # What this actor may pick: the attack and every usable skill.
+    def actor_choices(actor)
+      return unless actor
+      animation(-1, actor)
+      actor.usable_skills.each { |sk| animation(sk.animation_id, actor) } if actor.respond_to?(:usable_skills)
+    rescue StandardError
+      nil
+    end
+
+    # What the battle will show first: the party's attacks and the enemies' skills.
+    def battle_start
+      $game_party.battle_members.each { |m| animation(-1, m) }
+      $game_troop.members.each do |e|
+        e.enemy.actions.each { |act| sk = $data_skills[act.skill_id]; animation(sk.animation_id) if sk && sk.animation_id >= 0 }
+      end
+    rescue StandardError
+      nil
+    end
+
+    def install
+      return @status if @status
+      unless System.respond_to?(:prefetch_asset) && defined?(Game_Action) && defined?(Scene_Battle) &&
+             Game_Action.method_defined?(:set_skill) && Game_Action.method_defined?(:set_item)
+        return @status = 'off'
+      end
+      Game_Action.prepend(Module.new do
+        def set_skill(*args)
+          r = super
+          HardRPGBattlePrefetch.action(self)
+          r
+        end
+
+        def set_item(*args)
+          r = super
+          HardRPGBattlePrefetch.action(self)
+          r
+        end
+      end)
+      Scene_Battle.prepend(Module.new do
+        def start(*args)
+          HardRPGBattlePrefetch.battle_start
+          super
+        end
+
+        def start_actor_command_selection(*args)
+          r = super
+          HardRPGBattlePrefetch.actor_choices(BattleManager.actor) if defined?(BattleManager)
+          r
+        end
+      end)
+      @status = 'on'
+    end
+  end
+end
+
 # Far off-screen character sprites. With the native Spriteset_Map#update_characters and
 # Sprite_Character#update, a sprite that was drawn, and whose character now is, more than a whole
 # screen away is not updated (it would draw nothing), unless it has an animation or a balloon. Off
@@ -1225,6 +1655,8 @@ class << Graphics
       HardRPGKhasShadows.install
       HardRPGSpriteScripts.install
       HardRPGSteadySprites.install
+      HardRPGNoteEval.install
+      HardRPGBattlePrefetch.install
       HardRPGVXAceScanCache.save
     end
     hardrpg_vxace_map_speedups_update(*args)

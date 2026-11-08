@@ -37,6 +37,11 @@ constexpr size_t imageBudget = 24u << 20, soundBudget = 16u << 20;
 // on every redraw; those must be kept too.
 constexpr size_t keepBudget = 24u << 20;
 constexpr double keepMs = 8.0;
+// Files the game asked for ahead of use (request()): at most this much decoded
+// data waits, and what is not taken within requestLifeMs is let go.
+constexpr size_t requestBudget = 12u << 20;
+constexpr Uint32 requestLifeMs = 20000;
+constexpr size_t requestQueueMax = 64;
 constexpr size_t historyMax = 400;
 // Longest wait for a file the worker is preparing (see waitWhileBusy).
 constexpr Uint32 busyWaitMs = 40;
@@ -70,6 +75,7 @@ struct State {
   struct Prepared {
     SDL_Surface *surface;
     double ms;
+    FileInfo file;
   };
   std::unordered_map<std::string, Prepared> images;
   std::unordered_map<std::string, Sound> sounds;
@@ -79,11 +85,21 @@ struct State {
     std::string key;
     SDL_Surface *surface;
     double ms;
+    FileInfo file;
   };
   std::list<Kept> kept;
   size_t keptBytes = 0;
   // Set by releaseMemory: nothing more is prepared or kept this session.
   bool released = false;
+  // Asked for by request(), not yet started.
+  std::deque<Entry> requests;
+  // Prepared because of a request ("I" or "S" + key): when, and its size.
+  struct Requested {
+    Uint32 at;
+    size_t bytes;
+  };
+  std::unordered_map<std::string, Requested> requested;
+  size_t requestedBytes = 0;
 };
 
 size_t bytesOf(const SDL_Surface *s) { return size_t(s->h) * s->pitch; }
@@ -104,7 +120,7 @@ SDL_Surface *copyOf(SDL_Surface *src) {
 // Under the lock. Takes ownership of surface. Over the budget, the copies
 // that are cheapest to load again go first (oldest first among equals), so
 // a 400 ms icon sheet outlives a stream of small pictures.
-void keepLocked(State &s, const std::string &k, SDL_Surface *surface, double ms) {
+void keepLocked(State &s, const std::string &k, SDL_Surface *surface, double ms, const FileInfo &file) {
   for (auto it = s.kept.begin(); it != s.kept.end(); ++it)
     if (it->key == k) {
       s.keptBytes -= bytesOf(it->surface);
@@ -112,7 +128,7 @@ void keepLocked(State &s, const std::string &k, SDL_Surface *surface, double ms)
       s.kept.erase(it);
       break;
     }
-  s.kept.push_front({k, surface, ms});
+  s.kept.push_front({k, surface, ms, file});
   s.keptBytes += bytesOf(surface);
   while (s.keptBytes > keepBudget && s.kept.size() > 1) {
     auto victim = std::prev(s.kept.end());
@@ -125,6 +141,15 @@ void keepLocked(State &s, const std::string &k, SDL_Surface *surface, double ms)
   }
 }
 State *state = nullptr;
+
+// Under the lock: a prepared file was taken or dropped.
+void unmarkRequested(State &s, char kind, const std::string &k) {
+  auto it = s.requested.find(std::string(1, kind) + k);
+  if (it == s.requested.end())
+    return;
+  s.requestedBytes -= it->second.bytes;
+  s.requested.erase(it);
+}
 
 // "Graphics/System/IconSet.png" and "graphics\system\iconset" are one key.
 std::string key(const std::string &name) {
@@ -190,6 +215,17 @@ bool readAll(SDL_RWops &ops, std::vector<uint8_t> &out) {
 
 struct ImageHandler : FileSystem::OpenHandler {
   SDL_Surface *surface = nullptr;
+  FileInfo file;
+  void opening(const char *physfsPath) override {
+    file.path = physfsPath;
+    PHYSFS_Stat st;
+    if (PHYSFS_stat(physfsPath, &st)) {
+      file.size = st.filesize;
+      file.mtime = st.modtime;
+    } else {
+      file.size = file.mtime = -1;
+    }
+  }
   bool tryRead(SDL_RWops &ops, const char *ext) override {
     if (IMG_isGIF(&ops)) { // animated GIFs go through libnsgif on the game thread
       SDL_RWclose(&ops);
@@ -319,6 +355,118 @@ int run(void *) {
   return 0;
 }
 
+// Decodes e (s.busy is already k) and stores it for the game to take.
+void prepare(State &s, const Entry &e, const std::string &k, bool requested) {
+  SDL_Surface *surface = nullptr;
+  Sound sound;
+  FileInfo file;
+  bool ok = false;
+  try {
+    if (e.kind == 'I') {
+      ImageHandler h;
+      s.fs->openRead(h, e.name.c_str());
+      surface = h.surface;
+      file = h.file;
+      if (surface && surface->format->format != SDL_PIXELFORMAT_ABGR8888) {
+        SDL_Surface *converted = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_ABGR8888, 0);
+        SDL_FreeSurface(surface);
+        surface = converted;
+      }
+      ok = surface != nullptr;
+    } else {
+      SoundHandler h(&sound);
+      s.fs->openRead(h, e.name.c_str());
+      ok = h.ok;
+    }
+  } catch (...) {
+    ok = false; // a file that no longer exists: the game will report it itself
+  }
+  Lock hold(s.lock);
+  s.busy.clear();
+  // A planned file the game already loaded is not needed; a requested one is
+  // (the game asked for it again).
+  if (ok && !s.stopping && !s.released && (requested || !s.seen.count(k))) {
+    size_t bytes;
+    if (e.kind == 'I') {
+      bytes = size_t(surface->w) * surface->h * 4;
+      s.imageBytes += bytes;
+      s.images[k] = {surface, e.ms, file};
+      surface = nullptr;
+    } else {
+      bytes = sound.pcm.size();
+      s.soundBytes += bytes;
+      s.sounds[k] = std::move(sound);
+    }
+    if (requested) {
+      s.requested[std::string(1, e.kind) + k] = {SDL_GetTicks(), bytes};
+      s.requestedBytes += bytes;
+    }
+  }
+  if (surface)
+    SDL_FreeSurface(surface);
+  SDL_CondBroadcast(s.changed);
+}
+
+// Under the lock: is k ready (prepared, kept or being prepared)?
+bool readyLocked(State &s, char kind, const std::string &k) {
+  if (s.busy == k)
+    return true;
+  if (kind == 'S')
+    return s.sounds.count(k) != 0;
+  if (s.images.count(k))
+    return true;
+  for (auto &i : s.kept)
+    if (i.key == k)
+      return true;
+  return false;
+}
+
+// Prepares the files the game asked for, oldest request first; lets go of
+// requested files the game never took.
+void serveRequests(State &s) {
+  for (;;) {
+    Entry e;
+    std::string k;
+    {
+      Lock hold(s.lock);
+      const Uint32 t = SDL_GetTicks();
+      for (auto it = s.requested.begin(); it != s.requested.end();) {
+        if (t - it->second.at < requestLifeMs) {
+          ++it;
+          continue;
+        }
+        const char kind = it->first[0];
+        const std::string rk = it->first.substr(1);
+        if (kind == 'I') {
+          auto img = s.images.find(rk);
+          if (img != s.images.end()) {
+            s.imageBytes -= size_t(img->second.surface->w) * img->second.surface->h * 4;
+            SDL_FreeSurface(img->second.surface);
+            s.images.erase(img);
+          }
+        } else {
+          auto snd = s.sounds.find(rk);
+          if (snd != s.sounds.end()) {
+            s.soundBytes -= snd->second.pcm.size();
+            s.sounds.erase(snd);
+          }
+        }
+        s.requestedBytes -= it->second.bytes;
+        it = s.requested.erase(it);
+      }
+      if (s.stopping || s.released || s.requests.empty())
+        return;
+      e = s.requests.front();
+      s.requests.pop_front();
+      k = key(e.name);
+      if (readyLocked(s, e.kind, k) || s.requestedBytes >= requestBudget)
+        continue;
+      s.busy = k;
+    }
+    prepare(s, e, k, true);
+  }
+}
+
 int runPlan(State &s) {
   listAssetFolders(*s.fs);
   std::vector<Entry> plan;
@@ -329,67 +477,49 @@ int runPlan(State &s) {
   for (auto &e : plan) {
     if (e.ms < worthMs)
       continue;
+    serveRequests(s);
     std::string k = key(e.name);
     waitWhileHeld(s);
+    for (;;) {
+      // Wait while too much prepared data is waiting to be taken, serving
+      // the game's requests meanwhile.
+      bool serve = false;
+      {
+        Lock hold(s.lock);
+        if (s.stopping || !(e.kind == 'I' ? s.imageBytes >= imageBudget : s.soundBytes >= soundBudget))
+          break;
+        if (s.requests.empty())
+          SDL_CondWaitTimeout(s.changed, s.lock, 1000);
+        serve = true; // also lets go of requested files never taken
+      }
+      if (serve)
+        serveRequests(s);
+    }
     {
       Lock hold(s.lock);
-      // Wait while too much prepared data is waiting to be taken.
-      while (!s.stopping && (e.kind == 'I' ? s.imageBytes >= imageBudget : s.soundBytes >= soundBudget))
-        SDL_CondWait(s.changed, s.lock);
       if (s.stopping || s.released)
         break;
       if (s.seen.count(k) || s.images.count(k) || s.sounds.count(k))
         continue; // the game got there first
       s.busy = k;
     }
-    SDL_Surface *surface = nullptr;
-    Sound sound;
-    bool ok = false;
-    try {
-      if (e.kind == 'I') {
-        ImageHandler h;
-        s.fs->openRead(h, e.name.c_str());
-        surface = h.surface;
-        if (surface && surface->format->format != SDL_PIXELFORMAT_ABGR8888) {
-          SDL_Surface *converted = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_ABGR8888, 0);
-          SDL_FreeSurface(surface);
-          surface = converted;
-        }
-        ok = surface != nullptr;
-      } else {
-        SoundHandler h(&sound);
-        s.fs->openRead(h, e.name.c_str());
-        ok = h.ok;
-      }
-    } catch (...) {
-      ok = false; // a file that no longer exists: the game will report it itself
-    }
-    Lock hold(s.lock);
-    s.busy.clear();
-    if (ok && !s.stopping && !s.released && !s.seen.count(k)) {
-      if (e.kind == 'I') {
-        s.imageBytes += size_t(surface->w) * surface->h * 4;
-        s.images[k] = {surface, e.ms};
-        surface = nullptr;
-      } else {
-        s.soundBytes += sound.pcm.size();
-        s.sounds[k] = std::move(sound);
-      }
-    }
-    if (surface)
-      SDL_FreeSurface(surface);
-    SDL_CondBroadcast(s.changed);
+    prepare(s, e, k, false);
   }
-  // Keep the history current while the game runs.
+  // Serve requests and keep the history current while the game runs.
+  Uint32 saved = SDL_GetTicks();
   for (;;) {
     {
       Lock hold(s.lock);
-      if (!s.stopping)
-        SDL_CondWaitTimeout(s.changed, s.lock, 3000);
+      if (!s.stopping && s.requests.empty())
+        SDL_CondWaitTimeout(s.changed, s.lock, 1000);
       if (s.stopping)
         break;
     }
-    saveHistory(s);
+    serveRequests(s);
+    if (SDL_GetTicks() - saved >= 3000) {
+      saveHistory(s);
+      saved = SDL_GetTicks();
+    }
   }
   saveHistory(s);
   return 0;
@@ -483,7 +613,7 @@ static bool waitWhileBusy(State &s, const std::string &k) {
   return true;
 }
 
-SDL_Surface *takeImage(const std::string &name) {
+SDL_Surface *takeImage(const std::string &name, FileInfo *file) {
   if (!state)
     return nullptr;
   std::string k = key(name);
@@ -496,13 +626,19 @@ SDL_Surface *takeImage(const std::string &name) {
     if (found != state->images.end()) {
       surface = found->second.surface;
       const double ms = found->second.ms;
+      if (file)
+        *file = found->second.file;
+      const FileInfo info = found->second.file;
       state->images.erase(found);
       state->imageBytes -= size_t(surface->w) * surface->h * 4;
+      const bool requested = state->requested.count("I" + k) != 0;
+      unmarkRequested(*state, 'I', k);
       // Keep the original of an expensive one for the next load; the game
-      // gets a copy.
-      if (ms >= keepMs)
+      // gets a copy. A requested one is not copied (that is a large memcpy
+      // on the game thread): the engine keeps its texture when disposed.
+      if (ms >= keepMs && !requested)
         if (SDL_Surface *copy = copyOf(surface)) {
-          keepLocked(*state, k, surface, ms);
+          keepLocked(*state, k, surface, ms, info);
           surface = copy;
         }
     } else {
@@ -510,6 +646,8 @@ SDL_Surface *takeImage(const std::string &name) {
         if (it->key == k) {
           state->kept.splice(state->kept.begin(), state->kept, it);
           surface = copyOf(it->surface);
+          if (file)
+            *file = it->file;
           break;
         }
     }
@@ -535,13 +673,14 @@ bool takeSound(const std::string &name, Sound &out) {
     out = std::move(found->second);
     state->sounds.erase(found);
     state->soundBytes -= out.pcm.size();
+    unmarkRequested(*state, 'S', k);
   }
   SDL_CondBroadcast(state->changed);
   note('S', name, -1);
   return true;
 }
 
-void keepImage(const std::string &name, SDL_Surface *surface, double ms) {
+void keepImage(const std::string &name, SDL_Surface *surface, double ms, const FileInfo &file) {
   if (!state || ms < keepMs || !surface || surface->format->format != SDL_PIXELFORMAT_ABGR8888)
     return;
   {
@@ -554,7 +693,7 @@ void keepImage(const std::string &name, SDL_Surface *surface, double ms) {
     if (state->released)
       SDL_FreeSurface(copy);
     else
-      keepLocked(*state, key(name), copy, ms);
+      keepLocked(*state, key(name), copy, ms, file);
   }
 }
 
@@ -576,6 +715,36 @@ void releaseMemory() {
       SDL_FreeSurface(i.surface);
     state->kept.clear();
     state->keptBytes = 0;
+    state->requests.clear();
+    state->requested.clear();
+    state->requestedBytes = 0;
+  }
+  SDL_CondBroadcast(state->changed);
+}
+
+void request(char kind, const std::string &name, bool urgent) {
+  if (!state || name.empty() || (kind != 'I' && kind != 'S'))
+    return;
+  std::string k = key(name);
+  {
+    Lock hold(state->lock);
+    if (state->released || state->stopping || readyLocked(*state, kind, k))
+      return;
+    for (auto it = state->requests.begin(); it != state->requests.end(); ++it)
+      if (it->kind == kind && key(it->name) == k) {
+        if (urgent && it != state->requests.begin()) {
+          Entry e = *it;
+          state->requests.erase(it);
+          state->requests.push_front(e);
+        }
+        return;
+      }
+    if (urgent)
+      state->requests.push_front({kind, 0.0, name});
+    else if (state->requests.size() < requestQueueMax)
+      state->requests.push_back({kind, 0.0, name});
+    else
+      return;
   }
   SDL_CondBroadcast(state->changed);
 }

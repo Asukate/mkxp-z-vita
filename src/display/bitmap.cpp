@@ -307,6 +307,10 @@ struct BitmapPrivate
     bool readListed;
     /* Frame of the last write to the CPU pixels (see Bitmap::frameTick). */
     unsigned cpuStamp = 0;
+    /* Frames in a row with a large scaled blit into the CPU pixels, and the
+     * frame of the last one (see Bitmap::stretchBlt). */
+    unsigned cpuScaledRun = 0;
+    unsigned cpuScaledFrame = 0;
     /* Bumped by every change of the pixels (onModified). */
     uint32_t contentVersion = 0;
     /* Loaded from an image file (see "Reused file images"): the name the game
@@ -1735,6 +1739,14 @@ bool keepReused(BitmapPrivate *p)
 }
 } // namespace
 
+bool Bitmap::hasReusedImage(const char *name)
+{
+    for (auto &r : reusedImages)
+        if (r.key == name)
+            return true;
+    return false;
+}
+
 void Bitmap::releaseReusedImages()
 {
     while (!reusedImages.empty())
@@ -1823,42 +1835,50 @@ Bitmap::Bitmap(const char *filename)
 #ifdef __vita__
     /* Prepared on another core from this game's load history. */
     if (!hiresBitmap)
-        if (SDL_Surface *ready = AssetPrefetch::takeImage(filename))
+    {
+        AssetPrefetch::FileInfo file;
+        if (SDL_Surface *ready = AssetPrefetch::takeImage(filename, &file))
         {
             initFromSurface(ready, nullptr, false);
-            /* Finds the file without reading it, so this image can be
-             * kept for reuse like one the game thread loaded. */
-            struct FileOnly : FileSystem::OpenHandler
+            /* The worker found the file; without that (an old kept copy),
+             * find it without reading it, so this image can be kept for
+             * reuse like one the game thread loaded. On the Vita a lookup
+             * costs up to ~80 ms for a file in the RTP. */
+            if (file.size < 0)
             {
-                std::string path;
-                int64_t size = -1, mtime = -1;
-                void opening(const char *physfsPath) override
+                struct FileOnly : FileSystem::OpenHandler
                 {
-                    path = physfsPath;
-                    PHYSFS_Stat st;
-                    if (PHYSFS_stat(physfsPath, &st))
+                    AssetPrefetch::FileInfo *file;
+                    explicit FileOnly(AssetPrefetch::FileInfo *file) : file(file) {}
+                    void opening(const char *physfsPath) override
                     {
-                        size = st.filesize;
-                        mtime = st.modtime;
+                        file->path = physfsPath;
+                        PHYSFS_Stat st;
+                        if (PHYSFS_stat(physfsPath, &st))
+                        {
+                            file->size = st.filesize;
+                            file->mtime = st.modtime;
+                        }
                     }
-                }
-                bool tryRead(SDL_RWops &ops, const char *) override
-                {
-                    SDL_RWclose(&ops);
-                    return true;
-                }
-            } found;
-            try { shState->fileSystem().openRead(found, filename); } catch (...) { found.size = -1; }
-            if (!p->megaSurface && found.size >= 0)
+                    bool tryRead(SDL_RWops &ops, const char *) override
+                    {
+                        SDL_RWclose(&ops);
+                        return true;
+                    }
+                } found(&file);
+                try { shState->fileSystem().openRead(found, filename); } catch (...) { file.size = -1; }
+            }
+            if (!p->megaSurface && file.size >= 0)
             {
                 p->fileKey = filename;
-                p->filePath = found.path;
-                p->fileSize = found.size;
-                p->fileTime = found.mtime;
+                p->filePath = file.path;
+                p->fileSize = file.size;
+                p->fileTime = file.mtime;
                 p->fileVersion = p->contentVersion;
             }
             return;
         }
+    }
     const Uint64 loadBegan = SDL_GetPerformanceCounter();
 #endif
     BitmapOpenHandler handler;
@@ -1870,7 +1890,7 @@ Bitmap::Bitmap(const char *filename)
             const double ms = double(SDL_GetPerformanceCounter() - loadBegan) * 1000.0 /
                               double(SDL_GetPerformanceFrequency());
             AssetPrefetch::noteImage(filename, ms);
-            AssetPrefetch::keepImage(filename, handler.surface, ms);
+            AssetPrefetch::keepImage(filename, handler.surface, ms, {handler.path, handler.size, handler.mtime});
         }
 #endif
         
@@ -2755,6 +2775,39 @@ void Bitmap::stretchBlt(IntRect destRect,
     if(shrinkRects(sourceRect.y, sourceRect.h, source.height(), destRect.y, destRect.h, height()))
         return;
     
+    if (p->cpu)
+    {
+        /* A large scaled blit costs the CPU 50-100 ns a pixel, and the bitmap
+         * is then uploaded whole. Repeated on every frame (a sight limit or
+         * spotlight redrawn around a walking player: a 256x256 shadow
+         * stretched to 768x768 in N.P.C. Dreams, 30 ms a frame) it belongs
+         * on the GPU, where it is one textured draw. After three frames in a
+         * row the bitmap moves there for good. A one-off scaled blit stays
+         * on the CPU. */
+        const bool scaled = sourceRect.w != destRect.w || sourceRect.h != destRect.h;
+        if (scaled && !cpuOversized(p))
+        {
+            const IntRect area = cpuClip(destRect, p->cpu->w, p->cpu->h);
+            if ((int64_t)area.w * area.h >= 128 * 128)
+            {
+                p->cpuScaledRun = cpuFrame - p->cpuScaledFrame <= 1 ? p->cpuScaledRun + (cpuFrame != p->cpuScaledFrame) : 1;
+                p->cpuScaledFrame = cpuFrame;
+                if (p->cpuScaledRun >= 3)
+                {
+                    try
+                    {
+                        cpuPromote(p);
+                    }
+                    catch (const Exception &)
+                    {
+                        /* No texture for it now: stay on the CPU. */
+                        p->cpuScaledRun = 0;
+                    }
+                }
+            }
+        }
+    }
+
     if (p->cpu)
     {
         SDL_Surface *pixels = 0;

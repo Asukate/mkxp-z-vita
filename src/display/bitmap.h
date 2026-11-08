@@ -201,6 +201,8 @@ public:
 	/* Textures of disposed, unchanged file images kept for the next load of
 	 * the same file (see "Reused file images" in bitmap.cpp). */
 	static void releaseReusedImages();
+	/* True when a disposed image of this name is kept for reuse. */
+	static bool hasReusedImage(const char *name);
 	static void suspendImageReuse(bool suspend);
 	/* Frees kept images, oldest first, until this much graphics memory is
 	 * free or none are left; true if any were freed. Under GFX_LOCK. */

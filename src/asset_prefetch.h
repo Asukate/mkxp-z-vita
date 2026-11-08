@@ -24,9 +24,16 @@ namespace AssetPrefetch {
 void start(FileSystem &fs, const std::string &gameKey, const std::string &historyDir);
 void stop();
 
+// Where a prepared image was read from, so the game thread need not look
+// the file up again (size -1: not known).
+struct FileInfo {
+  std::string path;
+  int64_t size = -1, mtime = -1;
+};
+
 // A prepared image for this name, already in ABGR8888, or null. The caller
-// owns the surface.
-SDL_Surface *takeImage(const std::string &name);
+// owns the surface. file (if given) receives where it was read from.
+SDL_Surface *takeImage(const std::string &name, FileInfo *file = nullptr);
 
 struct Sound {
   std::vector<uint8_t> pcm;
@@ -39,7 +46,12 @@ bool takeSound(const std::string &name, Sound &out);
 
 // After the game thread decoded an image itself (ABGR8888, before it is
 // uploaded): keeps a copy when it was expensive, for the next load.
-void keepImage(const std::string &name, SDL_Surface *surface, double ms);
+void keepImage(const std::string &name, SDL_Surface *surface, double ms, const FileInfo &file = FileInfo());
+
+// The game will soon load this image ('I') or sound effect ('S'): prepare it
+// on the worker if it is not ready already. An urgent one goes first (the
+// game is about to use it). Any thread; cheap.
+void request(char kind, const std::string &name, bool urgent = false);
 
 // Called by the game thread after a load it had to do itself.
 void noteImage(const std::string &name, double ms);
