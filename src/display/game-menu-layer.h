@@ -42,9 +42,15 @@ class GameMenuLayer {
     };
     std::map<const hardrpg::Image *, Texture> textures;
     uint32_t frame = 0;
-    std::unique_ptr<QuadArray<CVertex>> icon;
-    int iconBuiltFor = -1, iconHeight = 0;
-    bool iconPressed = false, keyboardIconOpen = false;
+    // The in-game keyboard's frosted glass: the game behind it, halved
+    // twice into small targets and stretched back (bilinear), which blurs.
+    GLuint glassProgram = 0;
+    GLint glassRect = -1, glassUv = -1, glassShape = -1, glassImage = -1;
+    bool glassFailed = false, glassFresh = false;
+    TEXFBO glassHalf, glassQuarter;
+    hardrpg::Image buttons;
+    int buttonsFor = -1;
+    bool buttonsKeyboard = false, buttonsMenu = false;
 
     static GLuint compile(GLenum type, const char *source) {
         GLuint s = glCreateShader(type);
@@ -266,93 +272,160 @@ public:
         end();
     }
 
-    void drawKeyboard(const hardrpg::Image &image, const hardrpg::GameKeyboard &keyboard, int winW, int winH) {
-        if (image.empty() || !begin(winW, winH))
-            return;
-        quad(0, hardrpg::GameKeyboard::top, image.width, image.height, 1, 1, 1, 1, 0, &image);
-        const auto &keys = hardrpg::GameKeyboard::layout(keyboard.isSplit(), keyboard.hasFunctions()).keys;
-        for (size_t i = 0; i < keys.size(); ++i) {
-            const auto &key = keys[i];
-            const bool held = key.code == keyboard.downCode() ||
-                              (key.code == SDL_SCANCODE_LSHIFT && keyboard.shifted());
-            if (held || (keyboard.controlledByPad() && int(i) == keyboard.focusIndex())) {
-                const auto &r = key.rect;
-                quad(r.x, r.y, r.w, r.h, 0.88f, 0.18f, 0.31f, held ? 0.42f : 0.26f, 7, nullptr);
-            }
+    bool glassReady() {
+        if (glassProgram || glassFailed)
+            return glassProgram != 0;
+        glassProgram = link("keyboard-glass",
+            "attribute vec2 corner; uniform vec4 rect; uniform vec4 uv; varying vec2 local; varying vec2 tc; "
+            "void main(){local=corner;tc=mix(uv.xy,uv.zw,corner);vec2 p=rect.xy+corner*rect.zw;"
+            "gl_Position=vec4(p.x/480.0-1.0,1.0-p.y/272.0,0.0,1.0);}",
+            "precision mediump float; varying vec2 local; varying vec2 tc; uniform sampler2D image; "
+            "uniform vec3 shape; "
+            "void main(){vec4 c=texture2D(image,tc);"
+            "vec2 p=local*shape.xy; vec2 q=min(p,shape.xy-p); float r=shape.z; float k=1.0;"
+            "if(q.x<r&&q.y<r){k=clamp(r+0.5-length(vec2(r,r)-q),0.0,1.0);}"
+            "gl_FragColor=vec4(c.rgb*k,k);}",
+            "corner");
+        if (!glassProgram) {
+            glassFailed = true;
+            std::fprintf(stderr, "Game keyboard: no glass program\n");
+            return false;
         }
+        glassRect = glGetUniformLocation(glassProgram, "rect");
+        glassUv = glGetUniformLocation(glassProgram, "uv");
+        glassShape = glGetUniformLocation(glassProgram, "shape");
+        glassImage = glGetUniformLocation(glassProgram, "image");
+        try {
+            for (TEXFBO *t : {&glassHalf, &glassQuarter}) {
+                const auto area = hardrpg::GameKeyboard::glassArea();
+                const int div = t == &glassHalf ? 2 : 4;
+                TEXFBO::init(*t);
+                TEXFBO::allocEmpty(*t, (area.w + div - 1) / div, (area.h + div - 1) / div);
+                TEXFBO::linkFBO(*t);
+                gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            }
+        } catch (const Exception &) {
+            glassFailed = true;
+            FBO::bind(FBO::ID(0));
+            return false;
+        }
+        FBO::bind(FBO::ID(0));
+        return true;
+    }
+    void glassQuad(float x, float y, float w, float h, float u0, float v0, float u1, float v1, float radius) {
+        glUniform4f(glassRect, x, y, w, h);
+        glUniform4f(glassUv, u0, v0, u1, v1);
+        glUniform3f(glassShape, w, h, radius);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+public:
+    // Before the game is drawn to the screen: the glass area of this frame,
+    // a quarter size. game is the frame's texture, shown at gameRect.
+    void prepareGlass(GLuint game, const IntRect &gameRect) {
+        if (!ready() || !glassReady())
+            return;
+        const auto area = hardrpg::GameKeyboard::glassArea();
+        glState.scissorTest.pushSet(false);
+        glState.blend.pushSet(false);
+        glState.program.set(glassProgram);
+        glUniform1i(glassImage, 0);
+        gl.ActiveTexture(GL_TEXTURE0);
+        glBindBuffer(GL_ARRAY_BUFFER, unitSquare);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(GLfloat), nullptr);
+        // Each pass fills its whole target (the 960x544 space is the
+        // viewport), drawn upside down so rows stay top first in memory.
+        FBO::bind(glassHalf.fbo);
+        glState.viewport.pushSet(IntRect(0, 0, glassHalf.width, glassHalf.height));
+        glState.clearColor.pushSet(Vec4(0, 0, 0, 1));
+        FBO::clear();
+        glState.clearColor.pop();
+        glBindTexture(GL_TEXTURE_2D, game);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        const float sx = 960.f / area.w, sy = 544.f / area.h;
+        const float gy = (gameRect.y - area.y) * sy, gh = gameRect.h * sy;
+        glassQuad((gameRect.x - area.x) * sx, 544 - gy - gh, gameRect.w * sx, gh, 0, 1, 1, 0, 0);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glState.viewport.pop();
+        FBO::bind(glassQuarter.fbo);
+        glState.viewport.pushSet(IntRect(0, 0, glassQuarter.width, glassQuarter.height));
+        glBindTexture(GL_TEXTURE_2D, glassHalf.tex.gl);
+        glassQuad(0, 0, 960, 544, 0, 1, 1, 0, 0);
+        glState.viewport.pop();
+        glDisableVertexAttribArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glState.blend.pop();
+        glState.scissorTest.pop();
+        FBO::bind(FBO::ID(0));
+        glassFresh = true;
+    }
+
+    // The keyboard over the game: glass, keys, the held key lit (fading
+    // after release) and, for a held character, its preview above it.
+    void drawKeyboard(const hardrpg::Image &panel, const hardrpg::Image *preview,
+                      const hardrpg::GameKeyboard &keyboard, uint64_t now, int winW, int winH) {
+        if (panel.empty() || !begin(winW, winH))
+            return;
+        const auto &layout = keyboard.layout();
+        const auto area = hardrpg::GameKeyboard::glassArea();
+        const int lit = keyboard.litIndex();
+        const bool showPreview = preview && !preview->empty() && keyboard.previewing() && lit >= 0;
+        hardrpg::KeyboardRect previewAt{};
+        if (showPreview)
+            previewAt = hardrpg::GameKeyboard::previewRect(layout.keys[lit].rect);
+        auto frosted = [&](const hardrpg::KeyboardRect &r, float radius) {
+            glassQuad(r.x, r.y, r.w, r.h, float(r.x - area.x) / area.w, float(r.y - area.y) / area.h,
+                      float(r.x + r.w - area.x) / area.w, float(r.y + r.h - area.y) / area.h, radius);
+        };
+        if (glassFresh && glassProgram) {
+            glState.program.set(glassProgram);
+            glUniform1i(glassImage, 0);
+            glBindTexture(GL_TEXTURE_2D, glassQuarter.tex.gl);
+            for (const auto &p : layout.panels)
+                frosted(p, 16);
+            glState.program.set(program);
+        } else {
+            // No blur this frame (or none at all): a darker tint instead.
+            for (const auto &p : layout.panels)
+                quad(p.x, p.y, p.w, p.h, 0.05f, 0.06f, 0.08f, 0.55f, 16, nullptr);
+        }
+        quad(8, hardrpg::GameKeyboard::top, panel.width, panel.height, 1, 1, 1, 1, 0, &panel);
+        const float glow = keyboard.litAlpha(now);
+        if (lit >= 0 && glow > 0) {
+            const auto &r = layout.keys[lit].rect;
+            quad(r.x, r.y, r.w, r.h, 1, 1, 1, 0.18f * glow, 8, nullptr);
+        }
+        if (keyboard.controlledByPad() && keyboard.focusIndex() != lit) {
+            const auto &r = layout.keys[keyboard.focusIndex()].rect;
+            quad(r.x, r.y, r.w, r.h, 1, 1, 1, 0.14f, 8, nullptr);
+        }
+        if (showPreview) {
+            if (glassFresh && glassProgram) {
+                glState.program.set(glassProgram);
+                glBindTexture(GL_TEXTURE_2D, glassQuarter.tex.gl);
+                frosted(previewAt, 12);
+                glState.program.set(program);
+            } else {
+                quad(previewAt.x, previewAt.y, previewAt.w, previewAt.h, 0.05f, 0.06f, 0.08f, 0.55f, 12, nullptr);
+            }
+            quad(previewAt.x, previewAt.y, previewAt.w, previewAt.h, 1, 1, 1, 1, 0, preview);
+        }
+        glassFresh = false;
         end();
     }
 
-    // Where the icon goes: centred in the left border, near the top. Empty
-    // when the border is too narrow to hold it (the game fills the width).
-    static bool iconRect(int gameX, int &x, int &y, int &w, int &h) {
-        if (gameX < 52)
-            return false;
-        w = 35, h = 30;
-        x = (gameX - w) / 2;
-        y = 14;
-        return true;
-    }
-
-    // Three bars, white over a black outline, a little see-through; ruby on
-    // a soft plate while pressed, so a touch shows at once.
-    void drawIcons(int winW, int winH, int gameX, bool pressed, bool keyboardOpen) {
-        int x, y, w, h;
-        const bool menuVisible = iconRect(gameX, x, y, w, h);
-        if (!icon)
-            icon.reset(new QuadArray<CVertex>());
-        if (iconBuiltFor != gameX || iconHeight != winH || iconPressed != pressed || keyboardIconOpen != keyboardOpen) {
-            iconPressed = pressed;
-            keyboardIconOpen = keyboardOpen;
-            icon->clear();
-            auto bar = [&](int bx, int by, int bw, int bh, const Vec4 &c) {
-                CVertex v[4];
-                const int top = PerformanceMetrics::framebufferY(winH, by);
-                const int bottom = PerformanceMetrics::framebufferY(winH, by + bh);
-                v[0].pos = Vec2(bx, top);
-                v[1].pos = Vec2(bx + bw, top);
-                v[2].pos = Vec2(bx + bw, bottom);
-                v[3].pos = Vec2(bx, bottom);
-                for (auto &e : v)
-                    e.color = c;
-                icon->vertices.insert(icon->vertices.end(), v, v + 4);
-                ++icon->quadCount;
-            };
-            if (menuVisible) {
-                if (pressed)
-                    bar(x - 9, y - 9, w + 18, h + 18, Vec4(1, 1, 1, 0.22f));
-                const int step = 12, thick = 7;
-                for (int i = 0; i < 3; ++i)
-                    bar(x - 2, y + i * step - 2, w + 4, thick + 4, Vec4(0, 0, 0, 0.55f));
-                for (int i = 0; i < 3; ++i)
-                    bar(x, y + i * step, w, thick,
-                        pressed ? Vec4(0.86f, 0.13f, 0.25f, 1.f) : Vec4(1, 1, 1, 0.75f));
-            }
-            const auto kb = hardrpg::GameKeyboard::iconRect(gameX);
-            bar(kb.x - 2, kb.y, kb.w + 4, kb.h, Vec4(0, 0, 0, 0.70f));
-            bar(kb.x, kb.y + 3, kb.w, kb.h - 6,
-                keyboardOpen ? Vec4(0.73f, 0.15f, 0.27f, 0.92f) : Vec4(1, 1, 1, 0.83f));
-            for (int row = 0; row < 2; ++row)
-                for (int column = 0; column < 5; ++column)
-                    bar(kb.x + 4 + column * 6, kb.y + 7 + row * 5, 3, 3, Vec4(0.07f, 0.08f, 0.10f, 1));
-            bar(kb.x + 9, kb.y + 18, 17, 3, Vec4(0.07f, 0.08f, 0.10f, 1));
-            icon->commit();
-            iconBuiltFor = gameX;
-            iconHeight = winH;
+    // The menu and keyboard buttons in the left border.
+    void drawButtons(int winW, int winH, int gameX, bool menuLit, bool keyboardOpen) {
+        if (buttonsFor != gameX || buttonsKeyboard != keyboardOpen || buttonsMenu != menuLit) {
+            hardrpg::drawGameButtons(buttons, gameX, keyboardOpen, menuLit);
+            buttonsFor = gameX;
+            buttonsKeyboard = keyboardOpen;
+            buttonsMenu = menuLit;
         }
-        FBO::bind(FBO::ID(0));
-        glState.viewport.pushSet(IntRect(0, 0, winW, winH));
-        glState.scissorTest.pushSet(false);
-        glState.blend.pushSet(true);
-        glState.blendMode.pushSet(BlendNormal);
-        SimpleColorShader &shader = shState->shaders().simpleColor;
-        shader.bind();
-        shader.applyViewportProj();
-        shader.setTranslation(Vec2i());
-        icon->draw();
-        glState.blendMode.pop();
-        glState.blend.pop();
-        glState.scissorTest.pop();
-        glState.viewport.pop();
+        drawImage(buttons, 0, 0, winW, winH);
     }
 };

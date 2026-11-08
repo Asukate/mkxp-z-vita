@@ -1,3 +1,4 @@
+#include <atomic>
 #include "vita_input.h"
 
 #include "eventthread.h"
@@ -313,6 +314,9 @@ void vitaSetKeyboardOverlay(const std::array<bool, 256> &keys, bool captures) {
   overlayCaptures = captures;
 }
 bool vitaKeyboardCapturesInput() { return overlayCaptures; }
+namespace { std::atomic<bool> textInputOn{false}; }
+void vitaSetTextInput(bool on) { textInputOn = on; }
+bool vitaTextInput() { return textInputOn; }
 void vitaApplyKeyboardOverlay(uint8_t *rawKeys) {
   if (!overlayCaptures)
     return;

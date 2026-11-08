@@ -439,6 +439,13 @@ The launcher, on a PS Vita running HardRPG 0.4.0:
       <sub>Controls on a picture of the Vita</sub>
     </td>
   </tr>
+  <tr>
+    <td align="center">
+      <a href="docs/images/screenshots/in-game-keyboard.png"><img src="docs/images/screenshots/in-game-keyboard.png" width="420" alt="The in-game keyboard over Ao Oni R"></a><br>
+      <sub>The in-game keyboard, for games that need typing</sub>
+    </td>
+    <td></td>
+  </tr>
 </table>
 
 Games, captured on a PS Vita running HardRPG 0.3.0:

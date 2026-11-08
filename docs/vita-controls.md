@@ -38,17 +38,23 @@ Entries already in use elsewhere are tinted.
 
 ## In-game keyboard
 
-Tap the keyboard icon below the menu icon while playing an XP, VX, or VX Ace
-game. On a full-width game the icon sits at the top left. The keyboard
-overlays the game and sends the same key presses as the mapped controls.
-Games that poll Win32 keyboard functions can use it without a custom control
-profile.
+Tap the keyboard button under the menu button in the left border while
+playing an XP, VX, or VX Ace game. On a full-width game the button sits at
+the top left. The keyboard overlays the game and sends the same key presses
+as the mapped controls. Games that poll Win32 keyboard functions can use it
+without a custom control profile. A game that asks for typed text
+(`Input.text_input = true`) opens it by itself, and it closes again when the
+game stops asking, unless it was opened by hand.
 
-Tap a key or use the D-pad and Cross. Split and Dock switch the layout, and
-Fn shows function keys, Ctrl, and Alt. Triangle switches the layout and
-Square toggles the function row when navigating with the D-pad. Shift
-applies to the next key. Tap Hide, tap the keyboard icon again, or press
-Circle to close the keyboard.
+The keys are large enough for one finger. Letters are lower case; Shift
+applies to the next key, and two quick taps on Shift lock capitals. ?123
+shows digits and symbols, Fn shows F1 to F12, the arrows and the editing
+keys, and Ctrl and Alt stay on until tapped again. A held character key
+shows a larger copy above the finger.
+
+With the D-pad, move between keys and press Cross. Triangle splits the
+keyboard into two halves and back, and Square toggles Fn. Tap the keyboard
+button again or press Circle to close it.
 
 ## Touch modes
 

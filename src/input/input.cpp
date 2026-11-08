@@ -1633,6 +1633,9 @@ int Input::getControllerPowerLevel()
 
 bool Input::getTextInputMode()
 {
+#ifdef __vita__
+    return vitaTextInput();
+#endif
     return (SDL_IsTextInputActive() == SDL_TRUE);
 }
 

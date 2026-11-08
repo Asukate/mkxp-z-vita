@@ -50,6 +50,7 @@
 #include "vita_diagnostic.h"
 #ifdef __vita__
 #include "vita_resume.h"
+#include "input/vita_input.h"
 #endif
 
 #ifndef __APPLE__
@@ -679,24 +680,23 @@ void EventThread::process(RGSSThreadData &rtData)
                         break;
                         
                     case REQUEST_TEXTMODE :
+#ifdef __vita__
+                        /* The in-game keyboard types the text: SDL's text
+                         * input would bring up the system keyboard. */
+                        vitaSetTextInput(event.user.code);
+#else
                         if (event.user.code)
                         {
-                            {
-                                const SDL_Rect rect = {0, 0, 1, 1};
-                                SDL_SetTextInputRect(&rect);
-                            }
+                            const SDL_Rect rect = {0, 0, 1, 1};
+                            SDL_SetTextInputRect(&rect);
                             SDL_StartTextInput();
-                            lockText(true);
-                            textInputBuffer.clear();
-                            lockText(false);
                         }
                         else
-                        {
                             SDL_StopTextInput();
-                            lockText(true);
-                            textInputBuffer.clear();
-                            lockText(false);
-                        }
+#endif
+                        lockText(true);
+                        textInputBuffer.clear();
+                        lockText(false);
                         break;
                         
                     case REQUEST_MESSAGEBOX :

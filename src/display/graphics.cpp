@@ -1508,6 +1508,8 @@ struct GraphicsPrivate {
     /* The menu icon was pressed: drawn lit for a frame before opening. */
     bool menuIconPressed = false;
     bool playingGame() const { return threadData->config.gameFolder != "app0:/stub"; }
+    /* Whether the game asked for typed text last frame (Input.text_input). */
+    bool textWanted = false;
     void updateGameOverlays() {
         const unsigned epoch = vitaResumeEpoch();
         if (epoch != keyboardEpoch && gameKeyboard.visible())
@@ -1523,6 +1525,19 @@ struct GraphicsPrivate {
             return;
         }
 
+        /* A game asking for typed text gets the keyboard, and it goes away
+         * again when the game is done with it (unless opened by hand). */
+        const bool text = shState->input().getTextInputMode();
+        if (text != textWanted) {
+            textWanted = text;
+            if (text && !gameKeyboard.visible() && ensureOverlayView()) {
+                gameKeyboard.open(true);
+                vitaSetKeyboardOverlay({}, true);
+            } else if (!text && gameKeyboard.openedForText()) {
+                gameKeyboard.close();
+            }
+        }
+
         const auto sample = vitaReadControls(true, false);
         const bool down = !sample.front.empty();
         const bool began = down && !overlayTouching;
@@ -1531,25 +1546,26 @@ struct GraphicsPrivate {
         if (gameKeyboard.capturing()) {
             const char ch = gameKeyboard.step(sample);
             vitaSetKeyboardOverlay(gameKeyboard.heldKeys(), gameKeyboard.capturing());
-            if (ch && shState->input().getTextInputMode()) {
+            if (ch && text) {
                 auto &events = *threadData->ethread;
                 events.lockText(true);
                 if (events.textInputBuffer.size() < 512)
                     events.textInputBuffer += ch;
                 events.lockText(false);
             }
+            if (gameKeyboard.takeMenuRequest())
+                menuIconPressed = true;
             return;
         }
         if (!began)
             return;
         const int tx = int(sample.front[0].x * 960), ty = int(sample.front[0].y * 544);
-        if (hardrpg::GameKeyboard::iconRect(scOffset.x).contains(tx, ty) && ensureOverlayView()) {
+        if (hardrpg::GameKeyboard::iconTouched(scOffset.x, tx, ty) && ensureOverlayView()) {
             gameKeyboard.open();
             vitaSetKeyboardOverlay({}, true);
             return;
         }
-        int x, y, w, h;
-        if (GameMenuLayer::iconRect(scOffset.x, x, y, w, h) && tx < scOffset.x && ty < y + h + 12)
+        if (hardrpg::GameKeyboard::menuTouched(scOffset.x, tx, ty))
             menuIconPressed = true;
     }
     /* Applies what the menu changed: display, speed, overlay and controls. */
@@ -1870,10 +1886,18 @@ struct GraphicsPrivate {
         if (gameMenu.isOpen() && gameMenuView)
             gameMenuLayer.draw(*gameMenuView, winSize.x, winSize.y);
         else if (playingGame()) {
-            if (gameKeyboard.visible())
-                gameMenuLayer.drawKeyboard(overlayView->keyboardPanel(gameKeyboard.isSplit(), gameKeyboard.hasFunctions()),
-                                           gameKeyboard, winSize.x, winSize.y);
-            gameMenuLayer.drawIcons(winSize.x, winSize.y, scOffset.x, menuIconPressed, gameKeyboard.visible());
+            if (gameKeyboard.visible() && overlayView) {
+                const hardrpg::Image *preview = nullptr;
+                const int lit = gameKeyboard.litIndex();
+                if (gameKeyboard.previewing()) {
+                    const auto &key = gameKeyboard.layout().keys[lit];
+                    const auto at = hardrpg::GameKeyboard::previewRect(key.rect);
+                    preview = &overlayView->keyPreview(gameKeyboard.keyText(key), at.w, at.h);
+                }
+                gameMenuLayer.drawKeyboard(overlayView->keyboardPanel(gameKeyboard), preview, gameKeyboard,
+                                           sceKernelGetProcessTimeWide() / 1000, winSize.x, winSize.y);
+            }
+            gameMenuLayer.drawButtons(winSize.x, winSize.y, scOffset.x, menuIconPressed, gameKeyboard.visible());
         }
 #endif
 #ifdef MKXPZ_VITA_DIAGNOSTICS
@@ -2050,6 +2074,12 @@ struct GraphicsPrivate {
             return;
         FrameProfile::Scope profile(FrameProfile::ScreenBlit);
         screen.composite();
+#if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
+        /* The keyboard's glass blurs this frame: taken before it is drawn. */
+        if (gameKeyboard.visible() && !gameMenu.isOpen())
+            gameMenuLayer.prepareGlass(screen.getPP().frontBuffer().tex.gl,
+                                       IntRect(scOffset.x, scOffset.y, scSize.x, scSize.y));
+#endif
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("REDRAW_SCREEN_COMPOSITE_RETURN");
         s42iMark("SCALE_STATE integerActive=%d stepApplicable=%d lastMile=%d scRes=%dx%d scSize=%dx%d scOffset=%d,%d win=%dx%d",
