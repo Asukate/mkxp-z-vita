@@ -429,8 +429,15 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(self.ui(language+',cross')['language'], 'pt-BR')
         state = self.ui(SETTINGS+',cross,cross')
         self.assertEqual(state['message'], 'Ajustes de tela salvos para o próximo jogo.')
-        # Left goes back; Portuguese wraps round to English.
-        self.assertEqual(self.ui(language+',left')['language'], 'es')
+        # Then Japanese and Chinese, in their own scripts.
+        self.assertEqual(self.ui(language+',right')['language'], 'ja')
+        state = self.ui(SETTINGS+',cross,cross')
+        self.assertEqual(state['message'], '画面設定を次回のゲーム起動用に保存しました。')
+        self.assertEqual(self.ui(language+',right')['language'], 'zh-Hans')
+        state = self.ui(SETTINGS+',cross,cross')
+        self.assertEqual(state['message'], '显示设置已保存，下次启动游戏时生效。')
+        # Left goes back; Chinese wraps round to English.
+        self.assertEqual(self.ui(language+',left')['language'], 'ja')
         self.assertEqual(self.ui(language+',right,right')['language'], 'en')
         self.assertEqual(json.loads(prefs.read_text())['language'], 'en')
         state = self.ui(SETTINGS+',cross,cross')
@@ -445,6 +452,8 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(tr('pt-BR', 'Settings'), 'Ajustes')
         self.assertEqual(tr('pt-BR', 'Add games'), 'Adicionar jogos')
         self.assertEqual(tr('es', 'Starting {}', args=['Ace']), 'Iniciando Ace')
+        self.assertEqual(tr('ja', 'Settings'), '設定')
+        self.assertEqual(tr('zh-Hans', 'Starting {}', args=['Ace']), '正在启动 Ace')
         # Text with no translation (game names, paths, anything new) stays English.
         self.assertEqual(tr('es', 'A text nobody translated'), 'A text nobody translated')
         self.assertEqual(tr('pt-BR', 'Fixture game'), 'Fixture game')
@@ -452,10 +461,11 @@ class NativeLauncher(unittest.TestCase):
         # Every row has both translations, keeps its placeholders, and every
         # character exists in the fonts the launcher ships.
         fonts = [ROOT/'assets/liberation.ttf', ROOT/'launcher/font-display.ttf']
-        out = json.loads(subprocess.check_output([str(BINARY), *[a for f in fonts for a in ('--strings', str(f))]], text=True))
+        out = json.loads(subprocess.check_output([str(BINARY), *[a for f in fonts for a in ('--strings', str(f))],
+                                                  '--strings-fallback', str(ROOT/'assets/wqymicrohei.ttf')], text=True))
         self.assertEqual(out['missingGlyphs'], [])
         self.assertEqual(len(out['en']), out['rows'], 'an English text is in the table twice')
-        for code in ['es', 'pt-BR']:
+        for code in ['es', 'pt-BR', 'ja', 'zh-Hans']:
             for english, text in out[code].items():
                 with self.subTest(language=code, text=english):
                     self.assertTrue(text)
@@ -517,7 +527,7 @@ class NativeLauncher(unittest.TestCase):
         self.assertFalse(guide()['welcomeActive'])
         # Its slides draw in every language.
         prefs.unlink()
-        for lang in ['en', 'es', 'pt-BR']:
+        for lang in ['en', 'es', 'pt-BR', 'ja', 'zh-Hans']:
             for slide in range(6):
                 shot = self.storage/f'welcome-{lang}-{slide}.png'
                 self.run_binary('--welcome', 'auto', '--language', lang, '--actions', ','.join(['cross']*slide), '--snapshot', shot)

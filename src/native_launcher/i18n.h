@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace hardrpg {
-enum Language { English, Spanish, Portuguese, languageCount };
+enum Language { English, Spanish, Portuguese, Japanese, Chinese, languageCount };
 int language();
 void setLanguage(int);
 // The language's name in itself ("Español"), and the code saved in the

@@ -5,7 +5,7 @@ namespace hardrpg {
 namespace welcomeLayout {
 constexpr int slideX = 100, slideY = 80, slideW = 760, slideH = 402;
 constexpr int textX = 30, textW = 700;
-constexpr int langTop = 150, langRowH = 52, langBox = 46;
+constexpr int langTop = 146, langRowH = 46, langBox = 40;
 constexpr int dotsY = 486;
 // Example folder lists (games, RTP): a header row, then rows that drop in.
 constexpr int treeHeaderH = 36, treeRowH = 28, treeIndent = 34;

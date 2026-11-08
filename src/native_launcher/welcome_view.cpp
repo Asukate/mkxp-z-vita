@@ -92,7 +92,7 @@ const Image &View::welcomeSlide(const UI &u, int slide) {
       rect(textX, ry, textW, langBox, white, focused ? 41 : 15, 8);
       if (focused)
         rect(textX, ry, 4, langBox, ruby, 255, 2);
-      label(textX + 20, ry + 12, languageName(i), 20, white);
+      label(textX + 20, ry + 9, languageName(i), 20, white);
       if (chosen)
         rect(textX + textW - 32, ry + langBox / 2 - 6, 12, 12, ruby, 255, 6);
     }

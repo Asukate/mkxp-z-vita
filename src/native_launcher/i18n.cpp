@@ -9,10 +9,11 @@
 namespace hardrpg {
 namespace {
 int current = English;
-const char *const names[languageCount] = {"English", "Español", "Português (Brasil)"};
-const char *const codes[languageCount] = {"en", "es", "pt-BR"};
+const char *const names[languageCount] = {"English", "Español", "Português (Brasil)", "日本語", "简体中文"};
+const char *const codes[languageCount] = {"en", "es", "pt-BR", "ja", "zh-Hans"};
 
-// English, Spanish, Brazilian Portuguese. "{}" stands for a value filled in
+// English, Spanish, Brazilian Portuguese (Japanese and Simplified Chinese are
+// in i18n_cjk.inc, keyed by the English). "{}" stands for a value filled in
 // when shown (a name, a number, a path). A text missing here, or with an
 // empty translation, shows in English. Keep translations about as long as
 // the English: most of them sit in fixed boxes on a 960x544 screen.
@@ -854,18 +855,36 @@ const Text table[] = {
      "Aparece numa borda vazia se houver; senão, num canto."},
 };
 
-const std::map<std::string, const Text *> &index() {
-  static std::map<std::string, const Text *> map = [] {
-    std::map<std::string, const Text *> m;
+struct CjkText {
+  const char *en, *ja, *zh;
+};
+#include "i18n_cjk.inc"
+
+struct Row {
+  const Text *text = nullptr;
+  const CjkText *cjk = nullptr;
+};
+const std::map<std::string, Row> &index() {
+  static std::map<std::string, Row> map = [] {
+    std::map<std::string, Row> m;
     for (auto &t : table)
-      m[t.en] = &t;
+      m[t.en].text = &t;
+    for (auto &t : cjkTable) {
+      auto found = m.find(t.en);
+      if (found != m.end())
+        found->second.cjk = &t;
+    }
     return m;
   }();
   return map;
 }
-const char *pick(const Text &t, int lang) {
-  const char *s = lang == Spanish ? t.es : lang == Portuguese ? t.pt : t.en;
-  return s && *s ? s : t.en;
+const char *pick(const Row &r, int lang) {
+  const char *s = lang == Spanish      ? r.text->es
+                  : lang == Portuguese ? r.text->pt
+                  : lang == Japanese   ? (r.cjk ? r.cjk->ja : nullptr)
+                  : lang == Chinese    ? (r.cjk ? r.cjk->zh : nullptr)
+                                       : r.text->en;
+  return s && *s ? s : r.text->en;
 }
 } // namespace
 
@@ -882,6 +901,10 @@ int languageFromCode(const std::string &code) {
     return Portuguese;
   if (code.compare(0, 2, "es") == 0)
     return Spanish;
+  if (code.compare(0, 2, "ja") == 0)
+    return Japanese;
+  if (code.compare(0, 2, "zh") == 0)
+    return Chinese;
   return -1;
 }
 int systemLanguage() {
@@ -893,6 +916,10 @@ int systemLanguage() {
     return Spanish;
   if (lang == SCE_SYSTEM_PARAM_LANG_PORTUGUESE_BR || lang == SCE_SYSTEM_PARAM_LANG_PORTUGUESE_PT)
     return Portuguese;
+  if (lang == SCE_SYSTEM_PARAM_LANG_JAPANESE)
+    return Japanese;
+  if (lang == SCE_SYSTEM_PARAM_LANG_CHINESE_S || lang == SCE_SYSTEM_PARAM_LANG_CHINESE_T)
+    return Chinese;
 #endif
   return English;
 }
@@ -901,7 +928,7 @@ const char *trc(const char *context, const char *english) {
   if (current != English) {
     auto found = index().find(std::string(context) + "|" + english);
     if (found != index().end())
-      return pick(*found->second, current);
+      return pick(found->second, current);
   }
   return tr(english);
 }
@@ -910,14 +937,14 @@ const char *tr(const char *english) {
     return english;
   auto &m = index();
   auto found = m.find(english);
-  return found == m.end() ? english : pick(*found->second, current);
+  return found == m.end() ? english : pick(found->second, current);
 }
 std::string tr(const std::string &english) {
   if (current == English)
     return english;
   auto &m = index();
   auto found = m.find(english);
-  return found == m.end() ? english : pick(*found->second, current);
+  return found == m.end() ? english : pick(found->second, current);
 }
 std::string trf(const char *english, std::initializer_list<std::string> args) {
   std::string out = tr(english);
@@ -934,7 +961,12 @@ std::string trf(const char *english, std::initializer_list<std::string> args) {
 std::vector<std::pair<std::string, std::string>> translations(int lang) {
   std::vector<std::pair<std::string, std::string>> out;
   for (auto &t : table) {
-    const char *s = lang == Spanish ? t.es : lang == Portuguese ? t.pt : t.en;
+    const CjkText *c = index().at(t.en).cjk;
+    const char *s = lang == Spanish      ? t.es
+                    : lang == Portuguese ? t.pt
+                    : lang == Japanese   ? (c ? c->ja : nullptr)
+                    : lang == Chinese    ? (c ? c->zh : nullptr)
+                                         : t.en;
     out.push_back({t.en, s ? s : ""});
   }
   return out;
