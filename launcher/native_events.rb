@@ -304,6 +304,35 @@ module HardRPGNative
     "Game_Map#height:2127464467:1504446456:22" => "",
     "Game_Map#screen_tile_x:2798891327:130354449:37" => "",
     "Game_Map#screen_tile_y:3575891027:365432171:38" => "",
+    # Passability: passable? and every default method it runs (steps and pathfinding searches).
+    "Game_CharacterBase#passable?:2890133910:1550089906:359" => "",
+    "Game_CharacterBase#map_passable?:881579081:234099216:55" => "",
+    "Game_CharacterBase#debug_through?:1922958208:3150056395:31" => "",
+    "Game_CharacterBase#reverse_dir:1090973604:3196455579:32" => "",
+    "Game_CharacterBase#collide_with_characters?:2823222209:1508647427:93" => "",
+    "Game_CharacterBase#collide_with_events?:1333215762:3355127436:128" => "",
+    "Game_CharacterBase#collide_with_vehicles?:746340996:524755088:93" => "",
+    "Game_CharacterBase#pos?:1023083197:2722236635:33" => "",
+    "Game_CharacterBase#pos_nt?:1977972506:296422599:41" => "",
+    "Game_Vehicle#pos?:3553531591:248844825:57" => "",
+    "Game_Event#collide_with_characters?:3997802833:3825278515:81" => "",
+    "Game_Event#collide_with_player_characters?:82831582:3745194047:89" => "",
+    "Game_Player#map_passable?:2140084804:423311533:163" => "",
+    "Game_Player#debug_through?:1654466854:2173046618:47" => "",
+    "Game_Player#collide?:1958870256:1368725325:72" => "",
+    "Game_Map#passable?:516777856:3980661519:69" => "",
+    "Game_Map#check_passage:973991880:1095123498:199" => "",
+    "Game_Map#all_tiles:2025312439:2612010914:89" => "",
+    "Game_Map#layered_tiles:3802473541:3432518973:65" => "",
+    "Game_Map#tile_id:367210931:1138232817:44" => "",
+    "Game_Map#tile_events_xy:937110794:678566796:75" => "",
+    "Game_Map#tileset:3363835930:610275068:39" => "",
+    "Game_Map#events_xy_nt:2271787243:574692209:75" => "",
+    "Game_Map#valid?:4029894196:4133621796:60" => "",
+    "Game_Map#round_x_with_direction:3260917369:3740472808:76" => "",
+    "Game_Map#round_y_with_direction:3040158680:3749320172:76" => "",
+    "Game_Map#boat:3272050086:1371408251:21" => "",
+    "Game_Map#ship:1631018288:1387333514:21" => "",
     "Game_Map#update_events:3280958066:797714417:104" => "",
     "Game_Map#setup_autorun_common_event:1759215688:2925478940:183" => "",
     "Game_Vehicle#screen_y:3716450459:2668300970:29" => "",
@@ -358,8 +387,8 @@ module HardRPGNative
     "Sprite_Character#valid_x?:3170161718:3100512405:52" => "known",
     "Sprite_Character#valid_y?:541466540:3386577138:53" => "known",
     "Game_Map#floor_xy:969204233:977108497:383" => "known",
-    "Game_Map#round_x:3717177633:1181881102:57" => "known",
-    "Game_Map#round_y:2321096418:1017254612:57" => "known",
+    "Game_Map#round_x:3717177633:1181881102:57" => "",
+    "Game_Map#round_y:2321096418:1017254612:57" => "",
     # Event Jitter Fix (Game_Map display_x/y rounded to 1/32, adjust_x/y read them)
     "Game_Map#display_x:1717768432:2265321294:47" => "jitter",
     "Game_Map#display_y:848227820:2269122384:47" => "jitter",
@@ -465,7 +494,7 @@ module HardRPGNative
     "Sprite_Character#update/mog" => :mog_anti_lag_update,
   }.freeze
 
-  CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Map Game_Variables Game_Switches Game_Vehicle
+  CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Player Game_Map Game_Variables Game_Switches Game_Vehicle
                Sprite_Base Sprite_Character Spriteset_Map Sprite StarAuraEffect Input.self Switch.self].freeze
   ATTRS = { 'Game_CharacterBase' => %i[tile_id character_name character_index pattern direction opacity blend_type
                                        bush_depth transparent animation_id balloon_id current_floor],
@@ -484,7 +513,7 @@ module HardRPGNative
   # next start skips reading its scripts again (BLACK SOULS II: about 2 s of every start on the Vita).
   # Only the methods of CLASSES are kept; what they mean (swapped or kept) is still decided each start.
   module SectionCache
-    VERSION = 2 # change it whenever Norm's output or CLASSES changes
+    VERSION = 3 # change it whenever Norm's output or CLASSES changes
     MAX = 4000  # sections; the ones this start used are kept first
 
     class << self
@@ -528,6 +557,11 @@ module HardRPGNative
 
   class << self
     attr_reader :swapped, :kept
+
+    # The default text a swapped method had ("crc32:adler32:bytes"), by "Class#name".
+    def swapped_digest(key)
+      (@swapped_digest || {})[key]
+    end
 
     def status
       return 'off (disabled)' if $hardrpg_native_events == false
@@ -588,6 +622,7 @@ module HardRPGNative
           if replace(klass, name.to_sym, variant, cname)
             set_option('near_the_screen_margins', margins) if variant == 'margins'
             @swapped << key
+            (@swapped_digest ||= {})[key] = "#{Zlib.crc32(text)}:#{Zlib.adler32(text)}:#{text.bytesize}"
             (@variant_of ||= {})[key] = variant
           else
             @kept << "#{key} (no native)"

@@ -9,7 +9,7 @@
 require 'zlib' unless defined?(Zlib)
 
 module HardRPGVXAceScanCache
-  VERSION = 9 # change it whenever a check's result for the same scripts can change
+  VERSION = 10 # change it whenever a check's result for the same scripts can change
   MAX_GAMES = 64
 
   @data = nil
@@ -797,7 +797,14 @@ module HardRPGKnownMethods
         return nil unless Object.const_defined?(cname)
         klass = Object.const_get(cname)
         um = (klass.instance_method(name) rescue nil)
-        loc = um && um.owner.equal?(klass) && um.source_location
+        return nil unless um && um.owner.equal?(klass)
+        if native?(key, um)
+          # native_events.rb swapped this text for its native: the same method, in C.
+          return nil unless Array(digests).include?(HardRPGNative.swapped_digest(key))
+          out[key] = :native
+          next
+        end
+        loc = um.source_location
         return nil unless loc
         index, src = section_of(loc[0])
         return nil unless src
@@ -812,8 +819,16 @@ module HardRPGKnownMethods
     def same?(locs)
       locs.all? do |key, loc|
         cname, name = key.split('#', 2)
-        (Object.const_get(cname).instance_method(name).source_location rescue nil) == loc
+        um = (Object.const_get(cname).instance_method(name) rescue nil)
+        next false unless um
+        loc == :native ? native?(key, um) && um.owner.equal?(Object.const_get(cname)) : um.source_location == loc
       end
+    end
+
+    # um is the native native_events.rb put in place of key's default text.
+    def native?(key, um)
+      um.source_location.nil? && defined?(HardRPGNative) && HardRPGNative.respond_to?(:swapped_digest) &&
+        !HardRPGNative.swapped_digest(key).nil?
     end
   end
 end
@@ -886,8 +901,10 @@ module HardRPGJetPath
         search && compare_ok? ? [search, HardRPGKnownMethods.locate(INDEX), HardRPGKnownMethods.locate(MEMO)] : nil
       end
       return @status = 'off (other script)' unless found && HardRPGKnownMethods.same?(found[0])
-      index = found[1] && HardRPGKnownMethods.same?(found[1])
-      memo = found[2] && HardRPGKnownMethods.same?(found[2])
+      # The native events_xy_nt and passable? chain answer faster than the index and memo in front
+      # of them would (a Ruby method in front would also send every native call through Ruby).
+      index = found[1] && found[1]['Game_Map#events_xy_nt'] != :native && HardRPGKnownMethods.same?(found[1])
+      memo = found[2] && found[2]['Game_Map#passable?'] != :native && HardRPGKnownMethods.same?(found[2])
       if index
         pos_nt = Game_CharacterBase.instance_method(:pos_nt?)
         pos = Game_CharacterBase.instance_method(:pos?)
@@ -952,9 +969,12 @@ module HardRPGJetPath
       saved = [@hardrpg_jet_index, @hardrpg_jet_memo]
       @hardrpg_jet_index = mode & 2 != 0 && respond_to?(:hardrpg_jet_index) ? hardrpg_jet_index : nil
       @hardrpg_jet_memo = mode & 4 != 0 ? {} : nil
+      # The native events_xy_nt keeps its own per-search index (same premise).
+      native_index = mode & 2 != 0 && HardRPGNative.respond_to?(:event_index) && HardRPGNative.event_index(self)
       route = hardrpg_jet_search(tx, ty, sx, sy, dist, jump, char)
       route.equal?(:retry) ? super : route
     ensure
+      HardRPGNative.event_index(nil) if native_index
       @hardrpg_jet_index, @hardrpg_jet_memo = saved if saved
     end
 

@@ -174,6 +174,13 @@ enum SlotId {
     /* Game_Map */
     S_GM_adjust_x, S_GM_adjust_y, S_GM_loop_horizontal, S_GM_loop_vertical, S_GM_width, S_GM_height,
     S_GM_screen_tile_x, S_GM_screen_tile_y, S_GM_update_events,
+    /* passability (default texts) and what they read */
+    S_GCB_passable, S_GCB_map_passable, S_GCB_debug_through, S_GCB_reverse_dir, S_GCB_cw_characters,
+    S_GCB_cw_events, S_GCB_cw_vehicles, S_GCB_pos, S_GCB_pos_nt, S_GE_cw_characters, S_GE_cw_player,
+    S_GP_map_passable, S_GP_debug_through, S_GP_collide, S_GM_passable, S_GM_check_passage, S_GM_all_tiles,
+    S_GM_layered_tiles, S_GM_tile_id, S_GM_tile_events_xy, S_GM_tileset, S_GM_events_xy_nt, S_GM_valid,
+    S_GM_round_x_wd, S_GM_round_y_wd, S_GM_boat, S_GM_ship, S_MAP_data, S_TS_flags, S_TBL_aref,
+    S_HSH_values, S_ARY_select, S_ARY_collect, S_ARY_plus, S_SYM_eqq, S_GVH_pos,
     /* Game_Map autorun scan, Game_Vehicle, RPG::CommonEvent (engine Ruby), Enumerable#find on Array */
     S_GM_setup_autorun_common_event, S_GVH_screen_y, S_GVH_altitude, S_CE_autorun, S_ENUM_find,
     /* Galv's Region Effects wrappers, DMO screen_z wrapper (alias names), keyboard scripts on Input */
@@ -896,6 +903,481 @@ static VALUE gm_update_events(VALUE self, int, const VALUE *, bool) {
  *   event
  * Runs every frame the map interpreter is idle and walks every common event; nearly all fail
  * at autorun?, which is the engine's `@trigger == 1`. */
+/* ------------------------------------------------------------------ */
+/* Passability: the default VX Ace texts of passable? and what it runs.
+ * Every step a character takes and every node a pathfinder opens asks
+ * passable? (Ao Oni's chaser search: ~250 asks, 35-90 us each in Ruby). */
+
+static ID iv_through, iv_tile_events, iv_tileset_id, iv_vehicle_type, iv_vehicles, gv_data_tilesets,
+    gv_game_player, gv_test, id_band, id_lshift, id_press, id_boat_passable, id_ship_passable, id_Input,
+    id_collide, id_followers, id_tile_id, id_collect, id_plus_ary, id_select, id_events_xy_nt;
+static VALUE sym_boat, sym_ship, sym_airship, sym_ctrl;
+
+static inline bool builtinOk(int id, VALUE recv);
+static inline VALUE call3(VALUE obj, int id, VALUE a, VALUE b, VALUE c) {
+    VALUE v[3] = {a, b, c};
+    return callSlot(obj, id, 3, v);
+}
+/* obj's own method `name` is either slot a's (the base class default) or slot b's (a subclass default). */
+static VALUE callEither(VALUE obj, int a, int b, int argc, const VALUE *argv) {
+    return callSlot(obj, slotOk(g_slots[b], rb_class_of(obj)) ? b : a, argc, argv);
+}
+static inline bool builtinOkK(int id, VALUE klass) {
+    Slot &s = g_slots[id];
+    return s.kind != SK_NONE && slotOk(s, klass);
+}
+static inline bool plainAry(VALUE a) { return RB_TYPE_P(a, T_ARRAY) && rb_class_of(a) == rb_cArray; }
+static VALUE nAnd(VALUE a, VALUE b) {
+    if (FIXNUM_P(a) && FIXNUM_P(b))
+        return LONG2FIX(FIX2LONG(a) & FIX2LONG(b));
+    return rb_funcall(a, id_band, 1, b);
+}
+static VALUE nShl(VALUE a, VALUE b) {
+    if (FIXNUM_P(a) && FIXNUM_P(b) && FIX2LONG(a) == 1 && FIX2LONG(b) >= 0 && FIX2LONG(b) < 30)
+        return LONG2FIX(1L << FIX2LONG(b));
+    return rb_funcall(a, id_lshift, 1, b);
+}
+
+/* def pos?(x, y); @x == x && @y == y; end */
+static VALUE gcb_pos(VALUE self, int, const VALUE *argv, bool) {
+    return rbool(nEq(IV(self, x), argv[0]) && nEq(IV(self, y), argv[1]));
+}
+/* Game_Vehicle: def pos?(x, y); @map_id == $game_map.map_id && super(x, y); end */
+static ID id_map_id;
+static VALUE gvh_pos(VALUE self, int argc, const VALUE *argv, bool fromRuby) {
+    if (!nEq(IV(self, map_id), rb_funcall(gameMap(), id_map_id, 0)))
+        return Qfalse;
+    return callSuper(self, S_GVH_pos, argc, argv, fromRuby);
+}
+/* def pos_nt?(x, y); pos?(x, y) && !@through; end */
+static VALUE gcb_pos_nt(VALUE self, int, const VALUE *argv, bool) {
+    VALUE p = callEither(self, S_GCB_pos, S_GVH_pos, 2, argv);
+    return RTEST(p) ? rbool(!RTEST(IV(self, through))) : p;
+}
+/* pos_nt? of a character whose pos_nt? and pos? are both the default natives, without calls. */
+static inline int posNtFast(VALUE ev, VALUE x, VALUE y) {
+    VALUE k = rb_class_of(ev);
+    if (!slotOk(g_slots[S_GCB_pos_nt], k) || g_slots[S_GCB_pos_nt].kind != SK_NATIVE ||
+        !slotOk(g_slots[S_GCB_pos], k) || g_slots[S_GCB_pos].kind != SK_NATIVE)
+        return -1;
+    return nEq(IV(ev, x), x) && nEq(IV(ev, y), y) && !RTEST(IV(ev, through));
+}
+static VALUE gcb_debug_through(VALUE, int, const VALUE *, bool) { return Qfalse; }
+static VALUE gcb_reverse_dir(VALUE, int, const VALUE *argv, bool) { return nSub(INT2FIX(10), argv[0]); }
+/* def map_passable?(x, y, d); $game_map.passable?(x, y, d); end */
+static VALUE gcb_map_passable(VALUE, int, const VALUE *argv, bool) {
+    return callSlot(gameMap(), S_GM_passable, 3, argv);
+}
+/* def passable?(x, y, d)
+ *   x2 = $game_map.round_x_with_direction(x, d)
+ *   y2 = $game_map.round_y_with_direction(y, d)
+ *   return false unless $game_map.valid?(x2, y2)
+ *   return true if @through || debug_through?
+ *   return false unless map_passable?(x, y, d)
+ *   return false unless map_passable?(x2, y2, reverse_dir(d))
+ *   return false if collide_with_characters?(x2, y2)
+ *   return true */
+static VALUE gcb_passable(VALUE self, int, const VALUE *argv, bool) {
+    VALUE x = argv[0], y = argv[1], d = argv[2];
+    VALUE x2 = call2(gameMap(), S_GM_round_x_wd, x, d);
+    VALUE y2 = call2(gameMap(), S_GM_round_y_wd, y, d);
+    if (!RTEST(call2(gameMap(), S_GM_valid, x2, y2)))
+        return Qfalse;
+    if (RTEST(IV(self, through)) || RTEST(callEither(self, S_GCB_debug_through, S_GP_debug_through, 0, nullptr)))
+        return Qtrue;
+    if (!RTEST(callEither(self, S_GCB_map_passable, S_GP_map_passable, 3, argv)))
+        return Qfalse;
+    VALUE back[3] = {x2, y2, call1(self, S_GCB_reverse_dir, d)};
+    if (!RTEST(callEither(self, S_GCB_map_passable, S_GP_map_passable, 3, back)))
+        return Qfalse;
+    VALUE xy[2] = {x2, y2};
+    if (RTEST(callEither(self, S_GCB_cw_characters, S_GE_cw_characters, 2, xy)))
+        return Qfalse;
+    return Qtrue;
+}
+/* def collide_with_characters?(x, y); collide_with_events?(x, y) || collide_with_vehicles?(x, y); end */
+static VALUE gcb_cw_characters(VALUE self, int, const VALUE *argv, bool) {
+    VALUE v = callSlot(self, S_GCB_cw_events, 2, argv);
+    return RTEST(v) ? v : callSlot(self, S_GCB_cw_vehicles, 2, argv);
+}
+
+/* While a pathfinding search runs nothing on the map moves (HardRPGJetPath's premise): the
+ * events that are not pass-through, by tile, in @events order, built once per search. */
+struct EventIndex {
+    VALUE map = Qnil, events = Qnil, tileEvents = Qnil;
+    std::unordered_map<uint64_t, std::vector<VALUE>> at, tileAt;
+};
+static EventIndex g_evIndex;
+static inline uint64_t tileKey(long x, long y) { return ((uint64_t)(uint32_t)x << 32) | (uint32_t)y; }
+/* HardRPGNative.event_index(map or nil): index map's events for a search (nil stops). Returns
+ * whether it is on; off when an event's pos_nt? is not the default native or a position is not
+ * an Integer. */
+static VALUE nev_event_index(VALUE, VALUE map) {
+    g_evIndex.map = g_evIndex.events = g_evIndex.tileEvents = Qnil;
+    g_evIndex.at.clear();
+    g_evIndex.tileAt.clear();
+    if (NIL_P(map))
+        return Qfalse;
+    VALUE evs = IV(map, events);
+    if (!RB_TYPE_P(evs, T_HASH) || rb_class_of(evs) != rb_cHash)
+        return Qfalse;
+    struct Ctx { std::unordered_map<uint64_t, std::vector<VALUE>> *at; bool bad; } c{&g_evIndex.at, false};
+    rb_hash_foreach(evs, [](VALUE, VALUE ev, VALUE arg) -> int {
+        Ctx &c = *(Ctx *)arg;
+        VALUE k = rb_class_of(ev);
+        VALUE x = IV(ev, x), y = IV(ev, y);
+        if (!slotOk(g_slots[S_GCB_pos_nt], k) || g_slots[S_GCB_pos_nt].kind != SK_NATIVE ||
+            !slotOk(g_slots[S_GCB_pos], k) || g_slots[S_GCB_pos].kind != SK_NATIVE || !FIXNUM_P(x) || !FIXNUM_P(y)) {
+            c.bad = true;
+            return ST_STOP;
+        }
+        if (!RTEST(IV(ev, through)))
+            (*c.at)[tileKey(FIX2LONG(x), FIX2LONG(y))].push_back(ev);
+        return ST_CONTINUE;
+    }, (VALUE)&c);
+    if (c.bad) {
+        g_evIndex.at.clear();
+        return Qfalse;
+    }
+    g_evIndex.map = map;
+    g_evIndex.events = evs;
+    /* @tile_events too (tile_events_xy), the same way. */
+    VALUE te = IV(map, tile_events);
+    if (plainAry(te)) {
+        bool ok = true;
+        for (long i = 0; i < RARRAY_LEN(te) && ok; ++i) {
+            VALUE ev = RARRAY_AREF(te, i), k = rb_class_of(ev);
+            VALUE x = IV(ev, x), y = IV(ev, y);
+            ok = slotOk(g_slots[S_GCB_pos_nt], k) && g_slots[S_GCB_pos_nt].kind == SK_NATIVE &&
+                 slotOk(g_slots[S_GCB_pos], k) && g_slots[S_GCB_pos].kind == SK_NATIVE && FIXNUM_P(x) && FIXNUM_P(y);
+            if (ok && !RTEST(IV(ev, through)))
+                g_evIndex.tileAt[tileKey(FIX2LONG(x), FIX2LONG(y))].push_back(ev);
+        }
+        if (ok)
+            g_evIndex.tileEvents = te;
+        else
+            g_evIndex.tileAt.clear();
+    }
+    return Qtrue;
+}
+
+/* The events of $game_map.events_xy_nt(x, y), in order, into buf, while the default
+ * events_xy_nt (@events.values.select { pos_nt? }) and every event's pos_nt? are natives:
+ * then nothing runs but those reads. -1 when that is not so (or more than cap). */
+static int eventsXyNt(VALUE map, VALUE x, VALUE y, VALUE *buf, int cap) {
+    VALUE mk = rb_class_of(map);
+    if (!slotOk(g_slots[S_GM_events_xy_nt], mk) || g_slots[S_GM_events_xy_nt].kind != SK_NATIVE)
+        return -1;
+    VALUE evs = IV(map, events);
+    if (!RB_TYPE_P(evs, T_HASH) || rb_class_of(evs) != rb_cHash || !builtinOkK(S_HSH_values, rb_cHash) ||
+        !builtinOkK(S_ARY_select, rb_cArray))
+        return -1;
+    if (map == g_evIndex.map && evs == g_evIndex.events && FIXNUM_P(x) && FIXNUM_P(y)) {
+        auto it = g_evIndex.at.find(tileKey(FIX2LONG(x), FIX2LONG(y)));
+        if (it == g_evIndex.at.end())
+            return 0;
+        if ((int)it->second.size() > cap)
+            return -1;
+        for (size_t i = 0; i < it->second.size(); ++i)
+            buf[i] = it->second[i];
+        return (int)it->second.size();
+    }
+    struct Ctx { VALUE x, y, *buf; int cap, n; bool bad; } c{x, y, buf, cap, 0, false};
+    rb_hash_foreach(evs, [](VALUE, VALUE ev, VALUE arg) -> int {
+        Ctx &c = *(Ctx *)arg;
+        int p = posNtFast(ev, c.x, c.y);
+        if (p < 0 || (p && c.n == c.cap)) {
+            c.bad = true;
+            return ST_STOP;
+        }
+        if (p)
+            c.buf[c.n++] = ev;
+        return ST_CONTINUE;
+    }, (VALUE)&c);
+    return c.bad ? -1 : c.n;
+}
+/* def events_xy_nt(x, y); @events.values.select {|event| event.pos_nt?(x, y) }; end */
+static VALUE gm_events_xy_nt(VALUE self, int, const VALUE *argv, bool) {
+    VALUE buf[32];
+    int n = eventsXyNt(self, argv[0], argv[1], buf, 32);
+    if (n < 0)
+        return callOrig(self, S_GM_events_xy_nt, 2, argv);
+    return rb_ary_new_from_values(n, buf);
+}
+static VALUE gameEventClass() { return rb_const_get(rb_cObject, id_Game_Event); }
+/* def collide_with_events?(x, y)
+ *   $game_map.events_xy_nt(x, y).any? do |event|
+ *     event.normal_priority? || self.is_a?(Game_Event) */
+static VALUE gcb_cw_events(VALUE self, int, const VALUE *argv, bool) {
+    VALUE map = gameMap();
+    VALUE buf[32];
+    int n = eventsXyNt(map, argv[0], argv[1], buf, 32);
+    if (n >= 0 && builtinOkK(S_ARY_any, rb_cArray)) {
+        for (int i = 0; i < n; ++i) {
+            if (RTEST(call0(buf[i], S_GCB_normal_priority)))
+                return Qtrue;
+            if (builtinOk(S_OBJ_is_a, self) ? RTEST(rb_obj_is_kind_of(self, gameEventClass()))
+                                            : RTEST(rb_funcall(self, id_is_a, 1, gameEventClass())))
+                return Qtrue;
+        }
+        return Qfalse;
+    }
+    /* Something there is not the default: the default Ruby body (eventsXyNt only read). */
+    return callOrig(self, S_GCB_cw_events, 2, argv);
+}
+/* def collide_with_vehicles?(x, y); $game_map.boat.pos_nt?(x, y) || $game_map.ship.pos_nt?(x, y); end */
+static VALUE gcb_cw_vehicles(VALUE, int, const VALUE *argv, bool) {
+    VALUE v = callSlot(call0(gameMap(), S_GM_boat), S_GCB_pos_nt, 2, argv);
+    return RTEST(v) ? v : callSlot(call0(gameMap(), S_GM_ship), S_GCB_pos_nt, 2, argv);
+}
+/* Game_Event: def collide_with_characters?(x, y); super || collide_with_player_characters?(x, y); end */
+static VALUE ge_cw_characters(VALUE self, int argc, const VALUE *argv, bool fromRuby) {
+    VALUE v = callSuper(self, S_GE_cw_characters, argc, argv, fromRuby);
+    return RTEST(v) ? v : callSlot(self, S_GE_cw_player, 2, argv);
+}
+/* def collide_with_player_characters?(x, y); normal_priority? && $game_player.collide?(x, y); end */
+static VALUE ge_cw_player(VALUE self, int, const VALUE *argv, bool) {
+    VALUE v = call0(self, S_GCB_normal_priority);
+    return RTEST(v) ? callSlot(rb_gvar_get(gv_game_player), S_GP_collide, 2, argv) : v;
+}
+/* Game_Player: def collide?(x, y); !@through && (pos?(x, y) || followers.collide?(x, y)); end */
+static VALUE gp_collide(VALUE self, int, const VALUE *argv, bool) {
+    if (RTEST(IV(self, through)))
+        return Qfalse;
+    VALUE v = callSlot(self, S_GCB_pos, 2, argv);
+    return RTEST(v) ? v : rb_funcallv(rb_funcall(self, id_followers, 0), id_collide, 2, argv);
+}
+/* def debug_through?; $TEST && Input.press?(:CTRL); end */
+static VALUE gp_debug_through(VALUE, int, const VALUE *, bool) {
+    VALUE t = rb_gvar_get(gv_test);
+    return RTEST(t) ? rb_funcall(rb_const_get(rb_cObject, id_Input), id_press, 1, sym_ctrl) : t;
+}
+/* def map_passable?(x, y, d)
+ *   case @vehicle_type
+ *   when :boat then $game_map.boat_passable?(x, y)
+ *   when :ship then $game_map.ship_passable?(x, y)
+ *   when :airship then true
+ *   else super */
+static VALUE gp_map_passable(VALUE self, int argc, const VALUE *argv, bool fromRuby) {
+    VALUE vt = IV(self, vehicle_type);
+    if (!builtinOkK(S_SYM_eqq, rb_cSymbol))
+        return callOrig(self, S_GP_map_passable, argc, argv);
+    /* Symbol#=== is identity for any other object. */
+    if (vt == sym_boat)
+        return rb_funcall(gameMap(), id_boat_passable, 2, argv[0], argv[1]);
+    if (vt == sym_ship)
+        return rb_funcall(gameMap(), id_ship_passable, 2, argv[0], argv[1]);
+    if (vt == sym_airship)
+        return Qtrue;
+    return callSuper(self, S_GP_map_passable, argc, argv, fromRuby);
+}
+
+/* Game_Map */
+/* def boat; @vehicles[0]; end   def ship; @vehicles[1]; end */
+static VALUE vehicleAt(VALUE self, long i) {
+    VALUE v = IV(self, vehicles);
+    if (plainAry(v) && builtinOk(S_ARY_aref, v))
+        return rb_ary_entry(v, i);
+    return rb_funcall(v, id_aref, 1, LONG2FIX(i));
+}
+static VALUE gm_boat(VALUE self, int, const VALUE *, bool) { return vehicleAt(self, 0); }
+static VALUE gm_ship(VALUE self, int, const VALUE *, bool) { return vehicleAt(self, 1); }
+/* def valid?(x, y); x >= 0 && x < width && y >= 0 && y < height; end */
+static VALUE gm_valid(VALUE self, int, const VALUE *argv, bool) {
+    VALUE x = argv[0], y = argv[1];
+    return rbool(nGe(x, INT2FIX(0)) && nLt(x, call0(self, S_GM_width)) && nGe(y, INT2FIX(0)) &&
+                 nLt(y, call0(self, S_GM_height)));
+}
+/* def round_x(x); loop_horizontal? ? (x + width) % width : x; end (and round_y) */
+static VALUE gm_round_x(VALUE self, int, const VALUE *argv, bool) {
+    if (!RTEST(call0(self, S_GM_loop_horizontal)))
+        return argv[0];
+    VALUE s = nAdd(argv[0], call0(self, S_GM_width));
+    return nMod(s, call0(self, S_GM_width));
+}
+static VALUE gm_round_y(VALUE self, int, const VALUE *argv, bool) {
+    if (!RTEST(call0(self, S_GM_loop_vertical)))
+        return argv[0];
+    VALUE s = nAdd(argv[0], call0(self, S_GM_height));
+    return nMod(s, call0(self, S_GM_height));
+}
+/* def round_x_with_direction(x, d); round_x(x + (d == 6 ? 1 : d == 4 ? -1 : 0)); end */
+static VALUE gm_round_x_wd(VALUE self, int, const VALUE *argv, bool) {
+    VALUE d = argv[1];
+    long o = nEq(d, INT2FIX(6)) ? 1 : nEq(d, INT2FIX(4)) ? -1 : 0;
+    return call1(self, S_GM_round_x, nAdd(argv[0], LONG2FIX(o)));
+}
+/* def round_y_with_direction(y, d); round_y(y + (d == 2 ? 1 : d == 8 ? -1 : 0)); end */
+static VALUE gm_round_y_wd(VALUE self, int, const VALUE *argv, bool) {
+    VALUE d = argv[1];
+    long o = nEq(d, INT2FIX(2)) ? 1 : nEq(d, INT2FIX(8)) ? -1 : 0;
+    return call1(self, S_GM_round_y, nAdd(argv[0], LONG2FIX(o)));
+}
+/* def passable?(x, y, d); check_passage(x, y, (1 << (d / 2 - 1)) & 0x0f); end */
+static VALUE gm_passable(VALUE self, int, const VALUE *argv, bool) {
+    VALUE bit = nAnd(nShl(INT2FIX(1), nSub(nDiv(argv[2], INT2FIX(2)), INT2FIX(1))), INT2FIX(0x0f));
+    return call3(self, S_GM_check_passage, argv[0], argv[1], bit);
+}
+/* def tileset; $data_tilesets[@tileset_id]; end */
+static VALUE gm_tileset(VALUE self, int, const VALUE *, bool) {
+    VALUE a = rb_gvar_get(gv_data_tilesets), i = IV(self, tileset_id);
+    if (plainAry(a) && FIXNUM_P(i) && builtinOk(S_ARY_aref, a))
+        return rb_ary_entry(a, FIX2LONG(i));
+    return rb_funcall(a, id_aref, 1, i);
+}
+/* def tile_id(x, y, z); @map.data[x, y, z] || 0; end */
+static VALUE gm_tile_id(VALUE self, int, const VALUE *argv, bool) {
+    VALUE v = callSlot(call0(IV(self, map), S_MAP_data), S_TBL_aref, 3, argv);
+    return RTEST(v) ? v : INT2FIX(0);
+}
+/* def layered_tiles(x, y); [2, 1, 0].collect {|z| tile_id(x, y, z) }; end */
+static VALUE gm_layered_tiles(VALUE self, int, const VALUE *argv, bool) {
+    if (!builtinOkK(S_ARY_collect, rb_cArray))
+        return callOrig(self, S_GM_layered_tiles, 2, argv);
+    VALUE t[3];
+    for (int z = 2; z >= 0; --z)
+        t[2 - z] = call3(self, S_GM_tile_id, argv[0], argv[1], INT2FIX(z));
+    return rb_ary_new_from_values(3, t);
+}
+/* def tile_events_xy(x, y); @tile_events.select {|event| event.pos_nt?(x, y) }; end */
+static VALUE gm_tile_events_xy(VALUE self, int, const VALUE *argv, bool) {
+    VALUE te = IV(self, tile_events);
+    if (!plainAry(te) || !builtinOkK(S_ARY_select, rb_cArray))
+        return callOrig(self, S_GM_tile_events_xy, 2, argv);
+    if (self == g_evIndex.map && te == g_evIndex.tileEvents && FIXNUM_P(argv[0]) && FIXNUM_P(argv[1])) {
+        auto it = g_evIndex.tileAt.find(tileKey(FIX2LONG(argv[0]), FIX2LONG(argv[1])));
+        if (it == g_evIndex.tileAt.end())
+            return rb_ary_new();
+        return rb_ary_new_from_values((long)it->second.size(), it->second.data());
+    }
+    VALUE out = rb_ary_new();
+    for (long i = 0; i < RARRAY_LEN(te); ++i) {
+        VALUE ev = RARRAY_AREF(te, i);
+        int p = posNtFast(ev, argv[0], argv[1]);
+        if (p < 0 ? RTEST(callSlot(ev, S_GCB_pos_nt, 2, argv)) : p)
+            rb_ary_push(out, ev);
+    }
+    return out;
+}
+/* def all_tiles(x, y); tile_events_xy(x, y).collect {|ev| ev.tile_id } + layered_tiles(x, y); end */
+static VALUE gm_all_tiles(VALUE self, int, const VALUE *argv, bool) {
+    VALUE te = callSlot(self, S_GM_tile_events_xy, 2, argv);
+    VALUE ids;
+    if (plainAry(te) && builtinOkK(S_ARY_collect, rb_cArray)) {
+        long n = RARRAY_LEN(te);
+        ids = rb_ary_new_capa(n);
+        for (long i = 0; i < RARRAY_LEN(te); ++i)
+            rb_ary_push(ids, call0(RARRAY_AREF(te, i), S_GCB_tile_id));
+    } else {
+        ids = rb_block_call(te, id_collect, 0, nullptr,
+                            [](RB_BLOCK_CALL_FUNC_ARGLIST(ev, _)) -> VALUE { return rb_funcall(ev, id_tile_id, 0); },
+                            Qnil);
+    }
+    VALUE lay = callSlot(self, S_GM_layered_tiles, 2, argv);
+    if (plainAry(ids) && builtinOkK(S_ARY_plus, rb_cArray))
+        return rb_ary_plus(ids, lay);
+    return rb_funcall(ids, id_plus_ary, 1, lay);
+}
+/* def check_passage(x, y, bit)
+ *   all_tiles(x, y).each do |tile_id|
+ *     flag = tileset.flags[tile_id]
+ *     next if flag & 0x10 != 0
+ *     return true if flag & bit == 0
+ *     return false if flag & bit == bit
+ *   end
+ *   return false */
+struct PassCtx { VALUE self, bit, result; };
+/* One tile of check_passage: Qundef to go on, else the answer. */
+static VALUE passTile(VALUE self, VALUE tid, VALUE bit) {
+    VALUE flag = call1(call0(call0(self, S_GM_tileset), S_TS_flags), S_TBL_aref, tid);
+    if (nNe(nAnd(flag, INT2FIX(0x10)), INT2FIX(0)))
+        return Qundef;
+    if (nEq(nAnd(flag, bit), INT2FIX(0)))
+        return Qtrue;
+    if (nEq(nAnd(flag, bit), bit))
+        return Qfalse;
+    return Qundef;
+}
+/* check_passage without building all_tiles' arrays, while all_tiles, tile_events_xy, layered_tiles,
+ * tile_id and each tile event's pos_nt?/pos?/tile_id are the defaults (natives and an attr reader)
+ * and x, y are Integers: then nothing it skips reading can raise or change anything. Qundef when
+ * that is not so. */
+static VALUE checkPassageFast(VALUE self, VALUE x, VALUE y, VALUE bit) {
+    VALUE mk = rb_class_of(self);
+    for (int id : {S_GM_all_tiles, S_GM_tile_events_xy, S_GM_layered_tiles, S_GM_tile_id})
+        if (!slotOk(g_slots[id], mk) || g_slots[id].kind != SK_NATIVE)
+            return Qundef;
+    if (!FIXNUM_P(x) || !FIXNUM_P(y) || !builtinOkK(S_ARY_collect, rb_cArray) || !builtinOkK(S_ARY_plus, rb_cArray) ||
+        !builtinOkK(S_ARY_select, rb_cArray) || !builtinOkK(S_ARY_each, rb_cArray))
+        return Qundef;
+    VALUE te = IV(self, tile_events);
+    if (!plainAry(te))
+        return Qundef;
+    VALUE evs[16];
+    int n = 0;
+    if (self == g_evIndex.map && te == g_evIndex.tileEvents) {
+        auto it = g_evIndex.tileAt.find(tileKey(FIX2LONG(x), FIX2LONG(y)));
+        if (it != g_evIndex.tileAt.end()) {
+            if (it->second.size() > 16)
+                return Qundef;
+            for (VALUE ev : it->second)
+                evs[n++] = ev;
+        }
+    } else {
+        for (long i = 0; i < RARRAY_LEN(te); ++i) {
+            VALUE ev = RARRAY_AREF(te, i);
+            int p = posNtFast(ev, x, y);
+            if (p < 0 || (p && n == 16))
+                return Qundef;
+            if (p)
+                evs[n++] = ev;
+        }
+    }
+    Slot &tid = g_slots[S_GCB_tile_id];
+    for (int i = 0; i < n; ++i)
+        if (tid.kind != SK_ATTR || !slotOk(tid, rb_class_of(evs[i])))
+            return Qundef;
+    for (int i = 0; i < n; ++i) {
+        VALUE r = passTile(self, call0(evs[i], S_GCB_tile_id), bit);
+        if (r != Qundef)
+            return r;
+    }
+    for (int z = 2; z >= 0; --z) {
+        VALUE r = passTile(self, call3(self, S_GM_tile_id, x, y, INT2FIX(z)), bit);
+        if (r != Qundef)
+            return r;
+    }
+    return Qfalse;
+}
+static VALUE gm_check_passage(VALUE self, int, const VALUE *argv, bool) {
+    VALUE fast = checkPassageFast(self, argv[0], argv[1], argv[2]);
+    if (fast != Qundef)
+        return fast;
+    VALUE tiles = call2(self, S_GM_all_tiles, argv[0], argv[1]);
+    VALUE bit = argv[2];
+    if (RB_TYPE_P(tiles, T_ARRAY) && builtinOkK(S_ARY_each, rb_class_of(tiles))) {
+        for (long i = 0; i < RARRAY_LEN(tiles); ++i) {
+            VALUE r = passTile(self, RARRAY_AREF(tiles, i), bit);
+            if (r != Qundef)
+                return r;
+        }
+        return Qfalse;
+    }
+    PassCtx c{self, bit, Qfalse};
+    rb_block_call(tiles, id_each, 0, nullptr,
+                  [](RB_BLOCK_CALL_FUNC_ARGLIST(tid, arg)) -> VALUE {
+                      PassCtx &c = *(PassCtx *)arg;
+                      VALUE r = passTile(c.self, tid, c.bit);
+                      if (r != Qundef) {
+                          c.result = r;
+                          rb_iter_break();
+                      }
+                      return Qnil;
+                  },
+                  (VALUE)&c);
+    return c.result;
+}
+
 static VALUE gm_setup_autorun_common_event(VALUE self, int, const VALUE *, bool) {
     VALUE list = rb_gvar_get(gv_data_common_events);
     /* find is Enumerable's on a plain Array, walking it with Array#each. */
@@ -1416,7 +1898,7 @@ static bool g_steadyOk = false;
 static std::vector<ID> g_steadyCharIvars;
 static VALUE g_steadyCharClasses = Qnil; /* Array of the exact classes a character may be */
 static VALUE g_spriteClass = Qnil;
-static ID id_steady_ok, iv_upper_area_sprite, iv_set_upper_area_sprite, iv_tileset_id, gv_data_tilesets;
+static ID id_steady_ok, iv_upper_area_sprite, iv_set_upper_area_sprite; /* iv_tileset_id, gv_data_tilesets: above */
 struct SteadySnap {
     VALUE chr;
     std::vector<uint32_t> w;
@@ -2192,6 +2674,37 @@ static const NativeDef g_natives[] = {
     ND(S_SW_stop_npc, "yanfly", sw_stop_npc_yanfly, -1),
     ND(S_GE_update_self_movement, "yanfly", ge_update_self_movement_yanfly, -1),
     ND(S_GE_update_self_movement, "always", ge_update_self_movement_always, -1),
+    /* passability */
+    NDA(S_GCB_passable, "", gcb_passable, -1, 3, 3),
+    NDA(S_GCB_map_passable, "", gcb_map_passable, -1, 3, 3),
+    NDA(S_GCB_debug_through, "", gcb_debug_through, -1, 0, 0),
+    NDA(S_GCB_reverse_dir, "", gcb_reverse_dir, -1, 1, 1),
+    NDA(S_GCB_cw_characters, "", gcb_cw_characters, -1, 2, 2),
+    NDA(S_GCB_cw_events, "", gcb_cw_events, -1, 2, 2),
+    NDA(S_GCB_cw_vehicles, "", gcb_cw_vehicles, -1, 2, 2),
+    NDA(S_GCB_pos, "", gcb_pos, -1, 2, 2),
+    NDA(S_GCB_pos_nt, "", gcb_pos_nt, -1, 2, 2),
+    NDA(S_GVH_pos, "", gvh_pos, S_GCB_pos, 2, 2),
+    NDA(S_GE_cw_characters, "", ge_cw_characters, S_GCB_cw_characters, 2, 2),
+    NDA(S_GE_cw_player, "", ge_cw_player, -1, 2, 2),
+    NDA(S_GP_map_passable, "", gp_map_passable, S_GCB_map_passable, 3, 3),
+    NDA(S_GP_debug_through, "", gp_debug_through, -1, 0, 0),
+    NDA(S_GP_collide, "", gp_collide, -1, 2, 2),
+    NDA(S_GM_passable, "", gm_passable, -1, 3, 3),
+    NDA(S_GM_check_passage, "", gm_check_passage, -1, 3, 3),
+    NDA(S_GM_all_tiles, "", gm_all_tiles, -1, 2, 2),
+    NDA(S_GM_layered_tiles, "", gm_layered_tiles, -1, 2, 2),
+    NDA(S_GM_tile_id, "", gm_tile_id, -1, 3, 3),
+    NDA(S_GM_tile_events_xy, "", gm_tile_events_xy, -1, 2, 2),
+    NDA(S_GM_tileset, "", gm_tileset, -1, 0, 0),
+    NDA(S_GM_events_xy_nt, "", gm_events_xy_nt, -1, 2, 2),
+    NDA(S_GM_valid, "", gm_valid, -1, 2, 2),
+    NDA(S_GM_round_x, "", gm_round_x, -1, 1, 1),
+    NDA(S_GM_round_y, "", gm_round_y, -1, 1, 1),
+    NDA(S_GM_round_x_wd, "", gm_round_x_wd, -1, 2, 2),
+    NDA(S_GM_round_y_wd, "", gm_round_y_wd, -1, 2, 2),
+    NDA(S_GM_boat, "", gm_boat, -1, 0, 0),
+    NDA(S_GM_ship, "", gm_ship, -1, 0, 0),
     NDW(S_GCB_real_move_speed, "8dir", gcb_real_move_speed_8dir, S_H_GCB_rms_8dir, S_GCB_real_move_speed),
     /* kure */
     ND(S_GCB_screen_z, "kure", gcb_screen_z_kure, -1),
@@ -2546,6 +3059,14 @@ void nativeEventsInit(int rgssVersion) {
     I(id_DASH_PLUS, "DASH_PLUS"); I(id_MOG_ANTI_LAG, "MOG_ANTI_LAG");
     I(id_UPDATE_OUT_SCREEN_RANGE, "UPDATE_OUT_SCREEN_RANGE"); I(id_Game_Event, "Game_Event");
     I(gv_game_variables, "$game_variables"); I(gv_game_system, "$game_system");
+    I(iv_through, "@through"); I(iv_tile_events, "@tile_events"); I(iv_tileset_id, "@tileset_id");
+    I(iv_vehicle_type, "@vehicle_type"); I(iv_vehicles, "@vehicles"); I(gv_data_tilesets, "$data_tilesets");
+    I(gv_game_player, "$game_player"); I(gv_test, "$TEST"); I(id_band, "&"); I(id_lshift, "<<");
+    I(id_press, "press?"); I(id_boat_passable, "boat_passable?"); I(id_ship_passable, "ship_passable?");
+    I(id_Input, "Input"); I(id_collide, "collide?"); I(id_followers, "followers"); I(id_tile_id, "tile_id");
+    I(id_collect, "collect"); I(id_plus_ary, "+"); I(id_select, "select"); I(id_events_xy_nt, "events_xy_nt"); I(id_map_id, "map_id");
+    sym_boat = ID2SYM(rb_intern("boat")); sym_ship = ID2SYM(rb_intern("ship"));
+    sym_airship = ID2SYM(rb_intern("airship")); sym_ctrl = ID2SYM(rb_intern("CTRL"));
 #undef I
 
     slotDef(S_GCB_moving, "Game_CharacterBase", "moving?");
@@ -2631,6 +3152,42 @@ void nativeEventsInit(int rgssVersion) {
     slotDef(S_GE_can_update, "Game_Event", "can_update");
     slotDef(S_GV_aref, "Game_Variables", "[]");
     slotDef(S_GSW_aref, "Game_Switches", "[]");
+    slotDef(S_GCB_passable, "Game_CharacterBase", "passable?");
+    slotDef(S_GCB_map_passable, "Game_CharacterBase", "map_passable?");
+    slotDef(S_GCB_debug_through, "Game_CharacterBase", "debug_through?");
+    slotDef(S_GCB_reverse_dir, "Game_CharacterBase", "reverse_dir");
+    slotDef(S_GCB_cw_characters, "Game_CharacterBase", "collide_with_characters?");
+    slotDef(S_GCB_cw_events, "Game_CharacterBase", "collide_with_events?");
+    slotDef(S_GCB_cw_vehicles, "Game_CharacterBase", "collide_with_vehicles?");
+    slotDef(S_GCB_pos, "Game_CharacterBase", "pos?");
+    slotDef(S_GCB_pos_nt, "Game_CharacterBase", "pos_nt?");
+    slotDef(S_GE_cw_characters, "Game_Event", "collide_with_characters?");
+    slotDef(S_GE_cw_player, "Game_Event", "collide_with_player_characters?");
+    slotDef(S_GP_map_passable, "Game_Player", "map_passable?");
+    slotDef(S_GP_debug_through, "Game_Player", "debug_through?");
+    slotDef(S_GP_collide, "Game_Player", "collide?");
+    slotDef(S_GM_passable, "Game_Map", "passable?");
+    slotDef(S_GM_check_passage, "Game_Map", "check_passage");
+    slotDef(S_GM_all_tiles, "Game_Map", "all_tiles");
+    slotDef(S_GM_layered_tiles, "Game_Map", "layered_tiles");
+    slotDef(S_GM_tile_id, "Game_Map", "tile_id");
+    slotDef(S_GM_tile_events_xy, "Game_Map", "tile_events_xy");
+    slotDef(S_GM_tileset, "Game_Map", "tileset");
+    slotDef(S_GM_events_xy_nt, "Game_Map", "events_xy_nt");
+    slotDef(S_GM_valid, "Game_Map", "valid?");
+    slotDef(S_GM_round_x_wd, "Game_Map", "round_x_with_direction");
+    slotDef(S_GM_round_y_wd, "Game_Map", "round_y_with_direction");
+    slotDef(S_GM_boat, "Game_Map", "boat");
+    slotDef(S_GM_ship, "Game_Map", "ship");
+    slotDef(S_MAP_data, "RPG::Map", "data");
+    slotDef(S_TS_flags, "RPG::Tileset", "flags");
+    slotDef(S_TBL_aref, "Table", "[]");
+    slotDef(S_HSH_values, "Hash", "values");
+    slotDef(S_ARY_select, "Array", "select");
+    slotDef(S_ARY_collect, "Array", "collect");
+    slotDef(S_ARY_plus, "Array", "+");
+    slotDef(S_SYM_eqq, "Symbol", "===");
+    slotDef(S_GVH_pos, "Game_Vehicle", "pos?");
     slotDef(S_SW_stop_npc, "Switch.self", "stop_npc_movement");
     id_YEA = rb_intern("YEA"); id_UTILITY = rb_intern("UTILITY");
     id_STOP_NPC = rb_intern("STOP_NPC_MOVEMENT_SWITCH"); id_Switch = rb_intern("Switch");
@@ -2859,6 +3416,7 @@ static VALUE initRuby(VALUE) {
     rb_define_singleton_method(g_module, "set_option", RUBY_METHOD_FUNC(nev_set_option), 2);
     rb_define_singleton_method(g_module, "steady_setup", RUBY_METHOD_FUNC(nev_steady_setup), 2);
     rb_define_singleton_method(g_module, "steady_stats", RUBY_METHOD_FUNC(nev_steady_stats), 0);
+    rb_define_singleton_method(g_module, "event_index", RUBY_METHOD_FUNC(nev_event_index), 1);
     rb_define_singleton_method(g_module, "steady_sprites", RUBY_METHOD_FUNC(nev_steady_sprites), 0);
     rb_gc_register_address(&g_steadyCharClasses);
     rb_gc_register_address(&g_spriteClass);
@@ -2893,7 +3451,9 @@ static VALUE initRuby(VALUE) {
         {S_INT_zero, rb_cInteger}, {S_INT_truncate, rb_cInteger}, {S_FLO_truncate, rb_cFloat},
         {S_INT_between, rb_cInteger}, {S_OBJ_is_a, rb_cObject}, {S_ARY_each, rb_cArray},
         {S_ARY_delete_if, rb_cArray}, {S_ARY_each_with_index, rb_cArray}, {S_ENUM_find, rb_cArray},
-        {S_HSH_aref, rb_cHash}, {S_HSH_aset, rb_cHash}, {S_HSH_each_value, rb_cHash}, {S_ARY_any, rb_cArray}};
+        {S_HSH_aref, rb_cHash}, {S_HSH_aset, rb_cHash}, {S_HSH_each_value, rb_cHash}, {S_ARY_any, rb_cArray},
+        {S_HSH_values, rb_cHash}, {S_ARY_select, rb_cArray}, {S_ARY_collect, rb_cArray}, {S_ARY_plus, rb_cArray},
+        {S_SYM_eqq, rb_cSymbol}};
     for (auto &b : builtins) {
         Slot &s = g_slots[b.id];
         /* The method that class has now (String#!= is BasicObject#!=, which calls ==;
@@ -2910,6 +3470,9 @@ static VALUE initRuby(VALUE) {
     attrSlotFrom(S_MAP_width, rpgClass("RPG::Map"));
     attrSlotFrom(S_MAP_height, rpgClass("RPG::Map"));
     attrSlotFrom(S_EVENT_id, rpgClass("RPG::Event"));
+    attrSlotFrom(S_MAP_data, rpgClass("RPG::Map"));
+    attrSlotFrom(S_TS_flags, rpgClass("RPG::Tileset"));
+    engineSlot(S_TBL_aref, rb_path2class("Table"));
     /* RPG::CommonEvent#autorun? is the engine's `@trigger == 1`: checked, then read directly. */
     {
         Slot &s = g_slots[S_CE_autorun];
