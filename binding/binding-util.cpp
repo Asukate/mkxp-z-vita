@@ -89,6 +89,45 @@ long vitaReleaseGameImageCache()
 }
 #endif
 
+#ifdef __vita__
+/* Ruby's collector cannot see bitmap pixels: a dropped Bitmap is a few bytes of Ruby heap holding
+ * up to megabytes. Games that make bitmaps every frame and never dispose them (Pokemon Uranium's
+ * battlers: two clones and a skewed shadow per Pokemon per frame, ~1.4 MB a frame) then outgrow
+ * memory before Ruby collects. Tell Ruby the bytes, as a C extension does with
+ * rb_gc_adjust_memory_usage: its malloc limit then starts the usual (minor) collections. Done only
+ * at a safe point, never from the allocator itself. */
+extern "C" uint32_t vitaPixelBlockBytes(void); /* SDL shim, lock-free */
+static unsigned long long g_bitmapBytesPending = 0;
+void vitaNoteBitmapBytes(unsigned long long bytes) { g_bitmapBytesPending += bytes; }
+static VALUE vitaReportBitmapBytesBody(VALUE bytes)
+{
+  rb_gc_adjust_memory_usage((ssize_t)NUM2LL(bytes));
+  return Qnil;
+}
+/* A minor collection: dropped bitmaps made every frame are young, so this frees them cheaply. */
+static VALUE vitaMinorCollect(VALUE)
+{
+  static VALUE opts = Qnil;
+  if (NIL_P(opts)) {
+    opts = rb_hash_new();
+    rb_hash_aset(opts, ID2SYM(rb_intern("full_mark")), Qfalse);
+    rb_hash_aset(opts, ID2SYM(rb_intern("immediate_sweep")), Qtrue);
+    rb_gc_register_mark_object(opts);
+  }
+  return rb_funcallv_kw(rb_mGC, rb_intern("start"), 1, &opts, RB_PASS_KEYWORDS);
+}
+static bool vitaReportBitmapBytes()
+{
+  if (g_bitmapBytesPending < 256u * 1024) return true;
+  const unsigned long long bytes = g_bitmapBytesPending;
+  g_bitmapBytesPending = 0;
+  int state = 0;
+  rb_protect(vitaReportBitmapBytesBody, LL2NUM((long long)bytes), &state);
+  if (state) rb_jump_tag(state);
+  return true;
+}
+#endif
+
 #if defined(__vita__) && !defined(MKXPZ_VITA_DIAGNOSTICS)
 #include <vitaGL.h>
 #include <psp2/kernel/processmgr.h>
@@ -126,6 +165,7 @@ void vitaGpuPressureSafePoint(const char *phase)
   static uint64_t lastUs = 0;
   static unsigned int frames = 0;
   if (collecting) return;
+  vitaReportBitmapBytes();
   /* Last resort, used rarely: when a plain collection cannot lift the
    * pools, release the game's image cache too (see above). Also right after
    * a bitmap had to be skipped mid-draw for lack of memory. */
@@ -166,6 +206,45 @@ void vitaGpuPressureSafePoint(const char *phase)
      * one; a scene that simply keeps many live bitmaps must not pay for a
      * full collection every few seconds. */
     static size_t cpuAfterCollect = 0;
+    /* Pixels piling up fast (a game cloning bitmaps every frame): a minor collection every 12 MB
+     * of growth, at most four a second. Ruby's own malloc limit lets 32 MB pile up, more than the
+     * memory left beside a large game. */
+    static size_t cpuAfterMinor = 0;
+    static uint64_t lastMinorUs = 0;
+    if (Bitmap::cpuPixelBytes() < cpuAfterMinor)
+      cpuAfterMinor = Bitmap::cpuPixelBytes();
+    /* The kernel pixel blocks (VITA_BLOCK_BUDGET, 56 MB) filling up: past the budget new pixel
+     * buffers go to the C heap and fragment it until Ruby cannot get a heap page (Uranium battle,
+     * out-of-memory). Collect before that: minor first, a full one if that freed too little. */
+    const uint32_t blockBytes = vitaPixelBlockBytes();
+    const uint64_t nowUs = sceKernelGetProcessTimeWide();
+    if (blockBytes >= 44u * 1024 * 1024 && nowUs - lastMinorUs >= 250000) {
+      static uint64_t lastFullUs = 0;
+      collecting = true;
+      int state = 0;
+      rb_protect(vitaMinorCollect, Qnil, &state);
+      if (!state && vitaPixelBlockBytes() >= 40u * 1024 * 1024 && nowUs - lastFullUs >= 1000000) {
+        rb_protect(vitaPressureCollect, Qnil, &state);
+        lastFullUs = sceKernelGetProcessTimeWide();
+      }
+      collecting = false;
+      cpuAfterMinor = Bitmap::cpuPixelBytes();
+      lastMinorUs = sceKernelGetProcessTimeWide();
+      if (state) rb_set_errinfo(Qnil);
+      return;
+    }
+    if (Bitmap::cpuPixelBytes() >= cpuAfterMinor + 12u * 1024 * 1024 &&
+        nowUs - lastMinorUs >= 250000) {
+      collecting = true;
+      int state = 0;
+      rb_protect(vitaMinorCollect, Qnil, &state);
+      collecting = false;
+      cpuAfterMinor = Bitmap::cpuPixelBytes();
+      lastMinorUs = sceKernelGetProcessTimeWide();
+      /* A collection that could not run must not fail the bitmap being made. */
+      if (state) rb_set_errinfo(Qnil);
+      return;
+    }
     if (Bitmap::cpuPixelsNearBudget() &&
         Bitmap::cpuPixelBytes() >= cpuAfterCollect + 8u * 1024 * 1024 &&
         sceKernelGetProcessTimeWide() - lastUs >= 2000000) {
@@ -234,6 +313,7 @@ void vitaGpuPressureSafePoint(const char *phase)
   static unsigned long long lastBytes = 0, lastUs = 0;
   static unsigned int checkpoints = 0;
   if (collecting) return;
+  vitaReportBitmapBytes();
   if (!configured) {
     FILE *marker = fopen("app0:/gpu-pressure-gc.on", "rb");
     enabled = marker != NULL;

@@ -333,6 +333,14 @@ def repair_and_eval(label, source, binding_ = binding)
 end
 
 # PALETTA: MapNode parent lookup.
+handlers = []
+eval("handlers << proc { |a| return :early if a; :late }", TOPLEVEL_BINDING)
+check('return in a top-level proc', :early, handlers[0].call(true))
+check('proc without return', :late, handlers[0].call(false))
+check('return through Proc#[]', :early, handlers[0][true])
+check('break is not swallowed', LocalJumpError, (begin; proc { break }.call; rescue LocalJumpError => e; e.class; end))
+def hardrpg_proc_in_method = [1, 2].each { |v| return v * 10 }
+check('return in a block inside a live method', 10, hardrpg_proc_in_method)
 check('Hash#index', 6, {4 => :a, 6 => :b}.index(:b))
 check('Hash#index missing', nil, {4 => :a}.index(:c))
 
@@ -425,6 +433,12 @@ check('spaced call after syntax repair', [true, 100], fits)
 scripts = [[1, 'A', '', "v = foo (a).b\n"], [2, 'B', '', "v = foo(a).b\n"]]
 HardRPGSpacedCall.apply(scripts)
 check('spaced call applied', ["v = foo(a).b\n", "v = foo(a).b\n"], scripts.map { |x| x[3] })
+
+# RGSS1 sections need not be valid UTF-8: Pokemon Uranium has Latin-1 text,
+# and the regexp checks raised ArgumentError at boot.
+latin = "# caf\xE9\nv = foo (a).b\n".dup.force_encoding(Encoding::UTF_8)
+check('spaced call on invalid UTF-8', "# caf\xE9\nv = foo(a).b\n".b, HardRPGSpacedCall.rewrite(latin)&.b)
+check('errinfo on invalid UTF-8', nil, HardRPGLegacyErrinfo.rewrite("# caf\xE9 $!\n".dup.force_encoding(Encoding::UTF_8)))
 
 # A section that fails for another reason gets no rewrite.
 check('unrelated error', nil, HardRPGLegacySyntax.repair("x = (\n", "{0001}:1: syntax error, unexpected end-of-input"))

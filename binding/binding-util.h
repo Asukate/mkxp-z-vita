@@ -32,6 +32,15 @@
 #include "exception.h"
 #include <new>
 
+/* rb_iv_get/rb_iv_set look the name up as a string on every call, and the engine's getters
+ * (Sprite#viewport, #src_rect, #tone, #bitmap...) run thousands of times a frame. For a literal
+ * name, look it up once per call site. Same results: a name never set reads nil either way. */
+#if defined(__GNUC__) && !defined(MKXPZ_LEGACY_RUBY)
+#define HRPG_IV_ID(n) __extension__({ static ID hrpg_iv_id_ = 0; if (!hrpg_iv_id_) hrpg_iv_id_ = rb_intern(n); hrpg_iv_id_; })
+#define rb_iv_get(o, n) (__builtin_constant_p(n) ? rb_ivar_get((o), HRPG_IV_ID(n)) : (rb_iv_get)((o), (n)))
+#define rb_iv_set(o, n, v) (__builtin_constant_p(n) ? rb_ivar_set((o), HRPG_IV_ID(n), (v)) : (rb_iv_set)((o), (n), (v)))
+#endif
+
 /* A C++ allocation that failed inside the engine. Worded like the graphics
  * and image errors (": out of memory "), so the Bitmap retry paths reclaim
  * and try again, and anything else reaches Ruby and the error report: an

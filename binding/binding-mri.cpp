@@ -208,6 +208,7 @@ void CUSLBindingInit();
 
 void httpBindingInit();
 void nativeEventsInit(int rgssVersion);
+void essentialsNativesInit(int rgssVersion);
 void hardrpgProfInit();
 void spriteScriptsInit();
 void nativeEventsSectionLoaded(VALUE fname, VALUE source);
@@ -332,6 +333,7 @@ static void mriBindingInit() {
         assert(!"unreachable");
 
     nativeEventsInit(rgssVer);
+    essentialsNativesInit(rgssVer);
     hardrpgProfInit();
     spriteScriptsInit();
 
@@ -2019,6 +2021,54 @@ static bool repairLegacySyntax(VALUE &string) {
 }
 
 
+static VALUE legacyRegexpPrepareHelper(VALUE string) {
+    VALUE converter = rb_const_get(rb_cObject, rb_intern("HardRPGLegacyRegexp"));
+    return rb_funcall(converter, rb_intern("prepare"), 1, string);
+}
+
+/* RGSS1 and RGSS2 shipped Ruby 1.8, whose regexps matched bytes: a game may spell UTF-8
+ * characters as byte escapes, which Ruby 3.1 either rejects or matches
+ * against nothing but raw bytes. Before a section runs, the preloaded
+ * launcher/legacy_ruby_compat.rb rewrites such regexps as the characters they
+ * spell. Sections without byte escapes are returned untouched. */
+static void prepareLegacyRegexps(VALUE &string, VALUE script) {
+    if (rgssVer > 2 || !rb_const_defined(rb_cObject, rb_intern("HardRPGLegacyRegexp")))
+        return;
+    int state = 0;
+    VALUE prepared = rb_protect(legacyRegexpPrepareHelper, string, &state);
+    if (state) {
+        rb_set_errinfo(Qnil);
+        return;
+    }
+    if (!RB_TYPE_P(prepared, RUBY_T_STRING))
+        return;
+    string = prepared;
+    rb_ary_store(script, 3, string);
+}
+
+static VALUE beforeMainHelper(VALUE) {
+    VALUE hooks = rb_const_get(rb_cObject, rb_intern("HardRPGCompat"));
+    return rb_funcall(hooks, rb_intern("run"), 0);
+}
+
+/* Compatibility fixes that replace game methods have to run after the game
+ * defines them and before its game loop starts, which is not always Main:
+ * Pokemon Essentials v16/v17 opens its language menu from the PSystem_System
+ * section. So the hooks run after every section; each checks for what it
+ * fixes and does nothing otherwise (launcher/rgss_extensions.rb). */
+static void runCompatHooks() {
+    if (!rb_const_defined(rb_cObject, rb_intern("HardRPGCompat"))) {
+        return;
+    }
+    int state = 0;
+    rb_protect(beforeMainHelper, Qnil, &state);
+    if (state) {
+        VALUE message = rb_funcall(rb_errinfo(), rb_intern("inspect"), 0);
+        fprintf(stderr, "Compatibility hooks failed: %s\n", StringValueCStr(message));
+        rb_set_errinfo(Qnil);
+    }
+}
+
 static void runRMXPScripts(BacktraceData &btData) {
     const Config &conf = shState->rtData().config;
     const std::string &scriptPack = conf.game.scripts;
@@ -2225,6 +2275,8 @@ static void runRMXPScripts(BacktraceData &btData) {
              */
             
             int state;
+
+            prepareLegacyRegexps(string, script);
             
 #ifdef __vita__
             if (!ScriptCache::eval(string, fname, i + 1 == scriptCount, state)) {
@@ -2246,6 +2298,8 @@ static void runRMXPScripts(BacktraceData &btData) {
                 if (!state)
                     rb_ary_store(script, 3, string);
             }
+            if (!state)
+                runCompatHooks();
             if (state)
                 break;
         }

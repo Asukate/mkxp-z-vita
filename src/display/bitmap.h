@@ -59,6 +59,8 @@ public:
 	DECL_ATTR(Hires, Bitmap*)
 	void setLores(Bitmap *lores);
 	bool isMega() const;
+	/* Changes on every write to the pixels (cache keys for game patches). */
+	uint32_t contentVersion() const;
     bool isAnimated() const;
 
 	IntRect rect() const;

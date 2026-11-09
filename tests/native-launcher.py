@@ -1061,6 +1061,15 @@ class NativeLauncher(unittest.TestCase):
         self.assertIn('cancelled', self.cmd('add-search', collection, cancel='yes')['error'])
         self.assertEqual(self.cmd('search-folders'), [])
 
+    def test_wrapped_zip_plays_its_game(self):
+        # One game inside a wrapper folder ("Game 1.3/Game.ini") plays from
+        # the details page, without opening the ZIP as a one-game collection.
+        self.zip(self.games/'wrapped.zip')
+        state = self.ui(PLAY)
+        self.assertTrue(state['launchRequested'])
+        self.assertEqual(state['launchFormat'], 3)
+        self.assertEqual(state['launchingName'], 'wrapped.zip')
+
     def test_zip_cache_and_save_identity_match_ruby(self):
         zip_path = self.zip(self.games/'wrapped.zip')
         self.assertEqual(self.cmd('list')[0]['kind'], 'zip')

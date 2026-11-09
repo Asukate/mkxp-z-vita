@@ -177,6 +177,7 @@ if host_system == 'vita'
     main_source += files('vita_video_decoder.cpp')
     main_source += files('vita_stubs.cpp', 'vita_posix_compat.c', 'vita_pthread_once.c', 'vita_livearea.cpp', 'input/vita_input.cpp', 'vita_error_report.cpp', 'vita_resume.cpp', 'vita_runtime_log.c', 'vita_file_writes.c', 'asset_prefetch.cpp')
     global_link_args += '-Wl,--wrap=_write_r'
+    global_link_args += ['-Wl,--wrap=malloc', '-Wl,--wrap=calloc', '-Wl,--wrap=realloc', '-Wl,--wrap=memalign', '-Wl,--wrap=free']
     global_link_args += '-Wl,--wrap=select'
     # File writes, counted so cached folder listings know when to refresh.
     global_link_args += ['-Wl,--wrap=_open_r', '-Wl,--wrap=_rename_r', '-Wl,--wrap=_mkdir_r']

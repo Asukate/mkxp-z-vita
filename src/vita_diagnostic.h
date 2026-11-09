@@ -38,6 +38,8 @@ unsigned long long vitaDiagTextureUploadBytes();
 void vitaDiagGpuSnapshot(const char *phase);
 /* Ruby VM/GVL held, before acquiring the graphics lock or native pointers. */
 void vitaGpuPressureSafePoint(const char *phase);
+/* Pixel bytes of a bitmap just made; told to Ruby's GC at the next safe point. */
+void vitaNoteBitmapBytes(unsigned long long bytes);
 
 #else
 
@@ -61,8 +63,11 @@ static inline void vitaDiagGpuSnapshot(const char *) {}
 #ifdef __vita__
 /* Ruby VM/GVL held, before acquiring the graphics lock or native pointers. */
 void vitaGpuPressureSafePoint(const char *phase);
+/* Pixel bytes of a bitmap just made; told to Ruby's GC at the next safe point. */
+void vitaNoteBitmapBytes(unsigned long long bytes);
 #else
 static inline void vitaGpuPressureSafePoint(const char *) {}
+static inline void vitaNoteBitmapBytes(unsigned long long) {}
 #endif
 
 #endif

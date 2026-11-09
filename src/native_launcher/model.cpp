@@ -1096,7 +1096,9 @@ bool Model::enter(const Entry &e, Entry &selected) {
     selected = e;
     return true;
   }
-  if (e.kind == Kind::Zip && game(e.node, selected))
+  // A ZIP that holds one game, directly or inside wrapper folders
+  // ("Game 1.3/Game.ini"), plays it instead of opening as a collection.
+  if (e.kind == Kind::Zip && configurableGame(e, selected))
     return true;
   stack.push_back(e.node);
   refresh();

@@ -58,6 +58,7 @@
 #include <psp2/kernel/sysmem.h>
 #include <psp2/gxm.h>
 #include <malloc.h>
+#include <psp2/kernel/threadmgr.h>
 #define VITA_BLOCK_MIN (128u * 1024u)
 #define VITA_BLOCK_BUDGET (56u * 1024u * 1024u)
 #define VITA_BLOCK_SLOTS 1024
@@ -75,7 +76,20 @@ static uint32_t vita_texture_count;
 static unsigned vita_texture_slots[VITA_BLOCK_SLOTS];
 static const void *vita_transfer_candidate; /* GL thread, scoped to one upload */
 static volatile int vita_block_lock;
-static void vita_blocks_enter(void) { while (__sync_lock_test_and_set(&vita_block_lock, 1)) {} }
+/* Spins briefly, then sleeps: the Vita does not time-slice between priorities, so a pure spin
+ * by a higher-priority thread (the game) never lets a lower one holding the lock (an image
+ * loader, inside sceKernelAllocMemBlock) finish, and the game froze. */
+static void vita_blocks_enter(void) {
+    int spins = 0;
+    while (__sync_lock_test_and_set(&vita_block_lock, 1)) {
+        if (++spins >= 64) {
+            sceKernelDelayThread(50);
+            spins = 0;
+        }
+    }
+}
+/* Bytes in kernel pixel blocks, read without the lock (a hint for collections). */
+uint32_t vitaPixelBlockBytes(void) { return *(volatile uint32_t *)&vita_block_bytes; }
 static void vita_blocks_leave(void) { __sync_lock_release(&vita_block_lock); }
 static int vita_block_register(void *ptr, int uid, uint32_t size) {
     int i;

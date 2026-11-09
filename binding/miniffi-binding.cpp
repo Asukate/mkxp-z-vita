@@ -24,6 +24,15 @@
 #include <string>
 #endif
 
+#if defined(__vita__) || defined(__psp2__)
+#include <psp2/power.h>
+/* The Vita's own MiniFFI: no library can load, so each object only records which
+ * Windows function it stands for, decided once in initialize (vitaFFIInitialize). */
+static VALUE vitaFFIInitialize(int argc, VALUE *argv, VALUE self);
+static VALUE vitaFFICall(int argc, VALUE *argv, VALUE self);
+static VALUE vitaFFIAllocate(VALUE klass);
+#endif
+
 #if RAPI_MAJOR >= 2
 #include <ruby/thread.h>
 #endif
@@ -63,6 +72,9 @@ static void *MiniFFI_GetFunctionHandle(void *libhandle, const char *func) {
 // Yields itself in blocks
 
 RB_METHOD_GUARD(MiniFFI_initialize) {
+#if defined(__vita__) || defined(__psp2__)
+    return vitaFFIInitialize(argc, argv, self);
+#endif
     VALUE libname, func, imports, exports;
     rb_scan_args(argc, argv, "22", &libname, &func, &imports, &exports);
     SafeStringValue(libname);
@@ -485,7 +497,7 @@ static VALUE vitaIdToRef(VALUE id) {
 
 /* RPGXPVideoDecoder.dll (see vita_video_decoder.h). The DLL is handed the
  * target Bitmap as `bitmap.object_id << 1`, Ruby 1.8's object address. */
-static bool vitaVideoDecoderCall(VALUE function, VALUE args, VALUE *result) {
+static bool vitaVideoDecoderCall(const char *name, VALUE args, VALUE *result) {
     using namespace VitaVideoDecoder;
     /* Keeps the target Bitmap alive while a video draws into it. */
     static VALUE heldBitmap = Qnil;
@@ -495,7 +507,6 @@ static bool vitaVideoDecoderCall(VALUE function, VALUE args, VALUE *result) {
         registered = true;
     }
 
-    const char *name = StringValueCStr(function);
     const long argc = RARRAY_LEN(args);
     int code;
     if (std::strcmp(name, "ViDecCreateContext") == 0 && argc == 3) {
@@ -544,8 +555,8 @@ static bool vitaVideoDecoderCall(VALUE function, VALUE args, VALUE *result) {
  * and saves belong. Supply an actual writable application-data directory,
  * rather than the generic DLL no-op (which leaves ENV['AV_APPDATA'] nil).
  * The game's own subdirectory keeps its data separate from other games. */
-static bool vitaUtilsCall(VALUE function, VALUE args, VALUE *result) {
-    if (std::strcmp(StringValueCStr(function), "AVSetEnv") != 0 || RARRAY_LEN(args) != 0)
+static bool vitaUtilsCall(const char *name, VALUE args, VALUE *result) {
+    if (std::strcmp(name, "AVSetEnv") != 0 || RARRAY_LEN(args) != 0)
         return false;
     const char *failed = "AVSetEnv";
     if (!hardrpg::prepareWindowsAppData(&failed))
@@ -559,8 +570,7 @@ static bool vitaUtilsCall(VALUE function, VALUE args, VALUE *result) {
  * SteamAPI_Init reports 1. Report the API as started and make the rest
  * no-ops, as the Linux builds of those games run without Steam; achievements
  * stay off because their helper DLLs keep answering 0 (no Steam data). */
-static bool vitaSteamApiCall(VALUE function, VALUE *result) {
-    const char *name = StringValueCStr(function);
+static bool vitaSteamApiCall(const char *name, VALUE *result) {
     if (!std::strcmp(name, "SteamAPI_Init") || !std::strcmp(name, "SteamAPI_InitSafe")) {
         static bool logged = false;
         if (!logged) {
@@ -580,9 +590,49 @@ static bool vitaSteamApiCall(VALUE function, VALUE *result) {
 }
 
 /* kernel32 text conversion (see util/win32-text.h). */
-static bool vitaKernel32Call(VALUE function, VALUE args, VALUE *result) {
-    const char *name = StringValueCStr(function);
+/* kernel32 GetSystemPowerStatus, filled from the Vita battery. Pokemon Essentials asks once a
+ * minute on the map and says "the battery is low, you should save soon" when the Low or Critical
+ * flag is set, under 3 %, or under 5 minutes left. Windows sets Low under 33 %, which would
+ * repeat the Vita's own early warning; here Low means 5 % or less, a last call to save.
+ * On the charger: no low flags and an unknown time left, as Windows reports it. */
+static const int kVitaBatteryLowPercent = 5;
+static bool vitaPowerStatus(VALUE buffer, VALUE *result) {
+    const int percent = scePowerGetBatteryLifePercent();
+    if (percent < 0 || percent > 100) {
+        *result = INT2NUM(0);
+        return true;
+    }
+    const bool online = scePowerIsPowerOnline() > 0;
+    const bool charging = scePowerIsBatteryCharging() > 0;
+    const int minutes = scePowerGetBatteryLifeTime();
+    uint8_t flag = 0;
+    if (charging)
+        flag |= 8;
+    else if (!online && percent <= kVitaBatteryLowPercent)
+        flag |= percent <= 2 ? 4 : 2;
+    const uint32_t lifeTime = (online || minutes < 0) ? 0xFFFFFFFFu : (uint32_t)minutes * 60u;
+    uint8_t s[12];
+    s[0] = online ? 1 : 0;   /* ACLineStatus */
+    s[1] = flag;             /* BatteryFlag */
+    s[2] = (uint8_t)percent; /* BatteryLifePercent */
+    s[3] = 0;                /* SystemStatusFlag */
+    memcpy(s + 4, &lifeTime, 4);  /* BatteryLifeTime, seconds */
+    const uint32_t full = 0xFFFFFFFFu;
+    memcpy(s + 8, &full, 4);      /* BatteryFullLifeTime: unknown */
+    if (!RB_TYPE_P(buffer, T_STRING) || RSTRING_LEN(buffer) < 12) {
+        *result = INT2NUM(0);
+        return true;
+    }
+    rb_str_modify(buffer);
+    memcpy(RSTRING_PTR(buffer), s, 12);
+    *result = INT2NUM(1);
+    return true;
+}
+
+static bool vitaKernel32Call(const char *name, VALUE args, VALUE *result) {
     using namespace hardrpg::win32text;
+    if (std::strcmp(name, "GetSystemPowerStatus") == 0 && RARRAY_LEN(args) == 1)
+        return vitaPowerStatus(rb_ary_entry(args, 0), result);
     if (std::strcmp(name, "MultiByteToWideChar") == 0 && RARRAY_LEN(args) == 6) {
         VALUE src = rb_ary_entry(args, 2), dst = rb_ary_entry(args, 4);
         if (!RB_TYPE_P(src, RUBY_T_STRING)) { *result = INT2NUM(0); return true; }
@@ -623,8 +673,7 @@ static bool vitaKernel32Call(VALUE function, VALUE args, VALUE *result) {
     return false;
 }
 
-static bool vitaUser32Call(VALUE function, VALUE args, VALUE *result) {
-    const char *name = StringValueCStr(function);
+static bool vitaUser32Call(const char *name, VALUE args, VALUE *result) {
     if ((std::strcmp(name, "MessageBoxA") == 0 || std::strcmp(name, "MessageBoxW") == 0) &&
         RARRAY_LEN(args) == 4) {
         using namespace hardrpg::win32text;
@@ -685,35 +734,283 @@ static bool vitaUser32Call(VALUE function, VALUE args, VALUE *result) {
     return false;
 }
 
+/* What a Vita MiniFFI object stands for. Win32API.new runs often (Pokemon Essentials makes
+ * new objects on every key and window check), so it does the work once: the library and
+ * function are classified here, and call only switches on the result. */
+enum VitaFFILib { VL_OTHER, VL_USER32, VL_KERNEL32, VL_UTILS, VL_STEAM, VL_VIDEO };
+enum VitaFFIFn {
+    VF_GENERIC = 0,    /* the library's dispatcher below, then a typed zero */
+    VF_KEY_STATE = 1,  /* user32 GetAsyncKeyState / GetKeyState (native-events.cpp reads 1 and 2) */
+    VF_KEYBOARD = 2,   /* user32 GetKeyboardState */
+    VF_RUBY,           /* a handler from launcher/rgss_extensions.rb (HardRPGWin32::HANDLERS) */
+    VF_WINDOW,         /* FindWindow, GetForegroundWindow, GetActiveWindow, GetFocus */
+    VF_WINDOW_AFTER,   /* FindWindowEx: the window when no "after" window is given */
+    VF_THREAD,         /* kernel32 GetCurrentThreadId / GetCurrentProcessId */
+    VF_WINDOW_THREAD,  /* user32 GetWindowThreadProcessId */
+    VF_CLIENT_RECT,    /* user32 GetClientRect / GetWindowRect */
+    VF_METRICS,        /* user32 GetSystemMetrics */
+};
+/* Same values as HardRPGWindow in launcher/rgss_extensions.rb (its Ruby reference). */
+static const long kVitaHwnd = 0x00010010;
+static const long kVitaThread = 1;
+
+struct VitaFFI {
+    bool ready;
+    uint8_t lib, fn, exports, nimport;
+    VALUE handler;
+    char library[48];
+    char function[64];
+};
+
+static void vitaFFIMark(void *p) {
+    if (p) rb_gc_mark(static_cast<VitaFFI *>(p)->handler);
+}
+static void vitaFFIFree(void *p) { xfree(p); }
+static size_t vitaFFISize(const void *) { return sizeof(VitaFFI); }
+static const rb_data_type_t VitaFFIType = {
+    "MiniFFI", {vitaFFIMark, vitaFFIFree, vitaFFISize, 0, {0}}, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY};
+
+static VALUE vitaFFIAllocate(VALUE klass) {
+    VitaFFI *f;
+    VALUE obj = TypedData_Make_Struct(klass, VitaFFI, &VitaFFIType, f);
+    f->handler = Qnil;
+    return obj;
+}
+
+static VitaFFI *vitaFFIGet(VALUE obj) {
+    if (RB_SPECIAL_CONST_P(obj) || !RB_TYPE_P(obj, T_DATA) || !RTYPEDDATA_P(obj) ||
+        RTYPEDDATA_TYPE(obj) != &VitaFFIType)
+        return nullptr;
+    return static_cast<VitaFFI *>(RTYPEDDATA_DATA(obj));
+}
+
+static int vitaFFIType(VALUE spec) {
+    switch (RSTRING_LEN(spec) ? *RSTRING_PTR(spec) : 'v') {
+        case 'N': case 'n': case 'L': case 'l': return _T_NUMBER;
+        case 'P': case 'p': return _T_POINTER;
+        case 'I': case 'i': return _T_INTEGER;
+        case 'B': case 'b': return _T_BOOL;
+        default: return _T_VOID;
+    }
+}
+
+/* Number of parameters an import spec names ("ip", ["i", "p"], %w(l p) as a string, nil). */
+static int vitaFFICountImports(VALUE imports) {
+    int n = 0;
+    auto counts = [](char c) {
+        return strchr("NnLlPpIiBb", c) != nullptr && c != '\0';
+    };
+    if (NIL_P(imports))
+        return 0;
+    if (RB_TYPE_P(imports, T_ARRAY)) {
+        for (long i = 0; i < RARRAY_LEN(imports); i++) {
+            VALUE e = RARRAY_AREF(imports, i);
+            SafeStringValue(e);
+            if (RSTRING_LEN(e) && counts(*RSTRING_PTR(e)))
+                ++n;
+        }
+        return n;
+    }
+    SafeStringValue(imports);
+    const char *c = RSTRING_PTR(imports);
+    for (long i = 0; i < RSTRING_LEN(imports); i++)
+        if (counts(c[i]))
+            ++n;
+    return n;
+}
+
+static VALUE vitaFFIInitialize(int argc, VALUE *argv, VALUE self) {
+    VALUE libname, func, imports, exports;
+    rb_scan_args(argc, argv, "22", &libname, &func, &imports, &exports);
+    SafeStringValue(libname);
+    SafeStringValue(func);
+    VitaFFI *f = vitaFFIGet(self);
+    if (!f)
+        rb_raise(rb_eTypeError, "not a MiniFFI object");
+    const int n = vitaFFICountImports(imports);
+    if (!NIL_P(exports))
+        SafeStringValue(exports);
+
+    std::string library(RSTRING_PTR(libname), RSTRING_LEN(libname));
+    auto slash = library.find_last_of("/\\");
+    if (slash != std::string::npos) library.erase(0, slash + 1);
+    for (char &c : library)
+        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+    std::string base = library;
+    if (base.size() > 4 && base.compare(base.size() - 4, 4, ".dll") == 0)
+        base.erase(base.size() - 4);
+    std::string name(RSTRING_PTR(func), strnlen(RSTRING_PTR(func), RSTRING_LEN(func)));
+
+    if (MINIFFI_MAX_ARGS < n)
+        throw Exception(Exception::RuntimeError, "too many parameters: %ld/%ld\n",
+                 (long)n, (long)MINIFFI_MAX_ARGS);
+
+    f->lib = base == "user32" ? VL_USER32 : base == "kernel32" ? VL_KERNEL32 :
+             base == "utils" ? VL_UTILS :
+             (base == "steam_api" || base == "steam_api64") ? VL_STEAM :
+             base == "rpgxpvideodecoder" ? VL_VIDEO : VL_OTHER;
+    f->nimport = (uint8_t)n;
+    f->exports = NIL_P(exports) ? _T_VOID : vitaFFIType(exports);
+    snprintf(f->library, sizeof f->library, "%s", RSTRING_PTR(libname));
+    snprintf(f->function, sizeof f->function, "%s", name.c_str());
+    f->handler = Qnil;
+    f->fn = VF_GENERIC;
+
+    /* The window and thread answers Essentials asks for on every key check are made
+     * here; for anything else a Ruby handler wins, as the Ruby layer it replaces did. */
+    const char *s = name.c_str();
+    if (f->lib == VL_USER32) {
+        if (!strcmp(s, "FindWindow") || !strcmp(s, "FindWindowA") || !strcmp(s, "FindWindowW") ||
+            !strcmp(s, "GetForegroundWindow") || !strcmp(s, "GetActiveWindow") || !strcmp(s, "GetFocus"))
+            f->fn = VF_WINDOW;
+        else if (!strcmp(s, "FindWindowEx") || !strcmp(s, "FindWindowExA") || !strcmp(s, "FindWindowExW"))
+            f->fn = VF_WINDOW_AFTER;
+        else if (!strcmp(s, "GetWindowThreadProcessId"))
+            f->fn = VF_WINDOW_THREAD;
+        else if (!strcmp(s, "GetClientRect") || !strcmp(s, "GetWindowRect"))
+            f->fn = VF_CLIENT_RECT;
+        else if (!strcmp(s, "GetSystemMetrics"))
+            f->fn = VF_METRICS;
+    } else if (f->lib == VL_KERNEL32) {
+        if (!strcmp(s, "GetCurrentThreadId") || !strcmp(s, "GetCurrentProcessId"))
+            f->fn = VF_THREAD;
+    }
+    static ID idWin32 = rb_intern("HardRPGWin32"), idHandlers = rb_intern("HANDLERS");
+    if (f->fn == VF_GENERIC && rb_const_defined(rb_cObject, idWin32)) {
+        VALUE mod = rb_const_get(rb_cObject, idWin32);
+        if (rb_const_defined(mod, idHandlers)) {
+            VALUE table = rb_const_get(mod, idHandlers);
+            if (RB_TYPE_P(table, T_HASH)) {
+                std::string key = base + "!" + name;
+                for (char &c : key)
+                    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+                VALUE h = rb_hash_lookup2(table, rb_str_new(key.data(), key.size()), Qnil);
+                if (!NIL_P(h)) {
+                    f->handler = h;
+                    f->fn = VF_RUBY;
+                }
+            }
+        }
+    }
+    if (f->fn == VF_GENERIC && f->lib == VL_USER32) {
+        if (!strcmp(s, "GetAsyncKeyState") || !strcmp(s, "GetKeyState"))
+            f->fn = n == 1 ? VF_KEY_STATE : VF_GENERIC;
+        else if (!strcmp(s, "GetKeyboardState"))
+            f->fn = n == 1 ? VF_KEYBOARD : VF_GENERIC;
+    }
+    f->ready = true;
+    if (rb_block_given_p())
+        rb_yield(self);
+    return Qnil;
+}
+
+/* Writes packed bytes into a buffer the game passed as a String; 1 when they fit. */
+static int vitaFFIWrite(VALUE buffer, const void *bytes, long size) {
+    if (!RB_TYPE_P(buffer, T_STRING) || RSTRING_LEN(buffer) < size)
+        return 0;
+    rb_str_modify(buffer);
+    memcpy(RSTRING_PTR(buffer), bytes, size);
+    return 1;
+}
+
+static long vitaFFIToI(VALUE v) {
+    if (RB_INTEGER_TYPE_P(v)) return NUM2LONG(v);
+    if (NIL_P(v)) return 0;
+    return NUM2LONG(rb_funcall(v, rb_intern("to_i"), 0));
+}
+
+static VALUE vitaFFICall(int argc, VALUE *argv, VALUE self) {
+    VitaFFI *f = vitaFFIGet(self);
+    if (!f || !f->ready)
+        throw Exception(Exception::RuntimeError, "MiniFFI function was not initialized");
+    switch (f->fn) {
+        case VF_KEY_STATE:
+            if (argc == 1)
+                return INT2NUM(vitaVKPressed(NUM2UINT(argv[0])) ? 0x8000 : 0);
+            break;
+        case VF_RUBY: {
+            /* call(*args), or call([args]) as one array, like Win32API */
+            VALUE args = argc == 1 && RB_TYPE_P(argv[0], T_ARRAY) ? argv[0] : rb_ary_new_from_values(argc, argv);
+            return rb_funcallv(f->handler, rb_intern("call"), (int)RARRAY_LEN(args), RARRAY_CONST_PTR(args));
+        }
+        case VF_WINDOW:
+            return LONG2NUM(kVitaHwnd);
+        case VF_WINDOW_AFTER:
+            return LONG2NUM(argc >= 2 && vitaFFIToI(argv[1]) != 0 ? 0 : kVitaHwnd);
+        case VF_THREAD:
+            return LONG2NUM(kVitaThread);
+        case VF_WINDOW_THREAD:
+            if (argc < 1 || vitaFFIToI(argv[0]) != kVitaHwnd)
+                return INT2FIX(0);
+            if (argc >= 2) {
+                int32_t thread = (int32_t)kVitaThread;
+                vitaFFIWrite(argv[1], &thread, 4);
+            }
+            return LONG2NUM(kVitaThread);
+        case VF_CLIENT_RECT: {
+            if (argc < 2 || vitaFFIToI(argv[0]) != kVitaHwnd)
+                return INT2FIX(0);
+            int32_t rect[4] = {0, 0, 640, 480};
+            if (shState) {
+                rect[2] = shState->graphics().width();
+                rect[3] = shState->graphics().height();
+            }
+            return INT2FIX(vitaFFIWrite(argv[1], rect, sizeof rect));
+        }
+        case VF_METRICS: {
+            long index = argc >= 1 ? vitaFFIToI(argv[0]) : -1;
+            return INT2FIX(index == 0 || index == 16 ? 960 : index == 1 || index == 17 ? 544 : 0);
+        }
+        default:
+            break;
+    }
+    if (argc != f->nimport)
+        throw Exception(Exception::RuntimeError,
+                 "wrong number of parameters: expected %d, got %d", (int)f->nimport, argc);
+    VALUE args = rb_ary_new_from_values(argc, argv);
+    VALUE handled;
+    switch (f->lib) {
+        case VL_USER32:
+            if (vitaUser32Call(f->function, args, &handled)) return handled;
+            break;
+        case VL_KERNEL32:
+            if (vitaKernel32Call(f->function, args, &handled)) return handled;
+            break;
+        case VL_UTILS:
+            if (vitaUtilsCall(f->function, args, &handled)) return handled;
+            break;
+        case VL_STEAM:
+            if (vitaSteamApiCall(f->function, &handled)) return handled;
+            break;
+        case VL_VIDEO:
+            if (vitaVideoDecoderCall(f->function, args, &handled)) return handled;
+            break;
+        default:
+            break;
+    }
+    /* No library can load here: warn once and return a typed zero. */
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        Debug() << "MiniFFI: Vita has no loadable libraries; ignoring call "
+                << f->library << "!" << f->function;
+    }
+    switch (f->exports) {
+        case _T_POINTER: return rb_str_new_cstr("");
+        case _T_BOOL: return Qfalse;
+        default: return MVAL2RB(0);
+    }
+}
+
 /* For the native script paths (native-events.cpp): what a MiniFFI object calls on the Vita
  * (1: user32 GetAsyncKeyState/GetKeyState with one argument, 2: user32 GetKeyboardState with
  * one argument, 0: anything else), the key state those calls read, and a DL::CPtr's buffer. */
 static VALUE g_miniFFIClass = Qnil;
 int hardrpgMiniFFIKeyKind(VALUE obj) {
-    if (NIL_P(g_miniFFIClass) || !rb_obj_is_kind_of(obj, g_miniFFIClass) || !RTEST(rb_iv_get(obj, "_dummy")))
+    VitaFFI *f = vitaFFIGet(obj);
+    if (!f || !f->ready)
         return 0;
-    VALUE imports = rb_iv_get(obj, "_imports");
-    VALUE libv = rb_iv_get(obj, "_libname");
-    VALUE funcv = rb_iv_get(obj, "_funcname");
-    if (!RB_TYPE_P(imports, T_ARRAY) || RARRAY_LEN(imports) != 1 || !RB_TYPE_P(libv, T_STRING) ||
-        !RB_TYPE_P(funcv, T_STRING))
-        return 0;
-    std::string library(RSTRING_PTR(libv), RSTRING_LEN(libv));
-    auto slash = library.find_last_of("/\\");
-    if (slash != std::string::npos) library.erase(0, slash + 1);
-    for (char &character : library)
-        if (character >= 'A' && character <= 'Z')
-            character += 'a' - 'A';
-    if (library != "user32.dll" && library != "user32")
-        return 0;
-    std::string name(RSTRING_PTR(funcv), RSTRING_LEN(funcv));
-    if (name.size() != strlen(name.c_str()))
-        return 0;
-    if (name == "GetAsyncKeyState" || name == "GetKeyState")
-        return 1;
-    if (name == "GetKeyboardState")
-        return 2;
-    return 0;
+    return f->fn == VF_KEY_STATE ? 1 : f->fn == VF_KEYBOARD ? 2 : 0;
 }
 bool hardrpgVitaKeyPressed(unsigned int key) { return vitaVKPressed(key); }
 unsigned char *hardrpgDLData(VALUE obj, size_t *size) {
@@ -740,19 +1037,7 @@ static void vitaDLBindingInit() {
 
 RB_METHOD_GUARD(MiniFFI_call) {
 #if defined(__vita__) || defined(__psp2__)
-    /* Key polling (GetAsyncKeyState/GetKeyState) is called in tight loops: some input
-     * scripts poll all 255 keys every frame. Answer it without the generic dummy path
-     * (ivar reads, a library-name copy and string compares cost ~20 us per call). */
-    {
-        static ID kindId = rb_intern("@_vkind");
-        VALUE kind = rb_attr_get(self, kindId);
-        if (NIL_P(kind)) {
-            kind = INT2FIX(hardrpgMiniFFIKeyKind(self));
-            rb_ivar_set(self, kindId, kind);
-        }
-        if (kind == INT2FIX(1) && argc == 1)
-            return INT2NUM(vitaVKPressed(NUM2UINT(argv[0])) ? 0x8000 : 0);
-    }
+    return vitaFFICall(argc, argv, self);
 #endif
     MiniFFIFuncArgs param;
 #define params param.params
@@ -770,69 +1055,6 @@ RB_METHOD_GUARD(MiniFFI_call) {
     if (items != nimport)
         throw Exception(Exception::RuntimeError,
                  "wrong number of parameters: expected %d, got %d", nimport, items);
-
-    if (RTEST(rb_iv_get(self, "_dummy")))
-    {
-#if defined(__vita__) || defined(__psp2__)
-        VALUE libv = rb_iv_get(self, "_libname");
-        std::string library = StringValueCStr(libv);
-        auto slash = library.find_last_of("/\\");
-        if (slash != std::string::npos) library.erase(0, slash + 1);
-        for (char &character : library)
-            if (character >= 'A' && character <= 'Z')
-                character += 'a' - 'A';
-        if (library == "user32.dll" || library == "user32") {
-            VALUE handled;
-            if (vitaUser32Call(rb_iv_get(self, "_funcname"), args, &handled))
-                return handled;
-        }
-        if (library == "kernel32.dll" || library == "kernel32") {
-            VALUE handled;
-            if (vitaKernel32Call(rb_iv_get(self, "_funcname"), args, &handled))
-                return handled;
-        }
-        if (library == "utils.dll" || library == "utils") {
-            VALUE handled;
-            if (vitaUtilsCall(rb_iv_get(self, "_funcname"), args, &handled))
-                return handled;
-        }
-        if (library == "steam_api.dll" || library == "steam_api" ||
-            library == "steam_api64.dll" || library == "steam_api64") {
-            VALUE handled;
-            if (vitaSteamApiCall(rb_iv_get(self, "_funcname"), &handled))
-                return handled;
-        }
-        if (library == "rpgxpvideodecoder.dll" || library == "rpgxpvideodecoder") {
-            VALUE handled;
-            if (vitaVideoDecoderCall(rb_iv_get(self, "_funcname"), args, &handled))
-                return handled;
-        }
-#endif
-        /* Vita dummy handle: no libraries can load here. Warn once
-         * and return a type-appropriate zero instead of calling
-         * into garbage. */
-        static bool warned = false;
-        if (!warned)
-        {
-            warned = true;
-            VALUE libv = rb_iv_get(self, "_libname");
-            VALUE funcv = rb_iv_get(self, "_funcname");
-            Debug() << "MiniFFI: Vita has no loadable libraries; ignoring call "
-                    << RSTRING_PTR(libv) << "!" << RSTRING_PTR(funcv);
-        }
-        switch (FIX2INT(own_exports))
-        {
-            case _T_POINTER:
-                return rb_str_new_cstr("");
-            case _T_BOOL:
-                return Qfalse;
-            case _T_NUMBER:
-            case _T_INTEGER:
-            case _T_VOID:
-            default:
-                return MVAL2RB(0);
-        }
-    }
 
     for (int i = 0; i < nimport; i++) {
         VALUE str = rb_ary_entry(args, i);
@@ -896,7 +1118,11 @@ void MiniFFIBindingInit() {
 #if defined(__vita__) || defined(__psp2__)
     g_miniFFIClass = cMiniFFI;
 #endif
-#if RAPI_FULL > 187
+#if defined(__vita__) || defined(__psp2__)
+    rb_define_alloc_func(cMiniFFI, vitaFFIAllocate);
+    /* launcher/rgss_extensions.rb: the engine dispatches HardRPGWin32 handlers itself. */
+    rb_define_const(cMiniFFI, "HARDRPG_NATIVE_DISPATCH", Qtrue);
+#elif RAPI_FULL > 187
     rb_define_alloc_func(cMiniFFI, classAllocate<&MiniFFIType>);
 #else
     rb_define_alloc_func(cMiniFFI, MiniFFIAllocate);

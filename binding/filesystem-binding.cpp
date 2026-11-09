@@ -69,6 +69,15 @@ static VALUE fileIntForPath(const char *path, bool rubyExc) {
         
         throw e;
     }
+
+    /* A directory opens here but has no size. RGSS failed to open it with
+     * an error games rescue; Pokemon Essentials v16/v17 relies on that for
+     * empty autotile slots ("Graphics/Autotiles/"). */
+    if (SDL_RWsize(ops) < 0) {
+        SDL_RWclose(ops);
+        SDL_FreeRW(ops);
+        throw Exception(Exception::NoFileError, "%s", path);
+    }
     
     DataStream *stream;
     try {
@@ -107,8 +116,18 @@ RB_METHOD(fileIntRead) {
     
     if (length == -1) {
         Sint64 remaining = stream->remaining();
-        if (remaining < 0 || remaining > INT_MAX)
+        if (remaining > INT_MAX)
             rb_raise(rb_eIOError, "invalid stream size");
+        if (remaining < 0) {
+            /* No size or position (an archive entry, a directory): read to
+             * the end, as IO#read does. */
+            std::string all;
+            char chunk[32768];
+            size_t got;
+            while ((got = stream->read(chunk, sizeof(chunk))) > 0)
+                all.append(chunk, got);
+            return rb_str_new(all.data(), (long)all.size());
+        }
         length = int(remaining);
     }
     
@@ -191,9 +210,26 @@ struct BigLoad {
 };
 
 static VALUE fileIntMarshalLoad(VALUE arg) {
-    VALUE data = reinterpret_cast<BigLoad *>(arg)->data;
+    BigLoad *load = reinterpret_cast<BigLoad *>(arg);
+    VALUE data = load->data;
     VALUE marsh = rb_const_get(rb_cObject, rb_intern("Marshal"));
-    return rb_funcall2(marsh, rb_intern("load"), 1, &data);
+    VALUE result = rb_funcall2(marsh, rb_intern("load"), 1, &data);
+#ifdef __vita__
+    /* A game may replace Marshal.load with one that hands back the data
+     * itself (Pokemon Essentials reads non-Marshal files from its archive
+     * that way, e.g. Uranium's 1.4 MB messages.dat). The block is freed after
+     * the load, so a result still in it is copied out first. */
+    if (load->block >= 0 && RB_TYPE_P(result, T_STRING)) {
+        const char *base = RSTRING_PTR(data);
+        const char *at = RSTRING_PTR(result);
+        if (at >= base && at < base + RSTRING_LEN(data)) {
+            VALUE copy = rb_str_new(at, RSTRING_LEN(result));
+            rb_enc_copy(copy, result);
+            result = copy;
+        }
+    }
+#endif
+    return result;
 }
 static VALUE fileIntEndBigLoad(VALUE arg) {
     BigLoad *load = reinterpret_cast<BigLoad *>(arg);
@@ -338,6 +374,15 @@ static VALUE customProc(VALUE arg, VALUE proc) {
 }
 #endif
 
+#if RAPI_FULL >= 270
+static VALUE marshalUTF8Call(VALUE, VALUE arg)
+{
+    if (RB_TYPE_P(arg, RUBY_T_STRING) && ENCODING_IS_ASCII8BIT(arg))
+        rb_enc_associate_index(arg, rb_utf8_encindex());
+    return arg;
+}
+#endif
+
 RB_METHOD(_marshalLoad) {
     RB_UNUSED_PARAM;
 #if RAPI_FULL < 270
@@ -356,7 +401,18 @@ RB_METHOD(_marshalLoad) {
     else
         utf8Proc = rb_proc_new(RUBY_METHOD_FUNC(customProc), proc);
 #else
-    utf8Proc = rb_proc_new(stringForceUTF8, Qnil);
+    /* Not a Proc: Marshal calls `call` once per loaded object, and RGSS1/2 games get a Ruby
+     * Proc#call wrapper (HardRPGProcReturn, legacy_ruby_compat.rb) that made each of those calls
+     * a Ruby method with a rescue (Pokemon Uranium: 5 s to load its battle animations). Marshal
+     * takes any object that answers `call`; this one is C all the way. */
+    static VALUE utf8Caller = Qnil;
+    if (NIL_P(utf8Caller)) {
+        VALUE k = rb_define_class_under(rb_cObject, "HardRPGMarshalUTF8", rb_cObject);
+        rb_define_method(k, "call", RUBY_METHOD_FUNC(marshalUTF8Call), 1);
+        utf8Caller = rb_obj_alloc(k);
+        rb_gc_register_mark_object(utf8Caller);
+    }
+    utf8Proc = utf8Caller;
 #endif
     
     VALUE marsh = rb_const_get(rb_cObject, rb_intern("Marshal"));

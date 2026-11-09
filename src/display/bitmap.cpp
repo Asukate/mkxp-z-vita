@@ -2529,6 +2529,12 @@ void Bitmap::setLores(Bitmap *lores) {
         p->font->setHiresMult((float)width() / (float)lores->width());
 }
 
+uint32_t Bitmap::contentVersion() const
+{
+    guardDisposed();
+    return p->contentVersion;
+}
+
 bool Bitmap::isMega() const{
     guardDisposed();
     

@@ -64,6 +64,32 @@ unless Kernel.respond_to?(:rgss_main, true) || Object.method_defined?(:id)
   end
 end
 
+# In Ruby 1.8 `proc { }` made a lambda, so a `return` in it only left the
+# block. Ruby 3.1 raises LocalJumpError once the method that made the block
+# has returned: Essentials event handlers such as Pokemon Uranium's surf
+# prompt (Events.onAction, `return if $PokemonGlobal.surfing`) ended the game
+# with "unexpected return" whenever the player pressed confirm on the map.
+# Calling such a block answers that return as the block's value, as 1.8 did.
+# RGSS1/2 only, like to_a.
+unless Kernel.respond_to?(:rgss_main, true) || defined?(HardRPGProcReturn)
+  module HardRPGProcReturn
+    def call(*args, &block)
+      super
+    rescue LocalJumpError => e
+      raise unless e.reason == :return
+      e.exit_value
+    end
+
+    def [](*args, &block)
+      super
+    rescue LocalJumpError => e
+      raise unless e.reason == :return
+      e.exit_value
+    end
+  end
+  Proc.prepend(HardRPGProcReturn)
+end
+
 # Other Ruby 1.8 methods that 1.9 removed, for RGSS1/2 games (VX Ace already
 # ran on 1.9). Each is added only when nothing defines it, so a class or
 # script with its own keeps it.
@@ -150,7 +176,8 @@ module HardRPGLegacyErrinfo
   CLEAR = /\$!\s*=\s*nil\b/.freeze
 
   def self.rewrite(source)
-    return nil unless source.include?('$!') && source =~ CLEAR
+    # Matched as bytes: an RGSS1 section may not be valid UTF-8 (Pokemon Uranium).
+    return nil unless source.include?('$!') && source.b =~ CLEAR
     source.gsub(CLEAR, 'nil')
   end
 
@@ -243,7 +270,9 @@ module HardRPGSpacedCall
   end
 
   def self.rewrite(source)
-    return nil unless source.is_a?(String) && HINT.match?(source)
+    # Matched as bytes: an RGSS1 section may not be valid UTF-8 (Pokemon Uranium),
+    # and a regexp raises ArgumentError on such text.
+    return nil unless source.is_a?(String) && HINT.match?(source.b)
     root = begin
       RubyVM::AbstractSyntaxTree.parse(source)
     rescue SyntaxError, StandardError
@@ -798,6 +827,10 @@ module HardRPGLegacySyntax
       # 1.9 ran the else body after the begin body; a rescue that re-raises
       # keeps that meaning and makes the clause legal (The Endless Empty).
       line.sub(/(?<![\w.:])else\b/, 'rescue ::Exception; raise; else')
+    elsif text.include?('Invalid break')
+      # 1.8 compiled a break outside any loop or block and raised
+      # LocalJumpError if it ran (Insurgence's notebook and online menus).
+      line.sub(/(?<![\w.:@$])break\b/, "raise(LocalJumpError, 'unexpected break')")
     elsif text.include?("unexpected ':'") && line =~ /\A\s*when\b/
       line.sub(/\A(\s*when\s+[^:'"]*?[^:\s'"])\s*:(\s|\z)/, '\1 then\2') # `when 1: foo`
     elsif text.include?('syntax error')
@@ -863,5 +896,249 @@ module HardRPGLegacySyntax
       index += 1
     end
     false
+  end
+end
+
+# Ruby 1.8 had no string encodings: a regexp matched bytes, and RGSS1 games
+# (every Pokemon Essentials release up to v17 among them) spell UTF-8
+# characters as byte escapes, /\xe3\x81[\x81-\xbf]/n. Ruby 3.1 matches
+# characters: such a regexp fails to parse ("invalid multibyte escape"), or
+# parses and raises Encoding::CompatibilityError on the first non-ASCII text
+# it meets. Each byte sequence that spells UTF-8 characters becomes the same
+# characters (a class of code point ranges), so the regexp matches what it
+# matched in 1.8; other high bytes are read as Latin-1 code points.
+module HardRPGLegacyRegexp
+  HIGH = /\\x[89a-fA-F]\h/
+  # /body/flags where an operand starts; division never holds a \x escape.
+  LITERAL = /(?:^|(?<=[\s(,=!~|&{\[;?:]))\/((?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^\/\\\n\[])+)\/([imxnoues]*)/
+  MAX_CODEPOINTS = 300_000
+
+  # Returns the source with its byte regexps converted, or nil when none.
+  # An interpolating byte regexp (/#{...}/n) somewhere in the text.
+  INTERP_N = /#\{[^\n]*\/[imxoues]*n[imxoues]*(?![\w])/
+
+  def self.prepare(source)
+    bytes = source.include?('\\x') && source.b.match?(HIGH)
+    interp = source.include?('#{') && source.b.match?(INTERP_N)
+    return nil unless bytes || interp
+    text = source.b
+    changed = false
+    if bytes
+      text = text.gsub(LITERAL) do |whole|
+        body, flags = $1, $2
+        next whole unless body.match?(HIGH)
+        converted = convert(body)
+        next whole unless converted
+        changed = true
+        "/#{converted}/#{flags.delete('n')}"
+      end
+    end
+    # Regexps interpolate the converted ones, in the same section or another (CJK = /(#{HanZi}|
+    # #{Kana})/n, DrawText's /...#{CJKUtils::WordRegexp::WordRegexp}.../n): a converted regexp
+    # holds characters, which Ruby 3 refuses inside a byte regexp.
+    text = text.gsub(LITERAL) do |w|
+      next w unless $2.include?('n') && $1.include?('#{')
+      changed = true
+      "/#{$1}/#{$2.delete('n')}"
+    end
+    return nil unless changed
+    text.force_encoding(Encoding::UTF_8)
+  end
+
+  # Regexp source with byte escapes -> character source, or nil.
+  def self.convert(body)
+    tokens = tokenize(distribute(body))
+    return nil unless tokens
+    out = +''
+    i = 0
+    while i < tokens.size
+      kind, value = tokens[i]
+      if (kind == :byte || kind == :bclass) && (run = utf8_run(tokens, i))
+        ranges, length = run
+        out << char_class(ranges)
+        i += length
+        next
+      end
+      out << case kind
+             when :byte then format('\\u{%X}', value)
+             when :bclass then latin1_class(value)
+             else value
+             end
+      i += 1
+    end
+    Regexp.new(out.dup.force_encoding(Encoding::UTF_8))
+    out
+  rescue RegexpError, ArgumentError
+    nil
+  end
+
+  ATOM = /\\x\h\h|\[(?:\\.|[^\]\\])*\]/
+  # Byte atoms before a group belong to each alternative: \xef(?:\xbc.|\xbd.)
+  # spells the same characters as (?:\xef\xbc.|\xef\xbd.), which decodes.
+  def self.distribute(body)
+    offset = 0
+    while (match = /((?:#{ATOM})+)\(\?:/.match(body, offset))
+      offset = match.end(0)
+      next unless match[1].match?(HIGH)
+      open = match.end(0) - 3
+      close = group_end(body, open)
+      next unless close && !'*+?{'.include?(body[close + 1].to_s)
+      alternatives = split_top(body[(open + 3)...close])
+      grouped = '(?:' + alternatives.map { |alt| match[1] + alt }.join('|') + ')'
+      body = body[0...match.begin(1)] + grouped + body[(close + 1)..]
+      offset = match.begin(1)
+    end
+    body
+  end
+
+  def self.group_end(body, open)
+    depth = 0
+    i = open
+    while i < body.size
+      case body[i]
+      when '\\' then i += 1
+      when '[' then i = class_end(body, i) || (return nil)
+      when '(' then depth += 1
+      when ')'
+        depth -= 1
+        return i if depth.zero?
+      end
+      i += 1
+    end
+    nil
+  end
+
+  def self.split_top(text)
+    parts = [+'']
+    depth = 0
+    i = 0
+    while i < text.size
+      c = text[i]
+      if c == '\\'
+        parts[-1] << text[i, 2]
+        i += 2
+        next
+      elsif c == '['
+        close = class_end(text, i)
+        parts[-1] << text[i..close]
+        i = close + 1
+        next
+      end
+      depth += 1 if c == '('
+      depth -= 1 if c == ')'
+      if c == '|' && depth.zero? then parts << +''
+      else parts[-1] << c
+      end
+      i += 1
+    end
+    parts
+  end
+
+  def self.tokenize(body)
+    tokens = []
+    i = 0
+    while i < body.size
+      c = body[i]
+      if c == '\\'
+        if body[i + 1] == 'x' && body[i + 2, 2] =~ /\A\h\h\z/
+          tokens << [:byte, body[i + 2, 2].hex]
+          i += 4
+        else
+          tokens << [:raw, body[i, 2]]
+          i += 2
+        end
+      elsif c == '['
+        close = class_end(body, i)
+        return nil unless close
+        text = body[i..close]
+        tokens << (text.match?(HIGH) ? [:bclass, text] : [:raw, text])
+        i = close + 1
+      elsif c == '#' && body[i + 1] == '{'
+        close = body.index('}', i)
+        return nil unless close
+        tokens << [:raw, body[i..close]]
+        i = close + 1
+      elsif '*+?{'.include?(c)
+        tokens << [:quant, c]
+        i += 1
+      else
+        tokens << [:raw, c]
+        i += 1
+      end
+    end
+    tokens
+  end
+
+  def self.class_end(body, open)
+    i = open + 1
+    i += 1 if body[i] == '^'
+    i += 1 if body[i] == ']'
+    while i < body.size
+      return i if body[i] == ']'
+      return nil if body[i] == '['
+      i += body[i] == '\\' ? 2 : 1
+    end
+    nil
+  end
+
+  # Byte values a token can match, or nil (negated, nested or not all bytes).
+  def self.byte_set(token)
+    kind, value = token
+    return [value] if kind == :byte
+    return nil unless kind == :bclass
+    inner = value[1...-1]
+    return nil if inner.start_with?('^')
+    items = inner.scan(/\\x(\h\h)|\\(.)|(.)/m).map { |h, e, ch| h ? h.hex : (e ? nil : ch.ord) }
+    return nil if items.include?(nil) || items.any? { |b| b > 0xFF }
+    set = []
+    j = 0
+    while j < items.size
+      if inner_range?(inner, items, j)
+        set.concat((items[j]..items[j + 2]).to_a)
+        j += 3
+      else
+        set << items[j]
+        j += 1
+      end
+    end
+    set.uniq
+  end
+
+  # items[j+1] is a '-' joining two members (not an escaped \-).
+  def self.inner_range?(_inner, items, j)
+    items[j + 1] == '-'.ord && j + 2 < items.size
+  end
+
+  def self.utf8_run(tokens, start)
+    lead = byte_set(tokens[start])
+    return nil unless lead && !lead.empty?
+    lengths = lead.map { |b| b >= 0xF0 && b <= 0xF4 ? 4 : (b >= 0xE0 ? 3 : (b >= 0xC2 && b <= 0xDF ? 2 : 0)) }.uniq
+    return nil unless lengths.size == 1 && lengths[0] > 0
+    length = lengths[0]
+    sets = [lead]
+    (1...length).each do |k|
+      token = tokens[start + k]
+      return nil unless token && (set = byte_set(token)) && !set.empty? && set.all? { |b| b >= 0x80 && b <= 0xBF }
+      sets << set
+    end
+    # A quantifier after an inner byte stops the run above (it is not a byte
+    # token); one after the last byte now repeats the character.
+    count = sets.map(&:size).reduce(:*)
+    return nil if count > MAX_CODEPOINTS
+    codes = sets[0].product(*sets[1..]).map { |bytes| bytes.pack('C*').force_encoding(Encoding::UTF_8) }
+    return nil unless codes.all?(&:valid_encoding?)
+    points = codes.map(&:ord).sort
+    ranges = []
+    points.each { |p| ranges.last && ranges.last[1] + 1 == p ? ranges.last[1] = p : ranges << [p, p] }
+    [ranges, length]
+  end
+
+  def self.char_class(ranges)
+    return format('\\u{%X}', ranges[0][0]) if ranges.size == 1 && ranges[0][0] == ranges[0][1]
+    '[' + ranges.map { |a, b| a == b ? format('\\u{%X}', a) : format('\\u{%X}-\\u{%X}', a, b) }.join + ']'
+  end
+
+  def self.latin1_class(text)
+    text.gsub(/\\x(\h\h)/) { $1.hex >= 0x80 ? format('\\u{%X}', $1.hex) : "\\x#{$1}" }
   end
 end

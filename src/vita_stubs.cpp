@@ -40,6 +40,8 @@
 #include FT_GLYPH_H
 #include FT_STROKER_H
 #include "vita_diagnostic.h"
+#include <malloc.h>
+#include <psp2/kernel/sysmem.h>
 #include "vita_startup_timer.h"
 
 /*
@@ -801,7 +803,13 @@ static int vita_ttf_font_height(TTF_Font *font)
         return 0;
     // SDL_ttf's canvas uses the scaled ascender-to-descender span, rounded
     // up, rather than FreeType's line-spacing metric or each string's ink.
-    const FT_Pos span = FT_MulFix(font->face->ascender - font->face->descender,
+    // Some fonts store the descender as a positive distance (the Pokemon
+    // fan-game fonts "Power Green" and friends: +512 of 2048 units). Windows
+    // reads their OS/2 table and is unaffected; ascender - descender halves
+    // the height and RGSS games that size text by text_size cut its bottom.
+    const FT_Short descender = font->face->descender > 0
+        ? static_cast<FT_Short>(-font->face->descender) : font->face->descender;
+    const FT_Pos span = FT_MulFix(font->face->ascender - descender,
                                   font->face->size->metrics.y_scale);
     return std::max(static_cast<int>((span + 63) >> 6), 1);
 }
@@ -1245,6 +1253,136 @@ void alGetBufferi(unsigned int buffer, int param, int *value)
     (void)buffer;
     (void)param;
     if (value) *value = 0;
+}
+
+/* Failed C allocations (Ruby heap pages use memalign) name their size,
+ * caller and the heap state, so an out-of-memory can be traced. Runs only
+ * when an allocation has already failed. */
+extern "C" {
+void *__real_malloc(size_t);
+void *__real_calloc(size_t, size_t);
+void *__real_realloc(void *, size_t);
+void *__real_memalign(size_t, size_t);
+}
+static void vitaNoteFailedAlloc(const char *what, size_t size, void *caller)
+{
+    static unsigned logged = 0;
+    if (logged >= 24)
+        return;
+    ++logged;
+    struct mallinfo mi = mallinfo();
+    SceKernelFreeMemorySizeInfo info;
+    info.size = sizeof(info);
+    int kr = sceKernelGetFreeMemorySize(&info);
+    char line[256];
+    snprintf(line, sizeof(line),
+             "C allocation failed: %s %u bytes, caller %p (ref %p) arena=%u used=%u free=%u blocks=%u top=%u kuser=%d/%d\n",
+             what, (unsigned)size, caller, (void *)&vitaNoteFailedAlloc,
+             (unsigned)mi.arena, (unsigned)mi.uordblks, (unsigned)mi.fordblks,
+             (unsigned)mi.ordblks, (unsigned)mi.keepcost, kr, kr == 0 ? info.size_user : 0);
+    fputs(line, stderr);
+}
+extern "C" {
+void *__wrap_malloc(size_t n)
+{
+    void *p = __real_malloc(n);
+    if (!p && n) vitaNoteFailedAlloc("malloc", n, __builtin_return_address(0));
+    return p;
+}
+void *__wrap_calloc(size_t a, size_t b)
+{
+    void *p = __real_calloc(a, b);
+    if (!p && a && b) vitaNoteFailedAlloc("calloc", a * b, __builtin_return_address(0));
+    return p;
+}
+void *__wrap_realloc(void *o, size_t n)
+{
+    void *p = __real_realloc(o, n);
+    if (!p && n) vitaNoteFailedAlloc("realloc", n, __builtin_return_address(0));
+    return p;
+}
+/* Ruby heap pages (16 KB, 16 KB aligned) come from their own pool of 1 MB kernel blocks.
+ * From the C heap, each needs a 32 KB hole; after a long battle the heap had 18 MB free in
+ * 4000 small pieces and no such hole, and Ruby died with "[FATAL] failed to allocate memory"
+ * (Pokemon Uranium). Kernel blocks are not fragmented by small allocations. Pool pages are
+ * reused, never returned; if the kernel has no block left, the C heap is used as before. */
+void __real_free(void *);
+static const size_t kRubyPage = 16384;
+static const size_t kPoolChunk = 1024 * 1024;
+static struct { uintptr_t lo, hi; } rubyPoolChunks[96];
+static int rubyPoolCount = 0;
+static uintptr_t rubyPoolLo = UINTPTR_MAX, rubyPoolHi = 0;
+static void *rubyPoolFree = NULL;
+static volatile int rubyPoolLock = 0;
+static void rubyPoolEnter()
+{
+    int spins = 0;
+    while (__sync_lock_test_and_set(&rubyPoolLock, 1))
+        if (++spins >= 64) { sceKernelDelayThread(50); spins = 0; } /* no spin-forever (priorities) */
+}
+static void rubyPoolLeave() { __sync_lock_release(&rubyPoolLock); }
+static bool rubyPoolGrow()
+{
+    if (rubyPoolCount >= (int)(sizeof(rubyPoolChunks) / sizeof(rubyPoolChunks[0])))
+        return false;
+    int uid = sceKernelAllocMemBlock("hardrpg_ruby_pages", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, kPoolChunk, NULL);
+    if (uid < 0)
+        return false;
+    void *base = NULL;
+    if (sceKernelGetMemBlockBase(uid, &base) < 0 || !base) {
+        sceKernelFreeMemBlock(uid);
+        return false;
+    }
+    const uintptr_t lo = (uintptr_t)base, hi = lo + kPoolChunk;
+    rubyPoolChunks[rubyPoolCount].lo = lo;
+    rubyPoolChunks[rubyPoolCount].hi = hi;
+    ++rubyPoolCount;
+    if (lo < rubyPoolLo) rubyPoolLo = lo;
+    if (hi > rubyPoolHi) rubyPoolHi = hi;
+    for (uintptr_t p = (lo + kRubyPage - 1) & ~(uintptr_t)(kRubyPage - 1); p + kRubyPage <= hi; p += kRubyPage) {
+        *(void **)p = rubyPoolFree;
+        rubyPoolFree = (void *)p;
+    }
+    return true;
+}
+static bool rubyPoolOwns(void *ptr)
+{
+    const uintptr_t p = (uintptr_t)ptr;
+    if (p < rubyPoolLo || p >= rubyPoolHi)
+        return false;
+    for (int i = 0; i < rubyPoolCount; ++i)
+        if (p >= rubyPoolChunks[i].lo && p < rubyPoolChunks[i].hi)
+            return true;
+    return false;
+}
+void __wrap_free(void *ptr)
+{
+    if (ptr && rubyPoolOwns(ptr)) {
+        rubyPoolEnter();
+        *(void **)ptr = rubyPoolFree;
+        rubyPoolFree = ptr;
+        rubyPoolLeave();
+        return;
+    }
+    __real_free(ptr);
+}
+void *__wrap_memalign(size_t a, size_t n)
+{
+    if (a == kRubyPage && n == kRubyPage) {
+        rubyPoolEnter();
+        if (!rubyPoolFree)
+            rubyPoolGrow();
+        void *page = rubyPoolFree;
+        if (page)
+            rubyPoolFree = *(void **)page;
+        rubyPoolLeave();
+        if (page)
+            return page;
+    }
+    void *p = __real_memalign(a, n);
+    if (!p && n) vitaNoteFailedAlloc("memalign", n, __builtin_return_address(0));
+    return p;
+}
 }
 
 /* Every failed C++ allocation names its size and caller once in the

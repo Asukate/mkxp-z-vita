@@ -174,6 +174,7 @@ RB_METHOD_GUARD(bitmapInitialize) {
     
     setPrivateData(self, b);
     bitmapInitProps(b, self);
+    vitaNoteBitmapBytes((unsigned long long)b->width() * b->height() * 4);
     
     return self;
 }
@@ -188,6 +189,15 @@ RB_METHOD_GUARD(bitmapWidth) {
    value = b->width();
     
     return INT2FIX(value);
+}
+RB_METHOD_GUARD_END
+
+/* Bitmap#__hardrpg_version: changes whenever the pixels change. Game
+ * patches use it to skip copies of unchanged images. */
+RB_METHOD_GUARD(bitmapContentVersion) {
+    RB_UNUSED_PARAM;
+    Bitmap *b = getPrivateData<Bitmap>(self);
+    return UINT2NUM(b->contentVersion());
 }
 RB_METHOD_GUARD_END
 
@@ -240,6 +250,36 @@ RB_METHOD_GUARD(bitmapBlt) {
         GFX_GUARD_EXC(b->blt(x, y, *src, srcRect->toIntRect(), opacity););
     }
     
+    return self;
+}
+RB_METHOD_GUARD_END
+
+/* Bitmap#__hardrpg_skew_rows(src, tan): the row loop of Pokemon Uranium's Sprite#skew in one
+ * call. For i in 0...src.height: y = height - i, blt(i / tan, y, src, Rect(0, y, width, 1)), with
+ * the same truncation of x as Bitmap#blt. Saves a Rect and a Ruby call per row. */
+RB_METHOD_GUARD(bitmapSkewRows) {
+    Bitmap *b = getPrivateData<Bitmap>(self);
+    VALUE srcObj, tanObj;
+    rb_get_args(argc, argv, "oo", &srcObj, &tanObj RB_ARG_END);
+    Bitmap *src = getPrivateDataCheck<Bitmap>(srcObj, BitmapType);
+    const double t = NUM2DBL(tanObj);
+    if (src) {
+        const int w = src->width(), h = src->height();
+        GFX_GUARD_EXC(
+            /* Rows that share an x offset are next to each other: copy each run as one band
+             * (about tan rows per blt instead of one). Same pixels as the row loop. */
+            int i = 0;
+            while (i < h) {
+                const int x = (int)(long)((double)i / t);
+                int j = i + 1;
+                while (j < h && (int)(long)((double)j / t) == x) ++j;
+                /* rows i..j-1 -> y from h-(j-1) up to h-i */
+                const int y0 = h - (j - 1);
+                b->blt(x, y0, *src, IntRect(0, y0, w, j - i), 255);
+                i = j;
+            }
+        );
+    }
     return self;
 }
 RB_METHOD_GUARD_END
@@ -1014,6 +1054,7 @@ RB_METHOD_GUARD(bitmapInitializeCopy) {
     bitmapInitProps(b, self);
     b->setFont(orig->getFont());
     setPrivateData(self, b);
+    vitaNoteBitmapBytes((unsigned long long)b->width() * b->height() * 4);
     
     return self;
 }
@@ -1106,6 +1147,8 @@ void bitmapBindingInit() {
     _rb_define_method(klass, "initialize_copy", bitmapInitializeCopy);
     
     _rb_define_method(klass, "width", bitmapWidth);
+    _rb_define_method(klass, "__hardrpg_version", bitmapContentVersion);
+    _rb_define_method(klass, "__hardrpg_skew_rows", bitmapSkewRows);
     _rb_define_method(klass, "height", bitmapHeight);
 
     INIT_PROP_BIND(Bitmap, Hires, "hires");
