@@ -405,6 +405,13 @@ module HardRPGNative
     # Hime's Any Key Pressed Check, Zale's Keyboard Manager (Input.update)
     "Input.self#update:2414362333:3074637570:176" => "hime",
     "Input.self#update:1279336715:3637752558:537" => "zale",
+    # Victor Engine Character Control (poses; LISA: The Joyful)
+    "Game_CharacterBase#update_animation:1015179229:4226047143:272" => "vic",
+    "Game_CharacterBase#update_anime_count:1699064850:2066622519:108" => "vic",
+    "Game_CharacterBase#update_anime_pattern:2133774055:537802099:146" => "vic",
+    "Game_CharacterBase#update_stop:4196311303:3962116204:61" => "vic",
+    "Game_CharacterBase#resting_pose:1654497244:1833380308:114" => "known",
+    "Sprite_Character#graphic_changed?:2495157378:835003697:98" => "vic",
     # star aura effect (星潟)
     "Sprite#star_aura_effects_update:2583269496:1939184202:2488" => "aura",
     "StarAuraEffect#update_aura_effect:65509816:2849013802:1804" => "known",
@@ -492,12 +499,17 @@ module HardRPGNative
     "Spriteset_Map#update_characters/galv" => :galv_region_effect_sm_sb_update_characters,
     "Game_CharacterBase#screen_z/dmo" => :dmo_al_screen_z,
     "Sprite_Character#update/mog" => :mog_anti_lag_update,
+    "Game_CharacterBase#update_anime_count/vic" => :update_anime_count_ve_character_control,
+    "Game_CharacterBase#update_anime_pattern/vic" => :update_anime_pattern_ve_character_control,
+    "Game_CharacterBase#update_stop/vic" => :update_stop_ve_character_control,
+    "Sprite_Character#graphic_changed?/vic" => :graphic_changed_ve_character_control?,
   }.freeze
 
   CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Player Game_Map Game_Variables Game_Switches Game_Vehicle
                Sprite_Base Sprite_Character Spriteset_Map Sprite StarAuraEffect Input.self Switch.self].freeze
   ATTRS = { 'Game_CharacterBase' => %i[tile_id character_name character_index pattern direction opacity blend_type
-                                       bush_depth transparent animation_id balloon_id current_floor],
+                                       bush_depth transparent animation_id balloon_id current_floor pose_sufix
+                                       idle_stance],
             'Game_Map' => %i[display_x display_y],
             'Game_Vehicle' => %i[altitude],
             'Game_Event' => %i[can_update],

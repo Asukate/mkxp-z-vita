@@ -137,8 +137,9 @@ struct Slot {
     uint32_t sEpoch;
     bool sOk;
     int sWhich; /* the slot `super` reaches when sOk */
+    bool noArgs;        /* SK_NATIVE: its method takes no arguments */
     /* statistics */
-    uint32_t direct, viaRuby;
+    uint32_t direct, viaRuby, viaAlt;
 };
 
 enum SlotId {
@@ -185,6 +186,9 @@ enum SlotId {
     S_GM_setup_autorun_common_event, S_GVH_screen_y, S_GVH_altitude, S_CE_autorun, S_ENUM_find,
     /* Galv's Region Effects wrappers, DMO screen_z wrapper (alias names), keyboard scripts on Input */
     S_H_GM_ue_galv, S_H_SM_uc_galv, S_H_GCB_sz_dmo, S_IN_update_hime, S_IN_update_zale,
+    /* Victor Engine Character Control: its attributes, resting_pose (checked) and wrapper aliases */
+    S_GCB_pose_sufix, S_GCB_idle_stance, S_GCB_resting_pose, S_H_GCB_uac_vic, S_H_GCB_uap_vic,
+    S_H_GCB_us_vic, S_H_SC_gc_vic,
     S_FFI_call, S_DL_aref, S_DL_to_i, S_HSH_aref, S_HSH_aset, S_HSH_each_value, S_ARY_any,
     /* RPG data attributes (engine Ruby module) */
     S_MAP_scroll_type, S_MAP_width, S_MAP_height, S_EVENT_id,
@@ -293,18 +297,101 @@ static bool superOk(Slot &s) {
     return ok;
 }
 
+/* Another slot of the same name whose native this class resolves to: a subclass's own default
+ * method (the default Game_CharacterBase#update calls update_stop, which a Game_Event resolves to
+ * Game_Event#update_stop). -1 when there is none. Only for calls without arguments. */
+static std::unordered_map<uint64_t, Memo> g_altMemo;
+static std::unordered_map<uint64_t, int> g_altWhich;
+static int altSlot(int id, VALUE klass) {
+    uint64_t key = ((uint64_t)klass << 8) | (uint64_t)id;
+    auto it = g_altMemo.find(key);
+    if (it != g_altMemo.end() && it->second.epoch == g_epoch)
+        return it->second.ok ? g_altWhich[key] : -1;
+    int which = -1;
+    for (int j = 0; j < S_COUNT && which < 0; ++j) {
+        Slot &t = g_slots[j];
+        if (j != id && t.kind == SK_NATIVE && t.noArgs && t.mid == g_slots[id].mid && slotOk(t, klass))
+            which = j;
+    }
+    g_altMemo[key] = Memo{g_epoch, which >= 0};
+    g_altWhich[key] = which;
+    return which;
+}
+
+/* The engine's own Sprite accessors that the natives use every frame, done on the C++ sprite as
+ * their bindings do it (same argument rules, same return value), without the binding call. A
+ * disposed sprite, or an argument the binding would convert or reject, takes the binding. */
+static bool spriteDirect(int id, VALUE obj, int argc, const VALUE *argv, VALUE &ret) {
+    switch (id) {
+    case S_SPR_x: case S_SPR_y: case S_SPR_set_x: case S_SPR_set_y: case S_SPR_set_z:
+    case S_SPR_set_opacity: case S_SPR_set_blend_type: case S_SPR_set_bush_depth: case S_SPR_set_visible:
+        break;
+    default:
+        return false;
+    }
+    Sprite *sp = getPrivateDataNoRaise<Sprite>(obj);
+    if (!sp || sp->isDisposed())
+        return false;
+    if (id == S_SPR_x || id == S_SPR_y) {
+        if (argc != 0)
+            return false;
+        ret = INT2FIX(id == S_SPR_x ? sp->getX() : sp->getY());
+        return true;
+    }
+    if (argc != 1)
+        return false;
+    VALUE v = argv[0];
+    if (id == S_SPR_set_visible) {
+        bool b = RTEST(v);
+        GFX_LOCK;
+        sp->setVisible(b);
+        GFX_UNLOCK;
+        ret = b ? Qtrue : Qfalse;
+        return true;
+    }
+    if (!FIXNUM_P(v))
+        return false;
+    int n = FIX2INT(v);
+    GFX_LOCK;
+    switch (id) {
+    case S_SPR_set_x: sp->setX(n); break;
+    case S_SPR_set_y: sp->setY(n); break;
+    case S_SPR_set_z: sp->setZ(n); break;
+    case S_SPR_set_opacity: sp->setOpacity(n); break;
+    case S_SPR_set_blend_type: sp->setBlendType(n); break;
+    default: sp->setBushDepth(n); break;
+    }
+    GFX_UNLOCK;
+    ret = v; /* the setters return their argument (z= returns the same Integer) */
+    return true;
+}
+
 /* Call `name` on obj: directly when it is still the default, else through Ruby. */
 static VALUE callSlot(VALUE obj, int id, int argc, const VALUE *argv) {
     Slot &s = g_slots[id];
-    if (slotOk(s, rb_class_of(obj))) {
+    VALUE klass = rb_class_of(obj);
+    if (slotOk(s, klass)) {
         s.direct++;
         switch (s.kind) {
         case SK_ATTR:
             return ivFast(obj, s.ivar, g_attrSites[id]);
-        case SK_ENGINE:
+        case SK_ENGINE: {
+            VALUE ret;
+            if (spriteDirect(id, obj, argc, argv, ret))
+                return ret;
             return s.engine(argc, const_cast<VALUE *>(argv), obj);
+        }
         case SK_NATIVE:
             return s.native(obj, argc, argv, false);
+        }
+    }
+    if (argc == 0 && s.kind != SK_ATTR) {
+        int j = altSlot(id, klass);
+        if (j >= 0) {
+            Slot &t = g_slots[j];
+            s.viaAlt++;
+            t.direct++;
+            return t.native(obj, 0, nullptr, false);
         }
     }
     s.viaRuby++;
@@ -490,7 +577,8 @@ static ID id_update_symbol_reaction, id_update_symbol_movement, id_zero, id_trun
     id_star_aura_effect, id_star_aura_effect_update_set, id_nev_aura_tail, id_autorun, id_switch_id,
     id_list, id_each, id_each_value, id_GetKeyboardState, id_DOWN_STATE_MASK, id_Keys_To_Check,
     id_th_update, id_Keys, id_AKEY, id_zale_update, iv_r_events, iv_region_sprites, iv_dmo_screen_z,
-    iv_state, iv_any_key_pressed, iv_pressed, iv_triggers, iv_released, iv_timer;
+    iv_state, iv_any_key_pressed, iv_pressed, iv_triggers, iv_released, iv_timer, iv_pose_speed,
+    iv_playing_pose, iv_pose_loop, iv_pose_sufix, id_change_pose;
 static ID gv_game_map, gv_data_animations, gv_game_variables, gv_game_system, gv_game_temp,
     gv_data_common_events, gv_game_switches;
 static VALUE g_spriteBase = Qnil, g_graphics = Qnil;
@@ -618,15 +706,72 @@ static bool adjustN(VALUE map, bool horiz, VALUE coord, Num &out) {
 }
 static VALUE gm_adjust_x(VALUE self, int argc, const VALUE *argv, bool);
 static VALUE gm_adjust_y(VALUE self, int argc, const VALUE *argv, bool);
+static VALUE gm_adjust_x_jitter(VALUE self, int argc, const VALUE *argv, bool);
+static VALUE gm_adjust_y_jitter(VALUE self, int argc, const VALUE *argv, bool);
+static VALUE gm_display_x_jitter(VALUE self, int, const VALUE *, bool);
+static VALUE gm_display_y_jitter(VALUE self, int, const VALUE *, bool);
+/* Event Jitter Fix's display_x/display_y, (@display_x * 32).floor.to_f / 32, as a double. */
+static bool jitterDisplayD(VALUE d, double &out) {
+    if (FIXNUM_P(d)) {
+        out = (double)((long long)FIX2LONG(d) * 32) / 32.0;
+        return true;
+    }
+    if (RB_FLOAT_TYPE_P(d)) {
+        double v = RFLOAT_VALUE(d) * 32.0;
+        if (!std::isfinite(v))
+            return false;
+        out = std::floor(v) / 32.0;
+        return true;
+    }
+    return false;
+}
+/* Event Jitter Fix's adjust_x/adjust_y body in C values (no Float objects). Its display_x is
+ * read once: the native display_x only reads state. False: take the Ruby-value path. */
+static bool adjustNJitter(VALUE map, bool horiz, VALUE coord, Num &out) {
+    Num x;
+    if (!toNum(coord, x))
+        return false;
+    Slot &ds = g_slots[horiz ? S_GM_display_x : S_GM_display_y];
+    if (!slotOk(ds, rb_class_of(map)) || ds.kind != SK_NATIVE ||
+        ds.native != (horiz ? gm_display_x_jitter : gm_display_y_jitter))
+        return false;
+    double d;
+    if (!jitterDisplayD(horiz ? IV(map, display_x) : IV(map, display_y), d))
+        return false;
+    Num dn{true, 0, d};
+    if (RTEST(call0(map, horiz ? S_GM_loop_horizontal : S_GM_loop_vertical))) {
+        ds.direct++;
+        VALUE half = nDiv(nSub(call0(map, horiz ? S_GM_width : S_GM_height),
+                               call0(map, horiz ? S_GM_screen_tile_x : S_GM_screen_tile_y)),
+                          INT2FIX(2));
+        Num h, size;
+        if (!toNum(half, h))
+            return false;
+        if (ltN(x, subN(dn, h))) {
+            if (!toNum(call0(IV(map, map), horiz ? S_MAP_width : S_MAP_height), size))
+                return false;
+            ds.direct++;
+            out = addN(subN(x, dn), size);
+            return true;
+        }
+    }
+    ds.direct++;
+    out = subN(x, dn);
+    return true;
+}
 /* $game_map.adjust_x/y(v) as a C value, through the game's own method if it replaced it. */
 static bool adjustCall(bool horiz, VALUE coord, Num &out) {
     VALUE map = gameMap();
     Slot &s = g_slots[horiz ? S_GM_adjust_x : S_GM_adjust_y];
     if (slotOk(s, rb_class_of(map)) && s.kind == SK_NATIVE) {
         s.direct++;
-        /* Another native text (Event Jitter Fix): its own native, as a Ruby value. */
-        if (s.native != (horiz ? gm_adjust_x : gm_adjust_y))
+        /* Another native text (Event Jitter Fix): its own native, in C values when it can. */
+        if (s.native != (horiz ? gm_adjust_x : gm_adjust_y)) {
+            if (s.native == (horiz ? gm_adjust_x_jitter : gm_adjust_y_jitter) &&
+                adjustNJitter(map, horiz, coord, out))
+                return true;
             return toNum(s.native(map, 1, &coord, false), out);
+        }
         if (adjustN(map, horiz, coord, out))
             return true;
         return toNum(callOrig(map, horiz ? S_GM_adjust_x : S_GM_adjust_y, 1, &coord), out);
@@ -654,6 +799,20 @@ static bool screenYCore(VALUE c, Num &out) {
     out = subN(v, jh);
     return true;
 }
+/* $game_map.adjust_x/adjust_y only read state: the default native, or Event Jitter Fix's
+ * native reading its native display_x/display_y. */
+static bool adjustPure(bool horiz) {
+    VALUE mk = rb_class_of(gameMap());
+    Slot &a = g_slots[horiz ? S_GM_adjust_x : S_GM_adjust_y];
+    if (!slotOk(a, mk) || a.kind != SK_NATIVE)
+        return false;
+    if (a.native == (horiz ? gm_adjust_x : gm_adjust_y))
+        return true;
+    if (a.native != (horiz ? gm_adjust_x_jitter : gm_adjust_y_jitter))
+        return false;
+    Slot &d = g_slots[horiz ? S_GM_display_x : S_GM_display_y];
+    return slotOk(d, mk) && d.kind == SK_NATIVE && d.native == (horiz ? gm_display_x_jitter : gm_display_y_jitter);
+}
 /* c.screen_x / c.screen_y as a VALUE-free number when they are the defaults. */
 static bool screenCall(VALUE c, bool horiz, Num &out, VALUE &boxed, bool *pure = nullptr) {
     Slot &s = g_slots[horiz ? S_GCB_screen_x : S_GCB_screen_y];
@@ -665,12 +824,7 @@ static bool screenCall(VALUE c, bool horiz, Num &out, VALUE &boxed, bool *pure =
         if (horiz ? screenXCore(c, out) : screenYCore(c, out)) {
             /* Only default code ran (adjust, shift_y and jump_height read state, change none). */
             if (pure)
-                *pure = slotOk(g_slots[S_GM_adjust_x], rb_class_of(gameMap())) &&
-                        g_slots[S_GM_adjust_x].kind == SK_NATIVE &&
-                        g_slots[S_GM_adjust_x].native == gm_adjust_x &&
-                        slotOk(g_slots[S_GM_adjust_y], rb_class_of(gameMap())) &&
-                        g_slots[S_GM_adjust_y].kind == SK_NATIVE &&
-                        g_slots[S_GM_adjust_y].native == gm_adjust_y &&
+                *pure = adjustPure(true) && adjustPure(false) &&
                         slotOk(g_slots[S_GCB_shift_y], rb_class_of(c)) &&
                         slotOk(g_slots[S_GCB_jump_height], rb_class_of(c)) &&
                         slotOk(g_slots[S_GCB_object_character], rb_class_of(c)) &&
@@ -817,6 +971,17 @@ static VALUE ge_update_self_movement_always(VALUE self, int, const VALUE *, bool
     return Qnil;
 }
 static VALUE ge_update_self_movement(VALUE self, int, const VALUE *, bool) {
+    /* A fixed event (move type 0, or any type but 1-3) does nothing here. near_the_screen? and
+     * stop_count_threshold only compute when they are natives, so they need not run. */
+    VALUE mt = IV(self, move_type);
+    if (FIXNUM_P(mt) && (FIX2LONG(mt) < 1 || FIX2LONG(mt) > 3) && FIXNUM_P(IV(self, stop_count))) {
+        VALUE k = rb_class_of(self);
+        Slot &n = g_slots[S_GE_near_the_screen], &th = g_slots[S_GE_stop_count_threshold];
+        if (slotOk(n, k) && n.kind == SK_NATIVE && slotOk(th, k) && th.kind == SK_NATIVE) {
+            n.direct++;
+            return Qnil;
+        }
+    }
     if (RTEST(call0(self, S_GE_near_the_screen)) &&
         nGt(IV(self, stop_count), call0(self, S_GE_stop_count_threshold))) {
         VALUE t = IV(self, move_type);
@@ -845,13 +1010,23 @@ static VALUE ge_update(VALUE self, int, const VALUE *, bool fromRuby) {
 /* ------------------------------------------------------------------ */
 /* Game_Map                                                            */
 
+/* @map.scroll_type == a || @map.scroll_type == b: read once when it is the plain attribute
+ * holding an Integer (the second read gives the same value). */
+static bool scrollTypeIs(VALUE m, long a, long b) {
+    Slot &s = g_slots[S_MAP_scroll_type];
+    if (!RB_SPECIAL_CONST_P(m) && slotOk(s, rb_class_of(m)) && s.kind == SK_ATTR) {
+        VALUE t = call0(m, S_MAP_scroll_type);
+        if (FIXNUM_P(t))
+            return FIX2LONG(t) == a || FIX2LONG(t) == b;
+        return nEq(t, LONG2FIX(a)) || nEq(call0(m, S_MAP_scroll_type), LONG2FIX(b));
+    }
+    return nEq(call0(m, S_MAP_scroll_type), LONG2FIX(a)) || nEq(call0(m, S_MAP_scroll_type), LONG2FIX(b));
+}
 static VALUE gm_loop_horizontal(VALUE self, int, const VALUE *, bool) {
-    VALUE m = IV(self, map);
-    return rbool(nEq(call0(m, S_MAP_scroll_type), INT2FIX(2)) || nEq(call0(m, S_MAP_scroll_type), INT2FIX(3)));
+    return rbool(scrollTypeIs(IV(self, map), 2, 3));
 }
 static VALUE gm_loop_vertical(VALUE self, int, const VALUE *, bool) {
-    VALUE m = IV(self, map);
-    return rbool(nEq(call0(m, S_MAP_scroll_type), INT2FIX(1)) || nEq(call0(m, S_MAP_scroll_type), INT2FIX(3)));
+    return rbool(scrollTypeIs(IV(self, map), 1, 3));
 }
 static VALUE gm_width(VALUE self, int, const VALUE *, bool) { return call0(IV(self, map), S_MAP_width); }
 static VALUE gm_height(VALUE self, int, const VALUE *, bool) { return call0(IV(self, map), S_MAP_height); }
@@ -1528,6 +1703,76 @@ static VALUE gcb_screen_z_dmo(VALUE self, int argc, const VALUE *argv, bool) {
     return IV(self, dmo_screen_z);
 }
 
+/* Victor Engine Character Control (poses). Each native below has the script's exact text; a
+ * wrapper's alias must still be the default native (see WRAPS in launcher/native_events.rb).
+ *
+ * update_animation (overwrite):
+ *   update_anime_count
+ *   if (@pose_speed != 0 && @anime_count > @pose_speed) ||
+ *      (@pose_speed == 0 && @anime_count > 18 - real_move_speed * 2)
+ *     update_anime_pattern
+ *     @anime_count = 0
+ *     change_pose(idle_stance) if @pattern == 0 && @playing_pose && !@pose_loop
+ *   end                                                                 */
+static VALUE gcb_update_animation_vic(VALUE self, int, const VALUE *, bool) {
+    call0(self, S_GCB_update_anime_count);
+    VALUE ps = IV(self, pose_speed);
+    bool go;
+    if (nNe(ps, INT2FIX(0)))
+        go = nGt(IV(self, anime_count), ps);
+    else
+        go = false;
+    if (!go && nEq(IV(self, pose_speed), INT2FIX(0)))
+        go = nGt(IV(self, anime_count), nSub(INT2FIX(18), nMul(call0(self, S_GCB_real_move_speed), INT2FIX(2))));
+    if (!go)
+        return Qnil;
+    call0(self, S_GCB_update_anime_pattern);
+    SETIV(self, anime_count, INT2FIX(0));
+    if (nEq(IV(self, pattern), INT2FIX(0)) && RTEST(IV(self, playing_pose)) && !RTEST(IV(self, pose_loop)))
+        return rb_funcall(self, id_change_pose, 1, call0(self, S_GCB_idle_stance));
+    return Qnil;
+}
+/* update_anime_count: @playing_pose ? @anime_count += 1.5 : update_anime_count_ve_character_control */
+static VALUE gcb_update_anime_count_vic(VALUE self, int, const VALUE *, bool) {
+    if (RTEST(IV(self, playing_pose))) {
+        VALUE v = nAdd(IV(self, anime_count), DBL2NUM(1.5));
+        SETIV(self, anime_count, v);
+        return v;
+    }
+    return call0(self, S_H_GCB_uac_vic);
+}
+/* update_anime_pattern: a playing pose runs the script's own body (rare). */
+static VALUE gcb_update_anime_pattern_vic(VALUE self, int, const VALUE *, bool) {
+    if (RTEST(IV(self, playing_pose)))
+        return callOrig(self, S_H_GCB_uap_vic, 0, nullptr);
+    return call0(self, S_H_GCB_uap_vic);
+}
+/* update_stop: update_stop_ve_character_control; resting_pose
+ *   resting_pose: return if @stop_count <= 1 || @playing_pose
+ *                 change_pose(idle_stance) if pose_sufix != idle_stance   */
+static VALUE gcb_update_stop_vic(VALUE self, int, const VALUE *, bool) {
+    call0(self, S_H_GCB_us_vic);
+    Slot &k = g_slots[S_GCB_resting_pose];
+    if (k.kind != SK_KNOWN || !slotOk(k, rb_class_of(self))) {
+        k.viaRuby++;
+        return rb_funcall(self, k.mid, 0);
+    }
+    k.direct++;
+    if (nLe(IV(self, stop_count), INT2FIX(1)) || RTEST(IV(self, playing_pose)))
+        return Qnil;
+    if (nNe(call0(self, S_GCB_pose_sufix), call0(self, S_GCB_idle_stance)))
+        return rb_funcall(self, id_change_pose, 1, call0(self, S_GCB_idle_stance));
+    return Qnil;
+}
+/* Sprite_Character#graphic_changed?:
+ *   graphic_changed_ve_character_control? || @pose_sufix != @character.pose_sufix */
+static VALUE sc_graphic_changed_vic(VALUE self, int, const VALUE *, bool) {
+    VALUE r = call0(self, S_H_SC_gc_vic);
+    if (RTEST(r))
+        return r;
+    return rbool(nNe(IV(self, pose_sufix), call0(IV(self, character), S_GCB_pose_sufix)));
+}
+
 /* ------------------------------------------------------------------ */
 /* Keyboard scripts on Input (Vita: user32 key calls read SDL state)   */
 
@@ -1870,6 +2115,21 @@ static bool hudellParkable(VALUE spr, VALUE c) {
 static bool positive(VALUE v) {
     return FIXNUM_P(v) ? FIX2LONG(v) > 0 : (RB_FLOAT_TYPE_P(v) && NUM2DBL(v) > 0);
 }
+/* c.screen_y is the default native and everything it calls only reads state. */
+static bool nativeOk(int id, VALUE klass) {
+    Slot &s = g_slots[id];
+    return slotOk(s, klass) && s.kind == SK_NATIVE;
+}
+static bool screenYPure(VALUE c) {
+    VALUE k = rb_class_of(c), gm = gameMap(), mk = rb_class_of(gm);
+    VALUE map = IV(gm, map);
+    return nativeOk(S_GCB_screen_y, k) && g_slots[S_GCB_screen_y].native == gcb_screen_y &&
+           nativeOk(S_GCB_shift_y, k) && nativeOk(S_GCB_jump_height, k) && nativeOk(S_GCB_object_character, k) &&
+           adjustPure(false) &&
+           nativeOk(S_GM_loop_vertical, mk) && nativeOk(S_GM_height, mk) && nativeOk(S_GM_screen_tile_y, mk) &&
+           !RB_SPECIAL_CONST_P(map) && slotOk(g_slots[S_MAP_scroll_type], rb_class_of(map)) &&
+           slotOk(g_slots[S_MAP_height], rb_class_of(map)) && slotOk(g_slots[S_GFX_height], rb_class_of(g_graphics));
+}
 static bool parkedOffscreen(VALUE spr, double w, double h) {
     if (rb_obj_class(spr) != g_spriteCharacterClass)
         return false;
@@ -1879,8 +2139,16 @@ static bool parkedOffscreen(VALUE spr, double w, double h) {
         return false;
     if (positive(call0(c, S_GCB_animation_id)) || positive(call0(c, S_GCB_balloon_id)))
         return false;
-    if (!farOut(call0(spr, S_SPR_x), call0(spr, S_SPR_y), w, h) ||
-        !farOut(call0(c, S_GCB_screen_x), call0(c, S_GCB_screen_y), w, h))
+    if (!farOut(call0(spr, S_SPR_x), call0(spr, S_SPR_y), w, h))
+        return false;
+    /* Far out sideways already decides it; screen_y need not run when it only reads state. */
+    VALUE sx = call0(c, S_GCB_screen_x);
+    bool sideways = false;
+    if ((FIXNUM_P(sx) || RB_FLOAT_TYPE_P(sx)) && screenYPure(c)) {
+        double x = NUM2DBL(sx);
+        sideways = x < -w || x > 2 * w;
+    }
+    if (!sideways && !farOut(sx, call0(c, S_GCB_screen_y), w, h))
         return false;
     return !g_parkGuardHudell || hudellParkable(spr, c);
 }
@@ -2638,6 +2906,12 @@ static const NativeDef g_natives[] = {
     NDW(S_SM_update_characters, "galv", sm_update_characters_galv, S_H_SM_uc_galv, S_SM_update_characters),
     /* DMO Parallax Animation's screen_z wrapper */
     NDWA(S_GCB_screen_z, "dmo", gcb_screen_z_dmo, S_H_GCB_sz_dmo, S_GCB_screen_z, 0, 1),
+    /* Victor Engine Character Control */
+    ND(S_GCB_update_animation, "vic", gcb_update_animation_vic, -1),
+    NDW(S_GCB_update_anime_count, "vic", gcb_update_anime_count_vic, S_H_GCB_uac_vic, S_GCB_update_anime_count),
+    NDW(S_GCB_update_anime_pattern, "vic", gcb_update_anime_pattern_vic, S_H_GCB_uap_vic, S_GCB_update_anime_pattern),
+    NDW(S_GCB_update_stop, "vic", gcb_update_stop_vic, S_H_GCB_us_vic, S_GCB_update_stop),
+    NDW(S_SC_graphic_changed, "vic", sc_graphic_changed_vic, S_H_SC_gc_vic, S_SC_graphic_changed),
     /* keyboard scripts (Hime's Any Key Pressed Check, Zale's Keyboard Manager) */
     ND(S_IN_update_hime, "hime", in_update_hime, -1),
     ND(S_IN_update_zale, "zale", in_update_zale, -1),
@@ -2776,6 +3050,7 @@ static VALUE nev_replace(int argc, VALUE *argv, VALUE) {
             VALUE um = instanceMethod(klass, h.mid);
             h.kind = SK_NATIVE;
             h.native = b.native;
+            h.noArgs = b.noArgs;
             h.superSlot = -1;
             h.superFrom = b.superSlot >= 0 ? d.base : -1;
             h.owner = rb_funcall(um, rb_intern("owner"), 0);
@@ -2794,6 +3069,7 @@ static VALUE nev_replace(int argc, VALUE *argv, VALUE) {
         rb_define_method(klass, mname, RUBY_METHOD_FUNC(g_entries[i]), -1);
         s.kind = SK_NATIVE;
         s.native = d.fn;
+        s.noArgs = d.lo == 0;
         if (d.superSlot != KEEP) {
             s.superSlot = d.superSlot;
             s.superAlt = d.superAlt;
@@ -2836,7 +3112,8 @@ static VALUE nev_stats(VALUE) {
         std::string k = std::string(s.owner_name) + "#" + s.name;
         const char *kind = s.kind == SK_NATIVE ? "native" : s.kind == SK_ATTR ? "attr" : s.kind == SK_ENGINE ? "engine" : s.kind == SK_KNOWN ? "known" : "ruby";
         rb_hash_aset(h, rb_str_new_cstr(k.c_str()),
-                     rb_ary_new_from_args(3, rb_str_new_cstr(kind), UINT2NUM(s.direct), UINT2NUM(s.viaRuby)));
+                     rb_ary_new_from_args(4, rb_str_new_cstr(kind), UINT2NUM(s.direct), UINT2NUM(s.viaRuby),
+                                          UINT2NUM(s.viaAlt)));
     }
     return h;
 }
@@ -3052,6 +3329,8 @@ void nativeEventsInit(int rgssVersion) {
     I(iv_region_sprites, "@region_sprites"); I(iv_dmo_screen_z, "@dmo_screen_z"); I(iv_state, "@state");
     I(iv_any_key_pressed, "@any_key_pressed"); I(iv_pressed, "@pressed"); I(iv_triggers, "@triggers");
     I(iv_released, "@released"); I(iv_timer, "@timer");
+    I(iv_pose_speed, "@pose_speed"); I(iv_playing_pose, "@playing_pose"); I(iv_pose_loop, "@pose_loop");
+    I(iv_pose_sufix, "@pose_sufix"); I(id_change_pose, "change_pose");
     I(gv_data_common_events, "$data_common_events"); I(gv_game_switches, "$game_switches");
     I(id_update_symbol_reaction, "update_symbol_reaction"); I(id_update_symbol_movement, "update_symbol_movement");
     I(id_zero, "zero?"); I(id_truncate, "truncate"); I(id_between, "between?");
@@ -3202,6 +3481,13 @@ void nativeEventsInit(int rgssVersion) {
     slotDef(S_H_GM_ue_galv, "alias", "galv_region_effects_gm_update_events");
     slotDef(S_H_SM_uc_galv, "alias", "galv_region_effect_sm_sb_update_characters");
     slotDef(S_H_GCB_sz_dmo, "alias", "dmo_al_screen_z");
+    slotDef(S_GCB_pose_sufix, "Game_CharacterBase", "pose_sufix");
+    slotDef(S_GCB_idle_stance, "Game_CharacterBase", "idle_stance");
+    slotDef(S_GCB_resting_pose, "Game_CharacterBase", "resting_pose");
+    slotDef(S_H_GCB_uac_vic, "alias", "update_anime_count_ve_character_control");
+    slotDef(S_H_GCB_uap_vic, "alias", "update_anime_pattern_ve_character_control");
+    slotDef(S_H_GCB_us_vic, "alias", "update_stop_ve_character_control");
+    slotDef(S_H_SC_gc_vic, "alias", "graphic_changed_ve_character_control?");
     slotDef(S_IN_update_hime, "Input.self", "update");
     slotDef(S_IN_update_zale, "Input.self", "update");
     slotDef(S_FFI_call, "MiniFFI", "call");

@@ -9,7 +9,9 @@
 require 'zlib' unless defined?(Zlib)
 
 module HardRPGVXAceScanCache
-  VERSION = 10 # change it whenever a check's result for the same scripts can change
+  # Change it whenever a check's result for the same scripts can change (11: HardRPGOffscreenSprites::SAFE
+  # took Victor Engine's picture methods), or games keep the old answer.
+  VERSION = 11
   MAX_GAMES = 64
 
   @data = nil
@@ -788,9 +790,11 @@ end
 # when a script changes a Sprite_Character method that could do more than pick its picture or place.
 module HardRPGOffscreenSprites
   # Methods a game may change and keep this on: they only choose what a visible sprite shows.
-  # dispose: an update never calls it.
+  # dispose: an update never calls it. The second line: Victor Engine Basic Module / Character
+  # Control's picture steps (pose sheets).
   SAFE = %w[set_character_bitmap update_src_rect update_position move_animation update_bitmap
-            graphic_changed? set_tile_bitmap tileset_bitmap note dispose].freeze
+            graphic_changed? set_tile_bitmap tileset_bitmap note dispose
+            update_character_info set_bitmap set_bitmap_name set_bitmap_position get_sign hue].freeze
   # Known script texts of other methods that only copy the character's look onto the sprite.
   KNOWN = {
     # Hime's Character Sprite Zoom: original update_other, then zoom_x/zoom_y from the character.
