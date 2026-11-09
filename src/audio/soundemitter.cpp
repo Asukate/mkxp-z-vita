@@ -35,6 +35,18 @@
 #endif
 
 #define SE_CACHE_MEM (10*1024*1024) // 10 MB
+#ifdef __vita__
+/* The Vita OpenAL (deps/openal-vita.c) has a fixed number of buffer slots
+ * shared by cached sound effects, the sound effects still playing after
+ * eviction and the BGM/BGS/ME streams. Keep the cache well under it. */
+#define SE_CACHE_MAX_COUNT 192
+/* A sound that left the cache stays in memory while a voice holds it. With
+ * many voices that could pile up without limit, so past this the oldest
+ * such voices stop first (cache + this + one sound bounds SE memory). */
+#define SE_ORPHAN_MEM (16*1024*1024)
+#else
+#define SE_CACHE_MAX_COUNT 100000
+#endif
 
 struct SoundBuffer
 {
@@ -50,7 +62,7 @@ struct SoundBuffer
 	uint32_t bytes;
 
 	/* Reference count */
-	uint8_t refCount;
+	uint16_t refCount; /* cache + every voice can hold one */
 
 	SoundBuffer()
 	    : link(this),
@@ -134,6 +146,39 @@ void SoundEmitter::play(const std::string &filename,
 
 	if (!buffer)
 		return;
+
+#ifdef __vita__
+	/* Release evicted sounds held by stopped voices (inaudible), then stop
+	 * the oldest voices playing evicted sounds while those pass SE_ORPHAN_MEM. */
+	for (;;)
+	{
+		uint64_t orphanBytes = 0;
+		size_t oldest = srcCount;
+		for (size_t p = 0; p < srcCount; ++p)
+		{
+			size_t s = srcPrio[p];
+			SoundBuffer *b = atchBufs[s];
+			if (!b || b == buffer || bufferHash.value(b->key, 0) == b)
+				continue;
+			if (AL::Source::getState(alSrcs[s]) != AL_PLAYING)
+			{
+				AL::Source::detachBuffer(alSrcs[s]);
+				SoundBuffer::deref(b);
+				atchBufs[s] = 0;
+				continue;
+			}
+			orphanBytes += b->bytes;
+			if (oldest == srcCount)
+				oldest = s;
+		}
+		if (orphanBytes <= SE_ORPHAN_MEM || oldest == srcCount)
+			break;
+		AL::Source::stop(alSrcs[oldest]);
+		AL::Source::detachBuffer(alSrcs[oldest]);
+		SoundBuffer::deref(atchBufs[oldest]);
+		atchBufs[oldest] = 0;
+	}
+#endif
 
 	/* Try to find first free source */
 	size_t i;
@@ -232,16 +277,27 @@ SoundBuffer *SoundEmitter::allocateBuffer(const std::string &filename)
 
 	if (buffer)
 	{
-		/* Buffer still in cashe.
-		 * Move to front of priority list */
+		/* Buffer still in cache.
+		 * Move to front of priority list (new buffers are prepended and
+		 * eviction takes the tail, so the front is the most recently used). */
 		buffers.remove(buffer->link);
-		buffers.append(buffer->link);
+		buffers.prepend(buffer->link);
 
 		return buffer;
 	}
 	else
 	{
-		/* Buffer not in cache, needs to be loaded */
+		/* Buffer not in cache, needs to be loaded. Free a cache slot first
+		 * so the new buffer can get an OpenAL buffer. */
+		while (buffers.getSize() >= SE_CACHE_MAX_COUNT && !buffers.isEmpty())
+		{
+			SoundBuffer *last = buffers.tail();
+			bufferHash.remove(last->key);
+			buffers.remove(last->link);
+			bufferBytes -= last->bytes;
+			SoundBuffer::deref(last);
+		}
+
 #ifdef __vita__
 		/* Decoded on another core from this game's load history. */
 		AssetPrefetch::Sound ready;
@@ -275,6 +331,18 @@ SoundBuffer *SoundEmitter::allocateBuffer(const std::string &filename)
 			         filename.c_str(), Sound_GetError());
 			Debug() << buf;
 
+			return 0;
+		}
+
+		if (!buffer->alBuffer.al)
+		{
+			/* No OpenAL buffer slot was free: never cache a silent buffer
+			 * (it would stay silent until evicted). */
+			static bool logged = false;
+			if (!logged)
+				Debug() << "Sound effect skipped, no audio buffer free:" << filename;
+			logged = true;
+			SoundBuffer::deref(buffer);
 			return 0;
 		}
 

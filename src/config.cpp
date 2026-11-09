@@ -202,7 +202,13 @@ void Config::read(int argc, char *argv[]) {
 #endif
         {"midiChorus", false},
         {"midiReverb", false},
+#ifdef __vita__
+        /* RPG Maker itself has no small sound effect limit; 6 voices cut off
+         * sounds in busy scenes (LISA: The Joyful archers, issue 21). */
+        {"SESourceCount", 59},
+#else
         {"SESourceCount", 6},
+#endif
         {"BGMTrackCount", 1},
         {"customScript", ""},
         {"pathCache", true},
@@ -548,6 +554,12 @@ try { exp } catch (...) {}
     rgssVersion = clamp(rgssVersion, 0, 3);
     SE.sourceCount = clamp(SE.sourceCount, 1, 64);
     BGM.trackCount = clamp(BGM.trackCount, 1, 16);
+#ifdef __vita__
+    /* deps/openal-vita.c has 64 sources: keep 4 for BGS, ME and the two movie
+     * players, the rest for BGM tracks and sound effect voices. */
+    BGM.trackCount = clamp(BGM.trackCount, 1, 8);
+    SE.sourceCount = clamp(SE.sourceCount, 1, 64 - 4 - BGM.trackCount);
+#endif
     
     // Determine whether to open a console window on... Windows
     winConsole = getEnvironmentBool("MKXPZ_WINDOWS_CONSOLE", editor.debug);

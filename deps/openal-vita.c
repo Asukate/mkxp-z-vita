@@ -25,8 +25,13 @@
 #define DR_MP3_IMPLEMENTATION
 #include "dr_libs/dr_mp3.h"  /* deps/dr_libs vendored snapshot (MIT-0); add deps/ to include path */
 
-#define MAX_BUFFERS 64
-#define MAX_SOURCES 32
+/* Every cached sound effect keeps one buffer (SoundEmitter caps its cache at
+ * 192), plus one per sound effect voice still playing an evicted sound (up to
+ * 59) and 3 per stream (up to 8 BGM tracks, BGS, ME, two movies): 192+59+36. */
+#define MAX_BUFFERS 320
+/* Sound effect voices, BGM tracks, BGS, ME and movie audio all take sources.
+ * Idle sources cost nothing in the mixer; see src/config.cpp for the split. */
+#define MAX_SOURCES 64
 #define OUT_FREQ 48000
 #define OUT_FRAMES 512
 
@@ -209,6 +214,92 @@ static inline void mix_source_frame(VitaALSource *source, float *left,
     }
 }
 
+/* Called with mixer_mutex held. Mixes n output frames of one source into
+ * mix (interleaved stereo). Gives exactly the samples mix_source_frame gives
+ * frame by frame, but reads the buffer format and step once per buffer
+ * instead of once per sample, so each extra voice costs little. */
+static void mix_source_block(VitaALSource *source, float *mix, int n) {
+    int f = 0;
+    while (f < n && source->state == AL_PLAYING) {
+        VitaALBuffer *buf = source_buffer(source);
+        int frames = buf ? buffer_frames(buf) : 0;
+
+        if (!buf || !buf->data || frames <= 0) {
+            source->state = AL_STOPPED;
+            return;
+        }
+
+        float cur = source->cursor_frames;
+        if (cur < frames) {
+            const float step = ((float)buf->freq / (float)OUT_FREQ) * source->pitch;
+            const float gain = source->gain;
+            const int last = frames - 1;
+            const int start = f;
+            if (buffer_bytes_per_sample(buf) == 2) {
+                const short *d = (const short *)buf->data;
+                if (buffer_channels(buf) == 2) {
+                    while (f < n && cur < frames) {
+                        int i0 = (int)cur;
+                        int i1 = i0 < last ? i0 + 1 : i0;
+                        float frac = cur - i0;
+                        float l0 = d[i0 * 2], l1 = d[i1 * 2];
+                        float r0 = d[i0 * 2 + 1], r1 = d[i1 * 2 + 1];
+                        mix[f * 2] += (l0 + (l1 - l0) * frac) * gain;
+                        mix[f * 2 + 1] += (r0 + (r1 - r0) * frac) * gain;
+                        cur += step;
+                        f++;
+                    }
+                } else {
+                    while (f < n && cur < frames) {
+                        int i0 = (int)cur;
+                        int i1 = i0 < last ? i0 + 1 : i0;
+                        float frac = cur - i0;
+                        float s0 = d[i0], s1 = d[i1];
+                        float v = (s0 + (s1 - s0) * frac) * gain;
+                        mix[f * 2] += v;
+                        mix[f * 2 + 1] += v;
+                        cur += step;
+                        f++;
+                    }
+                }
+            } else {
+                while (f < n && cur < frames) {
+                    int i0 = (int)cur;
+                    int i1 = i0 < last ? i0 + 1 : i0;
+                    float frac = cur - i0;
+                    float l0 = buffer_sample(buf, i0, 0), l1 = buffer_sample(buf, i1, 0);
+                    float r0 = buffer_sample(buf, i0, 1), r1 = buffer_sample(buf, i1, 1);
+                    mix[f * 2] += (l0 + (l1 - l0) * frac) * gain;
+                    mix[f * 2 + 1] += (r0 + (r1 - r0) * frac) * gain;
+                    cur += step;
+                    f++;
+                }
+            }
+            source->cursor_frames = cur;
+            source->played_output_frames += (uint64_t)(f - start);
+            continue;
+        }
+
+        /* End of this buffer: the same steps as mix_source_frame. */
+        source->cursor_frames -= frames;
+        source->current_buffer = NULL;
+        if (source->attached_buffer) {
+            if (!source->looping) {
+                source->state = AL_STOPPED;
+                source->cursor_frames = 0.0f;
+                return;
+            }
+        } else {
+            source->processed_count++;
+            if (source->processed_count >= source->queued_count) {
+                source->state = AL_STOPPED;
+                source->cursor_frames = 0.0f;
+                return;
+            }
+        }
+    }
+}
+
 static short clamp_sample(float sample) {
     if (sample > 32767.0f) return 32767;
     if (sample < -32768.0f) return -32768;
@@ -231,10 +322,23 @@ static short boosted_sample(float sample, float gain) {
     return clamp_sample(v);
 }
 
+/* Mixer timing, written every 256 blocks (~2.7 s) to ux0:/data/openal-mixer.log
+ * when ux0:/data/hardrpg/enable-mixer-stats exists at start. Off otherwise. */
+static int mixer_stats_wanted(void) {
+    static int wanted = -1;
+    if (wanted < 0)
+        wanted = (access("ux0:/data/hardrpg/enable-mixer-stats", F_OK) == 0);
+    return wanted;
+}
+
 static void *audio_mixer_main(void *unused) {
     (void)unused;
     short output[OUT_FRAMES * 2];
     float mix[OUT_FRAMES * 2];
+    const int stats = mixer_stats_wanted();
+    const double us_per_tick = 1e6 / (double)SDL_GetPerformanceFrequency();
+    unsigned blocks = 0, max_voices = 0;
+    double sum_us = 0, max_us = 0;
 
     for (;;) {
         pthread_mutex_lock(&mixer_mutex);
@@ -243,18 +347,16 @@ static void *audio_mixer_main(void *unused) {
             break;
         }
 
+        Uint64 t0 = stats ? SDL_GetPerformanceCounter() : 0;
+        unsigned voices = 0;
         memset(mix, 0, sizeof(mix));
         /* Keep each active source hot in cache for a whole output block.
-         * Scanning all 32 source slots for every one of 512 frames cost about
+         * Scanning every source slot for each of 512 frames cost about
          * 1.5 million slot checks per second on Vita even with one BGM. */
         for (int i = 0; i < MAX_SOURCES; i++) {
             if (sources[i].in_use && sources[i].state == AL_PLAYING) {
-                for (int frame = 0;
-                     frame < OUT_FRAMES && sources[i].state == AL_PLAYING;
-                     frame++) {
-                    mix_source_frame(&sources[i], &mix[frame * 2],
-                                     &mix[frame * 2 + 1]);
-                }
+                mix_source_block(&sources[i], mix, OUT_FRAMES);
+                voices++;
             }
         }
         const float gain = listener_gain;
@@ -268,6 +370,23 @@ static void *audio_mixer_main(void *unused) {
                 output[i] = boosted_sample(mix[i], gain);
         }
         pthread_mutex_unlock(&mixer_mutex);
+
+        if (stats) {
+            double us = (double)(SDL_GetPerformanceCounter() - t0) * us_per_tick;
+            sum_us += us;
+            if (us > max_us) max_us = us;
+            if (voices > max_voices) max_voices = voices;
+            if (++blocks == 256) {
+                FILE *lf = fopen("ux0:/data/openal-mixer.log", "a");
+                if (lf) {
+                    fprintf(lf, "blocks=256 max_voices=%u mix_avg_us=%.0f mix_max_us=%.0f budget_us=%.0f\n",
+                            max_voices, sum_us / 256.0, max_us, OUT_FRAMES * 1e6 / OUT_FREQ);
+                    fclose(lf);
+                }
+                blocks = max_voices = 0;
+                sum_us = max_us = 0;
+            }
+        }
 
         if (!out_dev || SDL_GetAudioDeviceStatus(out_dev) == SDL_AUDIO_PAUSED) {
             usleep(10000);
