@@ -76,7 +76,9 @@ private:
   std::string displayData;
   FT_Face display = nullptr;
   // Japanese and Chinese characters the other fonts lack: WenQuanYi Micro Hei,
-  // opened on first use and read from the file as needed.
+  // read into memory on first use (reading glyphs from app0: as needed stalls
+  // the first Japanese or Chinese screens for seconds).
+  std::string cjkData;
   FT_Face cjk = nullptr;
   bool cjkTried = false;
   FT_Face cjkFace();

@@ -397,7 +397,9 @@ int View::measure(const std::string &s, int size, bool alt) {
 }
 
 void View::label(int x, int y, const std::string &s, int size, Color color, int alpha, bool alt, int align, int maxWidth) {
-  if (glyphBytes > 2 * 1024 * 1024 || glyphCache.size() > 2048) {
+  /* Japanese and Chinese screens use far more distinct glyphs than the Latin ones; a smaller
+   * cache emptied itself mid-screen and redrew every glyph each frame. */
+  if (glyphBytes > 6 * 1024 * 1024 || glyphCache.size() > 8192) {
     glyphCache.clear();
     glyphBytes = 0;
   }

@@ -47,9 +47,17 @@ View::~View() {
 FT_Face View::cjkFace() {
   if (!cjkTried) {
     cjkTried = true;
-    for (auto path : {assets + "font-cjk.ttf", std::string("assets/wqymicrohei.ttf")})
-      if (!cjk && FT_New_Face(library, path.c_str(), 0, &cjk))
+    for (auto path : {assets + "font-cjk.ttf", std::string("assets/wqymicrohei.ttf")}) {
+      if (cjk)
+        break;
+      cjkData = readFile(path, 16u * 1024 * 1024);
+      if (cjkData.empty() ||
+          FT_New_Memory_Face(library, reinterpret_cast<const FT_Byte *>(cjkData.data()),
+                             cjkData.size(), 0, &cjk)) {
         cjk = nullptr;
+        cjkData.clear();
+      }
+    }
   }
   return cjk;
 }
