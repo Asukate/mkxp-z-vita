@@ -53,6 +53,7 @@ int sceKernelAllocMemBlock(const char*,int,size_t n,void*) {
 }
 int sceKernelGetMemBlockBase(int uid,void **p){*p=blocks.at(uid);return 0;}
 int sceKernelFreeMemBlock(int uid){std::free(blocks.at(uid));blocks.erase(uid);++frees;return 0;}
+int sceKernelDelayThread(unsigned){return 0;}
 int sceGxmMapMemory(void*,size_t,int){if(map_fail)return -1;++maps;return 0;}
 int sceGxmUnmapMemory(void*){++unmaps;return 0;}
 extern "C" void *vglMalloc(uint32_t n){return pool_allowed?std::malloc(n):nullptr;}
