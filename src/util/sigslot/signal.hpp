@@ -1179,6 +1179,24 @@ public:
         // a copy may occur if another thread writes to it.
         cow_copy_type<list_type, Lockable> ref = slots_reference();
 
+        if (!is_thread_safe<Lockable>::value) {
+            /* HardRPG: without a lock `ref` is the live list, not a copy. A slot
+             * that connects or disconnects another while it runs (a sprite or
+             * bitmap made or freed inside prepareDraw) reallocates it or swaps
+             * the last slot into a freed place and pops it, so range-for went on
+             * to read a destroyed slot (a null pointer: ScreenScene::composite
+             * crash in Pokemon Uranium). Index and size are read again each step. */
+            const list_type &groups = detail::cow_read(ref);
+            for (size_t g = 0; g < groups.size(); ++g) {
+                for (size_t i = 0; i < groups[g].slts.size(); ++i) {
+                    const slot_ptr s = groups[g].slts[i]; /* kept alive while it runs */
+                    if (s)
+                        s->operator()(a...);
+                }
+            }
+            return;
+        }
+
         for (const auto &group : detail::cow_read(ref)) {
             for (const auto &s : group.slts) {
                 s->operator()(a...);
