@@ -14,6 +14,17 @@
 # The engine Plane tiles on the GPU. Only the known LargePlane texts are replaced.
 #
 # Set $hardrpg_essentials_natives = false in a per-game shim to keep every method in Ruby.
+# Pokemon Essentials, found once from the game's scripts before they run. Everything here and
+# the engine's Essentials memory rules stay off for other games.
+module HardRPGEssentialsGame
+  def self.on?
+    return @on unless @on.nil?
+    @on = ($RGSS_SCRIPTS || []).any? { |s| s.is_a?(Array) && s[3].is_a?(String) && s[3].include?('class PokeBattle_Battler') }
+  end
+end
+HardRPGEssentialsNative.memory_rules if HardRPGEssentialsGame.on? && defined?(HardRPGEssentialsNative) &&
+                                        HardRPGEssentialsNative.respond_to?(:memory_rules)
+
 module HardRPGEssentialsNatives
   # "Class#method:crc32:bytes" of the normalized text => native variant.
   KNOWN = {
@@ -159,7 +170,7 @@ module HardRPGEssentialsNatives
     end
 
     def check
-      return false if $hardrpg_essentials_natives == false
+      return false if $hardrpg_essentials_natives == false || !HardRPGEssentialsGame.on?
       return false unless defined?(HardRPGEssentialsNative) && defined?(HardRPGNative::Norm)
       changed = false
       bridge_ok = nil

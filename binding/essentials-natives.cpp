@@ -17,6 +17,9 @@
 */
 
 #include "binding-util.h"
+#ifdef __vita__
+extern "C" volatile int vitaEssentialsMemory;
+#endif
 #include "table.h"
 
 #include <math.h>
@@ -939,6 +942,15 @@ VALUE nevVariants(VALUE, VALUE key) {
     return a;
 }
 
+/* HardRPGEssentialsNative.memory_rules: turn on the Essentials memory rules (Ruby heap pages from
+ * kernel blocks, collections for pixel memory). Called once by essentials_natives.rb. */
+VALUE nevMemoryRules(VALUE) {
+#ifdef __vita__
+    vitaEssentialsMemory = 1;
+#endif
+    return Qnil;
+}
+
 } // namespace
 
 void essentialsNativesInit(int rgssVersion) {
@@ -989,4 +1001,5 @@ void essentialsNativesInit(int rgssVersion) {
     rb_define_singleton_method(m, "restore", RUBY_METHOD_FUNC(nevRestore), 2);
     rb_define_singleton_method(m, "stats", RUBY_METHOD_FUNC(nevStats), 0);
     rb_define_singleton_method(m, "variants", RUBY_METHOD_FUNC(nevVariants), 1);
+    rb_define_singleton_method(m, "memory_rules", RUBY_METHOD_FUNC(nevMemoryRules), 0);
 }

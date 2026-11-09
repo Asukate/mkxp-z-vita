@@ -97,6 +97,8 @@ long vitaReleaseGameImageCache()
  * rb_gc_adjust_memory_usage: its malloc limit then starts the usual (minor) collections. Done only
  * at a safe point, never from the allocator itself. */
 extern "C" uint32_t vitaPixelBlockBytes(void); /* SDL shim, lock-free */
+/* Pokemon Essentials games only (essentials-natives.cpp); other games keep Ruby's own pacing. */
+extern "C" volatile int vitaEssentialsMemory;
 static unsigned long long g_bitmapBytesPending = 0;
 void vitaNoteBitmapBytes(unsigned long long bytes) { g_bitmapBytesPending += bytes; }
 static VALUE vitaReportBitmapBytesBody(VALUE bytes)
@@ -118,6 +120,10 @@ static VALUE vitaMinorCollect(VALUE)
 }
 static bool vitaReportBitmapBytes()
 {
+  if (!vitaEssentialsMemory) {
+    g_bitmapBytesPending = 0;
+    return true;
+  }
   if (g_bitmapBytesPending < 256u * 1024) return true;
   const unsigned long long bytes = g_bitmapBytesPending;
   g_bitmapBytesPending = 0;
@@ -218,7 +224,7 @@ void vitaGpuPressureSafePoint(const char *phase)
      * out-of-memory). Collect before that: minor first, a full one if that freed too little. */
     const uint32_t blockBytes = vitaPixelBlockBytes();
     const uint64_t nowUs = sceKernelGetProcessTimeWide();
-    if (blockBytes >= 44u * 1024 * 1024 && nowUs - lastMinorUs >= 250000) {
+    if (vitaEssentialsMemory && blockBytes >= 44u * 1024 * 1024 && nowUs - lastMinorUs >= 250000) {
       static uint64_t lastFullUs = 0;
       collecting = true;
       int state = 0;
@@ -233,7 +239,7 @@ void vitaGpuPressureSafePoint(const char *phase)
       if (state) rb_set_errinfo(Qnil);
       return;
     }
-    if (Bitmap::cpuPixelBytes() >= cpuAfterMinor + 12u * 1024 * 1024 &&
+    if (vitaEssentialsMemory && Bitmap::cpuPixelBytes() >= cpuAfterMinor + 12u * 1024 * 1024 &&
         nowUs - lastMinorUs >= 250000) {
       collecting = true;
       int state = 0;

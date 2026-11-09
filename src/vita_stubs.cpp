@@ -1307,6 +1307,9 @@ void *__wrap_realloc(void *o, size_t n)
  * (Pokemon Uranium). Kernel blocks are not fragmented by small allocations. Pool pages are
  * reused, never returned; if the kernel has no block left, the C heap is used as before. */
 void __real_free(void *);
+/* Set for Pokemon Essentials games only (HardRPGEssentialsNative.memory_rules): elsewhere the
+ * pool would take kernel memory the pixel blocks need (Pocket Mirror's 50 MB pictures). */
+extern "C" { volatile int vitaEssentialsMemory = 0; }
 static const size_t kRubyPage = 16384;
 static const size_t kPoolChunk = 1024 * 1024;
 static struct { uintptr_t lo, hi; } rubyPoolChunks[96];
@@ -1368,7 +1371,7 @@ void __wrap_free(void *ptr)
 }
 void *__wrap_memalign(size_t a, size_t n)
 {
-    if (a == kRubyPage && n == kRubyPage) {
+    if (vitaEssentialsMemory && a == kRubyPage && n == kRubyPage) {
         rubyPoolEnter();
         if (!rubyPoolFree)
             rubyPoolGrow();
