@@ -146,7 +146,7 @@ void fillShape(Canvas &cv, const std::vector<std::array<float, 2>> &pts, int alp
 void View::centredLabel(float cx, float cy, const std::string &text, int size) {
   FT_Set_Pixel_Sizes(face, 0, size);
   const int ascender = face->size->metrics.ascender >> 6;
-  const int capital = glyph(size, FT_Get_Char_Index(face, 'H')).top;
+  const int capital = glyph(size, GlyphRef{0, FT_Get_Char_Index(face, 'H')}).top;
   const int y = int(std::lround(cy + capital / 2.f)) - ascender;
   label(int(std::lround(cx)), y + 1, text, size, {0, 0, 0}, 110, false, 0);
   label(int(std::lround(cx)), y, text, size, ink, inkAlpha, false, 0);
