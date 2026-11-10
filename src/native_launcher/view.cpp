@@ -50,7 +50,11 @@ FT_Face View::cjkFace() {
     for (auto path : {assets + "font-cjk.ttf", std::string("assets/wqymicrohei.ttf")}) {
       if (cjk)
         break;
-      cjkData = readFile(path, 16u * 1024 * 1024);
+      try {
+        cjkData = readFile(path, 16u * 1024 * 1024);
+      } catch (const std::exception &) {
+        cjkData.clear();
+      }
       if (cjkData.empty() ||
           FT_New_Memory_Face(library, reinterpret_cast<const FT_Byte *>(cjkData.data()),
                              cjkData.size(), 0, &cjk)) {
