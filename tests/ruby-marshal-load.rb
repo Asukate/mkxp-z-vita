@@ -44,6 +44,7 @@ check('binary array') { a = ['44dfedf8f152a1a39d011285b9c9f1d55d5c938165e78a5317
 check('binary struct') { S = Struct.new(:v); o = S.new('1c5ea4f8f8d614afec24302aa90e201ecbad1826b57a1c7d7244b9a9d098f5ef'.b); Marshal.load(Marshal.dump(o)).v == o.v }
 check('binary nested') { a = [['aaffc487c8fa217bb291450f33d3b991453c1c9018b78197af00a2f02845d528'.b]]; Marshal.load(Marshal.dump(a)) == a }
 check('binary pair') { a = ['b31d47773a0a753b043fedeee646e1cd67624c27829eb14aee279f7ae8b5c89d'.b, ['b31d47773a0a753b043fedeee646e1cd67624c27829eb14aee279f7ae8b5c89d'.b]]; Marshal.load(Marshal.dump(a)) == a }
+check('binary deep') { a = ['6a24880b08919eb212501a007e31e40ecae89310af31958b4a10ad0725827b0f'.b, ['6a24880b08919eb212501a007e31e40ecae89310af31958b4a10ad0725827b0f'.b]]; Marshal.load(Marshal.dump(a)) == a }
 check('values') { loaded[1][19_999].code == 19_999 % 400 && loaded[1][19_999].parameters[3] == '19999' }
 
 # Cycles, user-defined dump formats, and compat loaders (Rational, Complex).

@@ -532,7 +532,7 @@ Games, captured on a PS Vita running HardRPG 0.3.0:
   </tr>
 </table>
 
-<!-- 1677d7ed4073371b81820ed6e5b4c44ee637dc53d5a9d89425c27435a3f150a9 -->
+<!-- 9256bfe7e397fc040da8e74e0ddedd933ceacc5dac3f98d7d5153d82d69ae552 -->
 
 ## Building
 
