@@ -364,6 +364,42 @@ int SDL_VitaGetImageCrop(const SDL_Surface *surface, SDL_VitaImageCrop *crop) {
     *crop = *(const SDL_VitaImageCrop *)surface->userdata;
     return 1;
 }
+
+#define VITA_SURFACE_BANDED_IMAGE 0x10000000u
+
+const SDL_VitaImageBands *SDL_VitaGetImageBands(const SDL_Surface *surface) {
+    if (!surface || !(surface->flags & VITA_SURFACE_BANDED_IMAGE) || !surface->userdata)
+        return NULL;
+    return (const SDL_VitaImageBands *)surface->userdata;
+}
+
+static void vita_free_band(SDL_VitaImageBand *band) {
+    if (!band->pixels)
+        return;
+    if (band->fromPool)
+        vita_big_free(band->pixels);
+    else
+        free(band->pixels);
+    band->pixels = NULL;
+}
+
+void SDL_VitaReleaseImageBand(SDL_Surface *surface, int index) {
+    SDL_VitaImageBands *bands;
+    if (!surface || !(surface->flags & VITA_SURFACE_BANDED_IMAGE) || !surface->userdata)
+        return;
+    bands = (SDL_VitaImageBands *)surface->userdata;
+    if (index >= 0 && index < bands->count)
+        vita_free_band(&bands->band[index]);
+}
+
+static void vita_free_bands(SDL_VitaImageBands *bands) {
+    int i;
+    if (!bands)
+        return;
+    for (i = 0; i < bands->count; ++i)
+        vita_free_band(&bands->band[i]);
+    free(bands);
+}
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -875,8 +911,128 @@ static int vita_png_scan_crop(png_structp png, unsigned width, unsigned height,
     return 1;
 }
 
+#define VITA_BAND_ROWS 128
+
+/* Bands built so far, freed if libpng bails out mid-image. */
+static SDL_VitaImageBands *vita_bands_pending;
+
+
+/* Keeps the columns of a staged band that differ from a transparent
+ * background (4 texels of it kept around them, as for a crop), or all of them
+ * for an opaque one. Returns 0 when the band shows nothing. */
+static int vita_band_extent(const unsigned char *rows, unsigned width, int count,
+                            Uint32 background, int *left, int *right) {
+    int r;
+    unsigned x;
+    if (background >> 24) {
+        *left = 0;
+        *right = (int)width;
+        return 1;
+    }
+    *left = (int)width;
+    *right = 0;
+    for (r = 0; r < count; ++r) {
+        const unsigned char *row = rows + (size_t)r * width * 4u;
+        for (x = 0; x < width; ++x) {
+            Uint32 pixel;
+            memcpy(&pixel, row + x * 4u, 4);
+            if (pixel != background) {
+                if ((int)x < *left) *left = x;
+                if ((int)x + 1 > *right) *right = x + 1;
+            }
+        }
+    }
+    if (*right <= *left)
+        return 0;
+    *left = *left > 4 ? *left - 4 : 0;
+    *right = *right + 4 < (int)width ? *right + 4 : (int)width;
+    return 1;
+}
+
+/* One pass over the rows: each band (its rows plus one above and below) is
+ * staged at full width, trimmed, and copied into an allocation of its own. */
+static SDL_Surface *vita_png_decode_bands(png_structp png, unsigned width, unsigned height,
+                                          unsigned char *staging) {
+    const int count = (int)((height + VITA_BAND_ROWS - 1) / VITA_BAND_ROWS);
+    const size_t rowbytes = (size_t)width * 4u;
+    SDL_VitaImageBands *bands;
+    SDL_Surface *surface;
+    Uint32 background = 0;
+    int k, staged = 0, stagedTop = 0;
+    bands = (SDL_VitaImageBands *)calloc(1, sizeof(*bands) + sizeof(SDL_VitaImageBand) * count);
+    if (!bands)
+        return NULL;
+    bands->logicalWidth = (int)width;
+    bands->logicalHeight = (int)height;
+    vita_bands_pending = bands;
+    for (k = 0; k < count; ++k) {
+        const int ownTop = k * VITA_BAND_ROWS;
+        const int ownBottom = ownTop + VITA_BAND_ROWS < (int)height ? ownTop + VITA_BAND_ROWS : (int)height;
+        const int top = ownTop > 0 ? ownTop - 1 : 0;
+        const int bottom = ownBottom < (int)height ? ownBottom + 1 : (int)height;
+        int left, right;
+        /* Keep the rows this band shares with the previous one. */
+        if (staged && stagedTop < top) {
+            const int drop = top - stagedTop;
+            memmove(staging, staging + (size_t)drop * rowbytes, (size_t)(staged - drop) * rowbytes);
+            staged -= drop;
+            stagedTop = top;
+        }
+        while (stagedTop + staged < bottom) {
+            png_read_row(png, staging + (size_t)staged * rowbytes, NULL);
+            if (!k && !staged)
+                memcpy(&background, staging, 4);
+            ++staged;
+        }
+        if (vita_band_extent(staging, width, bottom - top, background, &left, &right)) {
+            SDL_VitaImageBand *band = &bands->band[bands->count];
+            int r;
+            band->x = left;
+            band->y = top;
+            band->width = right - left;
+            band->height = bottom - top;
+            band->ownTop = ownTop;
+            band->ownBottom = ownBottom;
+            band->pixels = vita_alloc_pixels((size_t)band->height, (size_t)band->width * 4u,
+                                             &band->fromPool, 1);
+            if (!band->pixels) {
+                vita_bands_pending = NULL;
+                vita_free_bands(bands);
+                return NULL;
+            }
+            ++bands->count;
+            for (r = 0; r < band->height; ++r)
+                memcpy((unsigned char *)band->pixels + (size_t)r * band->width * 4u,
+                       staging + (size_t)r * rowbytes + (size_t)left * 4u, (size_t)band->width * 4u);
+        }
+    }
+    vita_bands_pending = NULL;
+    bands->background = background;
+    if (!bands->count) {
+        /* Nothing differs from the background: one 1x1 band of it. */
+        SDL_VitaImageBand *band = &bands->band[0];
+        band->width = band->height = 1;
+        band->pixels = malloc(4);
+        if (!band->pixels) {
+            vita_free_bands(bands);
+            return NULL;
+        }
+        memcpy(band->pixels, &background, 4);
+        bands->count = 1;
+    }
+    surface = vita_make_surface(1, 1, 0);
+    if (!surface) {
+        vita_free_bands(bands);
+        return NULL;
+    }
+    surface->userdata = bands;
+    surface->flags |= VITA_SURFACE_BANDED_IMAGE;
+    return surface;
+}
+
 static SDL_Surface *vita_png_decode(SDL_RWops *source, size_t size,
-                                    int allow_sparse, const SDL_VitaImageCrop *requested) {
+                                    int allow_sparse, const SDL_VitaImageCrop *requested,
+                                    int banded) {
     png_structp png = NULL;
     png_infop info = NULL;
     /* These values change after setjmp and must survive a libpng longjmp. */
@@ -899,6 +1055,8 @@ static SDL_Surface *vita_png_decode(SDL_RWops *source, size_t size,
     if (setjmp(png_jmpbuf(png))) {
         vita_img_set_error(reader.failed ? "incomplete image stream read" : "PNG decode failed");
         free(rows); free(scratch);
+        vita_free_bands(vita_bands_pending);
+        vita_bands_pending = NULL;
         if (surface) SDL_FreeSurface(surface);
         png_destroy_read_struct(&png, &info, NULL);
         return NULL;
@@ -928,6 +1086,28 @@ static SDL_Surface *vita_png_decode(SDL_RWops *source, size_t size,
         png_destroy_read_struct(&png, &info, NULL);
         return NULL;
     }
+    if (banded) {
+        SDL_Surface *result;
+        if (interlace != PNG_INTERLACE_NONE) {
+            vita_img_set_error("out of memory allocating PNG pixels");
+            png_destroy_read_struct(&png, &info, NULL);
+            return NULL;
+        }
+        scratch = (png_bytep)malloc((size_t)rowbytes * (VITA_BAND_ROWS + 2));
+        if (!scratch) {
+            vita_img_set_error("out of memory allocating PNG bands");
+            png_destroy_read_struct(&png, &info, NULL);
+            return NULL;
+        }
+        result = vita_png_decode_bands(png, width, height, scratch);
+        free(scratch); scratch = NULL;
+        if (result)
+            png_read_end(png, NULL);
+        else
+            vita_img_set_error("out of memory allocating PNG bands");
+        png_destroy_read_struct(&png, &info, NULL);
+        return result;
+    }
     surface = vita_make_surface(requested ? requested->width : (int)width,
                                 requested ? requested->height : (int)height,
                                 allow_sparse || requested);
@@ -942,8 +1122,17 @@ static SDL_Surface *vita_png_decode(SDL_RWops *source, size_t size,
         }
         free(scratch); scratch = NULL;
         png_destroy_read_struct(&png, &info, NULL);
-        if (found && SDL_RWseek(source, origin, RW_SEEK_SET) == origin)
-            return vita_png_decode(source, size, 0, &crop);
+        if (found && SDL_RWseek(source, origin, RW_SEEK_SET) == origin) {
+            SDL_Surface *cropped = vita_png_decode(source, size, 0, &crop, 0);
+            if (cropped)
+                return cropped;
+        }
+        /* Neither fits in one piece: bands of small separate allocations. */
+        if (SDL_RWseek(source, origin, RW_SEEK_SET) == origin) {
+            SDL_Surface *bandedSurface = vita_png_decode(source, size, 0, NULL, 1);
+            if (bandedSurface)
+                return bandedSurface;
+        }
         vita_image_failure("PNG surface/pixels", width, height, size);
         vita_img_set_error("out of memory allocating PNG pixels");
         return NULL;
@@ -1066,7 +1255,7 @@ SDL_Surface *IMG_LoadTyped_RW(SDL_RWops *src, int freesrc, const char *type) {
             /* Read PNG chunks directly from the archive/file. Pocket Mirror's
              * corridor PNG is 16 MB on disk: retaining a full compressed copy
              * alongside the output pixels needlessly consumes scarce C heap. */
-            surface = vita_png_decode(src, (size_t)length, type && !strcmp(type, "VITA_BITMAP"), NULL);
+            surface = vita_png_decode(src, (size_t)length, type && !strcmp(type, "VITA_BITMAP"), NULL, 0);
             if (freesrc) SDL_RWclose(src);
             return surface;
         }
@@ -1314,6 +1503,8 @@ void SDL_FreeSurface(SDL_Surface *surface) {
     if (!surface) return;
     if (surface->flags & VITA_SURFACE_CROPPED_IMAGE)
         free(surface->userdata);
+    else if (surface->flags & VITA_SURFACE_BANDED_IMAGE)
+        vita_free_bands((SDL_VitaImageBands *)surface->userdata);
     if (surface->flags & VITA_SURFACE_POOL_PIXELS)
         vita_big_free(surface->pixels);
     else if (!(surface->flags & SDL_PREALLOC))

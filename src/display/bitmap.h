@@ -184,6 +184,11 @@ public:
 	/* Binds the backing texture and sets the correct
 	 * texture size uniform in shader */
 	void bindTex(ShaderBase &shader, bool substituteLoresSize = true, bool allowImageCrop = false);
+	/* Banded images (too large for one allocation; Vita): bands to draw one
+	 * at a time, after bindTex with allowImageCrop. 0 for any other bitmap. */
+	int imageBandCount() const;
+	void imageBandRows(int index, int &ownTop, int &ownBottom) const;
+	void bindImageBand(ShaderBase &shader, int index);
 	/* Draw the visible part of oversized CPU contents with bounded textures.
 	 * Returns false when the ordinary texture path should be used. */
 	bool drawCpuWindow(ShaderBase &shader, const IntRect &visible, float opacity);
@@ -209,6 +214,8 @@ public:
 	/* Frees kept images, oldest first, until this much graphics memory is
 	 * free or none are left; true if any were freed. Under GFX_LOCK. */
 	static bool trimReusedImages(size_t wantFree);
+	/* Lets go of kept images of 8 MB or more while kernel memory is short (Vita). */
+	static void trimReusedForKernel();
 	static void frameTick();
 	static bool cpuPixelsNearBudget();
 	/* True once after a bitmap could not get graphics memory while drawing

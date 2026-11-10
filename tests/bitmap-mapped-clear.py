@@ -19,6 +19,8 @@ static unsigned fences;
 struct{void Finish(){completed=true;++fences;}}gl;
 static void *storage;
 void *vglGetTexDataPointerByID(unsigned){assert(completed);return storage;}
+static bool banded;
+static bool bandsCurrent(BitmapPrivate *){return banded;}
 '''+body+r'''
 int main(){
  std::vector<unsigned> pixels(1024*1024,0xdeadbeef);storage=pixels.data();
@@ -32,6 +34,7 @@ int main(){
  assert(clearMappedImage(&p,Vec4()));assert(p.imageCrop.background==0&&fences==2);
  assert(std::all_of(pixels.begin(),pixels.begin()+16,[](unsigned v){return v==0;}));
  assert(pixels[16]==0xffffffff);
+ banded=true;assert(!clearMappedImage(&p,Vec4()));banded=false; // bands clear through the full texture
  p.imageCrop=ImageCrop();assert(!clearMappedImage(&p,Vec4()));
  p.gl.width=1024;p.gl.height=1024;p.cpu=&p;assert(!clearMappedImage(&p,Vec4()));p.cpu=nullptr;
  Vec4 nonzero;nonzero.w=1;assert(!clearMappedImage(&p,nonzero));

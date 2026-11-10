@@ -16,11 +16,15 @@ struct Exception : std::runtime_error { enum {MKXPError};Exception(int,const cha
 static int fences;
 struct {void Finish(){++fences;}} gl;
 static const void *storage;
-const void *vglGetTexDataPointerByID(unsigned){return storage;}
+static const void *bandStorage[3];
+const void *vglGetTexDataPointerByID(unsigned id){return id>=10?bandStorage[id-10]:storage;}
+struct ImageBand { struct {struct {unsigned gl;} tex;} tex; ImageCrop crop; int ownTop,ownBottom; };
 struct Private {
  void *cpu=nullptr;ImageCrop imageCrop;uint32_t contentVersion=0,directReadVersion=~0u;
  struct {int width,height;struct {unsigned gl=1;} tex;} gl;
+ std::vector<ImageBand> bands;
 };
+static bool bandsCurrent(Private *p){return !p->bands.empty();}
 struct Bitmap {
  Private *p;int width()const{return p->imageCrop.active()?p->imageCrop.logicalWidth:p->gl.width;}
  int height()const{return p->imageCrop.active()?p->imageCrop.logicalHeight:p->gl.height;}
@@ -40,6 +44,18 @@ int main(){
  p.gl.width=3;p.gl.height=2;pixels[8+2]=0xff123456;
  c=b.read(15,18);assert(c.r==86&&c.g==52&&c.b==18&&c.a==255);
  c=b.read(0,0);assert(c.r==255&&c.g==255&&c.b==255&&c.a==0);
+ // Banded: each row reads its own band; rows of no band and columns outside are background.
+ std::vector<uint32_t> band0(4*3,0xff000001),band1(8*4,0xff000002);band1[8*1+1]=0xffabcdef;
+ bandStorage[0]=band0.data();bandStorage[1]=band1.data();
+ ImageBand a{};a.tex.tex.gl=10;a.crop=p.imageCrop;a.crop.x=100;a.crop.y=0;a.crop.width=4;a.crop.height=3;a.ownTop=0;a.ownBottom=2;
+ ImageBand d{};d.tex.tex.gl=11;d.crop=p.imageCrop;d.crop.x=200;d.crop.y=255;d.crop.width=5;d.crop.height=4;d.ownTop=256;d.ownBottom=258;
+ p.bands={a,d};p.imageCrop=a.crop;
+ c=b.read(101,1);assert(c.r==1&&c.a==255);
+ c=b.read(201,256);assert(c.r==0xef&&c.g==0xcd&&c.b==0xab);
+ c=b.read(200,257);assert(c.r==2);
+ c=b.read(150,1);assert(c.r==255&&c.a==0);
+ c=b.read(101,100);assert(c.r==255&&c.g==255&&c.b==255&&c.a==0);
+ p.bands.clear();
  storage=nullptr;try{b.read(0,0);assert(false);}catch(const Exception &){}
  puts("PASS: real large-image get_pixel path reads one mapped texel, padded rows and hidden RGB, fences once per content version, no full readback");
 }

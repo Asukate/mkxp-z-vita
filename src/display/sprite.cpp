@@ -45,6 +45,7 @@
 #include <SDL_rect.h>
 
 #include <string.h>
+#include <algorithm>
 #include <vector>
 #include <memory>
 
@@ -486,6 +487,43 @@ struct SpritePrivate
         vert += 4;
     }
     
+    /* A banded bitmap (Bitmap::imageBandCount): one quad per band, each
+     * covering only the rows that band shows. */
+    SimpleQuadArray bandQuads;
+
+    void drawBands(Bitmap *source, ShaderBase &shader, bool smooth)
+    {
+        const FloatRect src = adjustedSrcRect;
+        const int count = source->imageBandCount();
+        std::vector<int> drawn;
+        drawn.reserve(count);
+        bandQuads.resize(count);
+        for (int i = 0; i < count; ++i)
+        {
+            int top, bottom;
+            source->imageBandRows(i, top, bottom);
+            const float r0 = std::max<float>(top, src.y);
+            const float r1 = std::min<float>(bottom, src.y + src.h);
+            if (r1 <= r0)
+                continue;
+            FloatRect tex(src.x, r0, src.w, r1 - r0);
+            if (mirrored)
+                tex = tex.hFlipped();
+            Quad::setTexPosRect(&bandQuads.vertices[drawn.size() * 4], tex,
+                                FloatRect(0, r0 - src.y, src.w, r1 - r0));
+            drawn.push_back(i);
+        }
+        if (drawn.empty())
+            return;
+        bandQuads.commit();
+        for (size_t k = 0; k < drawn.size(); ++k)
+        {
+            source->bindImageBand(shader, drawn[k]);
+            TEX::setSmooth(smooth);
+            bandQuads.draw(k, 1);
+        }
+    }
+
     void updateWave()
     {
         wave.dirty = false;
@@ -1089,8 +1127,11 @@ void Sprite::draw()
     glState.blendMode.pushSet(p->blendType);
     
     Bitmap *renderBitmap = p->megaBitmap ? p->megaBitmap.get() : p->bitmap;
+    const bool cropDraw = scalingMethod == NearestNeighbor || scalingMethod == Bilinear;
+    /* Bands draw only as plain quads; a wave makes the full texture first. */
+    const bool bandDraw = cropDraw && !p->wave.active && renderBitmap->imageBandCount() > 0;
     renderBitmap->bindTex(*base, false,
-                          scalingMethod == NearestNeighbor || scalingMethod == Bilinear);
+                          cropDraw && (bandDraw || renderBitmap->imageBandCount() == 0));
 
 #ifdef MKXPZ_SSL
     if (scalingMethod == xBRZ)
@@ -1104,6 +1145,8 @@ void Sprite::draw()
 
     if (p->wave.active)
         p->wave.qArray.draw();
+    else if (bandDraw)
+        p->drawBands(renderBitmap, *base, scalingMethod == Bilinear);
     else
     {
         /* S36 Part B: one-shot no-Viewport sprite geometry capture.

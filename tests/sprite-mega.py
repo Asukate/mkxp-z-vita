@@ -53,7 +53,10 @@ struct SimpleQuadArray {
  int quadCount=0;std::vector<SVertex> vertices;
  void resize(int n){quadCount=n;vertices.resize(n*4);}
  void commit(){}
+ void draw(size_t,size_t){}
 };
+struct ShaderBase {};
+namespace TEX { inline void setSmooth(bool){} }
 struct {sigslot::signal_st<> prepareDraw;} shared;
 auto *shState=&shared;
 static float fwrap(float v,float r){float f=fmod(v,r);return f<0?f+r:f;}
@@ -72,6 +75,7 @@ struct Bitmap {
  int width()const{return w;} int height()const{return h;}
  bool isDisposed()const{return disposed;}bool isMega()const{return mega;}
  bool hasHires()const{return false;}Bitmap *getHires()const{return nullptr;}
+ int imageBandCount()const{return 0;}void imageBandRows(int,int &t,int &b)const{t=b=0;}void bindImageBand(ShaderBase &,int){}
  IntRect rect()const{return IntRect(0,0,w,h);} static int maxSize(){return limit;}
  void ensureNonMega(){if(mega)throw Exception(Exception::MKXPError,"Operation not supported for mega surfaces");}
  void blt(int,int,const Bitmap &src,const IntRect &r){

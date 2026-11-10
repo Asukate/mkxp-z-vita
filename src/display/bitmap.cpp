@@ -82,6 +82,9 @@ extern unsigned long long vgl_upload_barrier_us;
 extern "C" {
 #include "libnsgif/libnsgif.h"
 #include <physfs.h>
+#ifdef __vita__
+#include <psp2/kernel/sysmem.h>
+#endif
 }
 
 #define GUARD_MEGA \
@@ -184,11 +187,24 @@ static void clearFullOverwrite(BitmapPrivate *p);
 static bool cpuSync(BitmapPrivate *p);
 static void bindDrawFallback();
 static void cpuPromote(BitmapPrivate *p);
+static bool bandsCurrent(BitmapPrivate *p);
+
+/* One band of a banded image (see initFromBands): a crop of the logical
+ * image showing rows ownTop..ownBottom. Band 0's texture and crop are the
+ * bitmap's own gl and imageCrop, so every path that rebuilds a cropped image
+ * first also rebuilds a banded one. */
+struct ImageBand
+{
+    TEXFBO tex;
+    ImageCrop crop;
+    int ownTop, ownBottom;
+};
 
 struct BitmapPrivate
 {
     Bitmap *self;
     ImageCrop imageCrop;
+    std::vector<ImageBand> bands;
     uint32_t directReadVersion = ~0u;
     
     struct {
@@ -583,7 +599,7 @@ struct BitmapPrivate
  * changes its mapped linear RGBA storage. Small targets keep the GPU path. */
 static bool clearMappedImage(BitmapPrivate *p, const Vec4 &color)
 {
-    if (p->cpu || color.x || color.y || color.z || color.w ||
+    if (p->cpu || color.x || color.y || color.z || color.w || bandsCurrent(p) ||
         (!p->imageCrop.active() && size_t(p->gl.width) * p->gl.height < 1024u * 1024u))
         return false;
     gl.Finish();
@@ -999,11 +1015,76 @@ static void relinkAfterUpload(TEXFBO &target)
 #endif
 }
 
+/* Band textures other than band 0 (which is p->gl). */
+static void releaseExtraBands(BitmapPrivate *p)
+{
+    for (size_t i = 1; i < p->bands.size(); ++i)
+        shState->texPool().releaseUncached(p->bands[i].tex);
+    p->bands.clear();
+}
+
+/* Bands are current only while band 0 is still the bitmap's texture. */
+static bool bandsCurrent(BitmapPrivate *p)
+{
+    if (p->bands.empty())
+        return false;
+    if (p->bands[0].tex.tex == p->gl.tex && p->imageCrop.active())
+        return true;
+    releaseExtraBands(p);
+    return false;
+}
+
 /* Hand the bitmap to the GPU: from here on it is an ordinary render target. */
 static void cpuPromote(BitmapPrivate *p)
 {
 #ifdef __vita__
-    if (p->imageCrop.active())
+    if (bandsCurrent(p))
+    {
+        const ImageCrop logical = p->imageCrop;
+        const FBO::ID bound = FBO::boundFramebufferID;
+        TEXFBO full = shState->texPool().request(logical.logicalWidth, logical.logicalHeight);
+        try
+        {
+            gl.Finish();
+            std::vector<const void *> sources(p->bands.size());
+            for (size_t i = 0; i < p->bands.size(); ++i)
+            {
+                sources[i] = vglGetTexDataPointerByID(p->bands[i].tex.tex.gl);
+                if (!sources[i])
+                    throw Exception(Exception::MKXPError, "Bitmap image storage is unavailable");
+            }
+            std::vector<uint32_t> row(logical.logicalWidth);
+            TEX::bind(full.tex);
+            size_t band = 0;
+            for (int y = 0; y < logical.logicalHeight; ++y)
+            {
+                while (band < p->bands.size() && p->bands[band].ownBottom <= y)
+                    ++band;
+                if (band < p->bands.size() && p->bands[band].ownTop <= y)
+                {
+                    const ImageBand &b = p->bands[band];
+                    copyImageCropRow(b.crop, sources[band], ((b.crop.width + 7) & ~7) * 4, y, row.data());
+                }
+                else
+                    std::fill(row.begin(), row.end(), logical.background);
+                TEX::uploadSubImage(0, y, logical.logicalWidth, 1, row.data(), GL_RGBA);
+            }
+            relinkAfterUpload(full);
+        }
+        catch (...)
+        {
+            shState->texPool().releaseUncached(full);
+            FBO::bind(bound);
+            throw;
+        }
+        const FBO::ID restored = bound == p->gl.fbo ? full.fbo : bound;
+        releaseExtraBands(p);
+        shState->texPool().releaseUncached(p->gl);
+        p->gl = full;
+        p->imageCrop = ImageCrop();
+        FBO::bind(restored);
+    }
+    else if (p->imageCrop.active())
     {
         const ImageCrop crop = p->imageCrop;
         const FBO::ID bound = FBO::boundFramebufferID;
@@ -1678,6 +1759,23 @@ constexpr size_t reuseImageMax = 48u << 20;
 #ifdef __vita__
 /* Graphics memory that must stay free (both pools) for an image to be kept. */
 constexpr size_t reuseMemFloor = 32u << 20;
+/* Images of 8 MB or more can live in kernel memory blocks instead of the
+ * pools (pixel blocks handed to vitaGL), which the pool figures do not see.
+ * Keeping them while kernel memory is short pushed the next map's large
+ * pictures into the C heap, which then had no piece large enough (Pocket
+ * Mirror: map 63's 66 MB held through two maps, then the Rose Labyrinth's
+ * 50 MB pictures failed). */
+constexpr size_t reuseKernelImage = 8u << 20;
+constexpr size_t reuseKernelFloor = 64u << 20;
+
+size_t kernelUserFree()
+{
+    SceKernelFreeMemorySizeInfo info;
+    info.size = sizeof(info);
+    if (sceKernelGetFreeMemorySize(&info) < 0)
+        return 0;
+    return (size_t)info.size_user;
+}
 #endif
 
 void dropReused(std::list<ReusedImage>::iterator it)
@@ -1712,7 +1810,7 @@ bool keepReused(BitmapPrivate *p)
 {
     if (reuseSuspended || p->fileKey.empty() || p->filePath.empty() || p->fileSize < 0 ||
         p->contentVersion != p->fileVersion || p->pendingClear || p->selfHires || p->selfLores ||
-        p->megaSurface || p->animation.enabled || p->cpu ||
+        p->megaSurface || p->animation.enabled || p->cpu || !p->bands.empty() ||
         p->gl.tex == TEX::ID(0) || p->gl.fbo == FBO::ID(0))
         return false;
     const size_t bytes = size_t(p->gl.width) * p->gl.height * 4;
@@ -1723,6 +1821,8 @@ bool keepReused(BitmapPrivate *p)
      * floor only stops the pool from holding on while memory is short.
      * texMakeRoom frees kept images before a new texture needs the space. */
     if (vitaGraphicsFreeBytes() < reuseMemFloor)
+        return false;
+    if (bytes >= reuseKernelImage && kernelUserFree() < reuseKernelFloor)
         return false;
 #endif
     for (auto it = reusedImages.begin(); it != reusedImages.end(); ++it)
@@ -1774,6 +1874,30 @@ bool Bitmap::trimReusedImages(size_t wantFree)
     (void)wantFree;
 #endif
     return dropped;
+}
+
+void Bitmap::trimReusedForKernel()
+{
+#ifdef __vita__
+    bool large = false;
+    for (auto &r : reusedImages)
+        if (r.bytes >= reuseKernelImage)
+        {
+            large = true;
+            break;
+        }
+    if (!large || kernelUserFree() >= reuseKernelFloor)
+        return;
+    for (auto it = reusedImages.begin(); it != reusedImages.end(); )
+    {
+        auto cur = it++;
+        if (cur->bytes < reuseKernelImage)
+            continue;
+        reusedBytes -= cur->bytes;
+        shState->texPool().releaseUncached(cur->tex);
+        reusedImages.erase(cur);
+    }
+#endif
 }
 
 void texMakeRoom(size_t bytes)
@@ -2232,6 +2356,8 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
          * Keep a sparse source sparse, including its logical dimensions.
          * Small copies retain the existing asynchronous GPU path. */
         clearRead(other.p);
+        if (bandsCurrent(other.p))
+            cpuPromote(other.p);
         const FBO::ID bound = FBO::boundFramebufferID;
         try
         {
@@ -2387,6 +2513,56 @@ void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool for
 {
     ImageCrop crop;
 #ifdef __vita__
+    /* Too large for any single allocation left (Pocket Mirror's map-sized
+     * pictures late in a session): separate textures of 128 rows each, cut
+     * to their contents. Sprites draw the bands; anything else makes the
+     * ordinary full texture first, as for a cropped image. */
+    if (const SDL_VitaImageBands *bandInfo = SDL_VitaGetImageBands(imgSurf))
+    {
+        if (hiresBitmap || forceMega || bandInfo->logicalWidth > glState.caps.maxTexSize ||
+            bandInfo->logicalHeight > glState.caps.maxTexSize)
+        {
+            delete hiresBitmap;
+            SDL_FreeSurface(imgSurf);
+            throw Exception(Exception::MKXPError, "Banded image decode requires an ordinary bitmap without a hires companion");
+        }
+        std::vector<ImageBand> bands;
+        try
+        {
+            for (int i = 0; i < bandInfo->count; ++i)
+            {
+                const SDL_VitaImageBand &b = bandInfo->band[i];
+                ImageBand band;
+                band.crop.x = b.x; band.crop.y = b.y;
+                band.crop.width = b.width; band.crop.height = b.height;
+                band.crop.logicalWidth = bandInfo->logicalWidth;
+                band.crop.logicalHeight = bandInfo->logicalHeight;
+                band.crop.background = bandInfo->background;
+                band.ownTop = b.ownTop; band.ownBottom = b.ownBottom;
+                band.tex = shState->texPool().requestImage(b.width, b.height, b.pixels);
+                bands.push_back(band);
+                SDL_VitaReleaseImageBand(imgSurf, i);
+            }
+        }
+        catch (...)
+        {
+            for (ImageBand &band : bands)
+                shState->texPool().releaseUncached(band.tex);
+            SDL_FreeSurface(imgSurf);
+            throw;
+        }
+        char geometry[80];
+        snprintf(geometry, sizeof(geometry), "%dx%d -> %d bands", bandInfo->logicalWidth,
+                 bandInfo->logicalHeight, (int)bands.size());
+        vitaErrorMemoryEvent("streamed-bands", geometry);
+        SDL_FreeSurface(imgSurf);
+        p = new BitmapPrivate(this);
+        p->gl = bands[0].tex;
+        p->imageCrop = bands[0].crop;
+        p->bands = std::move(bands);
+        p->addTaintedArea(rect());
+        return;
+    }
     SDL_VitaImageCrop decodedCrop;
     const bool alreadyPacked = SDL_VitaGetImageCrop(imgSurf, &decodedCrop);
     if (alreadyPacked)
@@ -3871,6 +4047,20 @@ Color Bitmap::getPixel(int x, int y) const
         {
             gl.Finish();
             p->directReadVersion = p->contentVersion;
+        }
+        if (bandsCurrent(p))
+        {
+            for (const ImageBand &b : p->bands)
+                if (y >= b.ownTop && y < b.ownBottom)
+                {
+                    const void *bandPixels = vglGetTexDataPointerByID(b.tex.tex.gl);
+                    if (!bandPixels)
+                        throw Exception(Exception::MKXPError, "Bitmap image storage is unavailable");
+                    const uint32_t v = imageCropPixel(b.crop, bandPixels, ((b.crop.width + 7) & ~7) * 4, x, y);
+                    return Color(v & 255, (v >> 8) & 255, (v >> 16) & 255, v >> 24);
+                }
+            const uint32_t v = p->imageCrop.background;
+            return Color(v & 255, (v >> 8) & 255, (v >> 16) & 255, v >> 24);
         }
         const void *pixels = vglGetTexDataPointerByID(p->gl.tex.gl);
         if (!pixels)
@@ -5710,6 +5900,25 @@ int Bitmap::kglShadowShaderV(int y1, int y2, int x, bool wall, bool soft)
     return 1;
 }
 
+int Bitmap::imageBandCount() const
+{
+    return bandsCurrent(p) ? (int)p->bands.size() : 0;
+}
+
+void Bitmap::imageBandRows(int index, int &ownTop, int &ownBottom) const
+{
+    ownTop = p->bands[index].ownTop;
+    ownBottom = p->bands[index].ownBottom;
+}
+
+void Bitmap::bindImageBand(ShaderBase &shader, int index)
+{
+    const ImageBand &band = p->bands[index];
+    TEX::bind(band.tex.tex);
+    shader.setTexSize(Vec2i(band.tex.width, band.tex.height));
+    shader.setTexOrigin(Vec2i(band.crop.x, band.crop.y));
+}
+
 void Bitmap::bindTex(ShaderBase &shader, bool substituteLoresSize, bool allowImageCrop)
 {
     // Hires mode is handled by p->bindTexture.
@@ -5862,6 +6071,8 @@ void Bitmap::reclaimMemory()
 void Bitmap::frameTick()
 {
     ++cpuFrame;
+    if (!(cpuFrame & 7))
+        trimReusedForKernel();
     if (cpuHeapBytes <= 12u * 1024 * 1024)
         return;
     int promoted = 0;
@@ -5956,7 +6167,11 @@ void Bitmap::releaseResources()
             TEX::del(p->gl.tex);
     }
     else if (!keepReused(p))
+    {
+        bandsCurrent(p);
+        releaseExtraBands(p);
         shState->texPool().release(p->gl);
+    }
     
     delete p;
 }

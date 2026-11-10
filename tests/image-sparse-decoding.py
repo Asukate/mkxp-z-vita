@@ -83,14 +83,21 @@ int main(int argc,char **argv){
  // Successful full allocations retain the original surface contract.
  reset();fail_size=0;s=stream();SDL_Surface *full=IMG_LoadTyped_RW(&s,1,"VITA_BITMAP");
  SDL_VitaImageCrop unused;assert(full&&full->w==2000&&full->h==2000&&!SDL_VitaGetImageCrop(full,&unused));SDL_FreeSurface(full);
- // Both row-allocation failure points and crop allocation clean up safely.
- for(unsigned which=1;which<=2;which++){reset();fail_row_at=which;s=stream();assert(!IMG_LoadTyped_RW(&s,1,"VITA_BITMAP")&&closes==1);}
- reset();extra_fail_size=59*39*4;s=stream();assert(!IMG_LoadTyped_RW(&s,1,"VITA_BITMAP")&&closes==1);
+ // Either row-allocation failure point (crop scan, crop copy) falls back to bands.
+ for(unsigned which=1;which<=2;which++){reset();fail_row_at=which;s=stream();SDL_Surface *b=IMG_LoadTyped_RW(&s,1,"VITA_BITMAP");
+  assert(b&&closes==1&&SDL_VitaGetImageBands(b));SDL_FreeSurface(b);}
+ // A crop that cannot be allocated either falls back to bands of small allocations.
+ reset();extra_fail_size=59*39*4;s=stream();SDL_Surface *banded=IMG_LoadTyped_RW(&s,1,"VITA_BITMAP");
+ assert(banded&&closes==1&&SDL_VitaGetImageBands(banded)&&!SDL_VitaGetImageCrop(banded,&unused));
+ {const SDL_VitaImageBands *b=SDL_VitaGetImageBands(banded);assert(b->count==1&&b->band[0].ownTop==128&&b->band[0].x==96&&b->band[0].width==59);}
+ SDL_FreeSurface(banded);
  // A truncated scan and a rejected rewind preserve stream ownership.
  reset();available=input.size()/2;s=stream();assert(!IMG_LoadTyped_RW(&s,1,"VITA_BITMAP")&&closes==1);
  reset();fail_seek=true;s=stream();assert(!IMG_LoadTyped_RW(&s,0,"VITA_BITMAP")&&closes==0);
- // Opaque/dense images must never be represented by an inexact crop.
- for(int arg=2;arg<=3;arg++){load(argv[arg]);reset();s=stream();assert(!IMG_LoadTyped_RW(&s,1,"VITA_BITMAP")&&closes==1);}
+ // Opaque/dense images are never an inexact crop; they come back as full-width bands.
+ for(int arg=2;arg<=3;arg++){load(argv[arg]);reset();s=stream();SDL_Surface *b=IMG_LoadTyped_RW(&s,1,"VITA_BITMAP");
+  assert(b&&closes==1&&!SDL_VitaGetImageCrop(b,&unused));const SDL_VitaImageBands *info=SDL_VitaGetImageBands(b);
+  assert(info&&info->count==16&&info->band[0].x==0&&info->band[0].width==2000);SDL_FreeSurface(b);}
  // A constant transparent image needs only one stored texel.
  load(argv[4]);reset();s=stream();SDL_Surface *constant=IMG_LoadTyped_RW(&s,1,"VITA_BITMAP");
  assert(constant&&constant->w==1&&constant->h==1&&SDL_VitaGetImageCrop(constant,&unused));

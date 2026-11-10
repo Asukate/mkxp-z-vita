@@ -28,6 +28,25 @@ typedef struct SDL_VitaImageCrop {
     Uint32 background;
 } SDL_VitaImageCrop;
 int SDL_VitaGetImageCrop(const SDL_Surface *surface, SDL_VitaImageCrop *crop);
+/* When neither the full image nor its crop fits in one allocation, VITA_BITMAP
+ * PNGs come back as horizontal bands of separate small allocations. Band i
+ * holds rows y..y+height (one extra row above and below its own rows, for
+ * filtering) and columns x..x+width; it shows rows ownTop..ownBottom. Rows of
+ * no band are the background. The surface itself is a 1x1 placeholder. */
+typedef struct SDL_VitaImageBand {
+    int x, y, width, height, ownTop, ownBottom;
+    void *pixels; /* width * 4 bytes per row; NULL once released */
+    int fromPool;
+} SDL_VitaImageBand;
+typedef struct SDL_VitaImageBands {
+    int logicalWidth, logicalHeight;
+    Uint32 background;
+    int count;
+    SDL_VitaImageBand band[1];
+} SDL_VitaImageBands;
+const SDL_VitaImageBands *SDL_VitaGetImageBands(const SDL_Surface *surface);
+/* Frees one band's pixels early (after its upload). */
+void SDL_VitaReleaseImageBand(SDL_Surface *surface, int index);
 int IMG_isGIF(SDL_RWops *src);
 int IMG_SaveJPG(SDL_Surface *surface, const char *file, int quality);
 int IMG_SavePNG(SDL_Surface *surface, const char *file);
