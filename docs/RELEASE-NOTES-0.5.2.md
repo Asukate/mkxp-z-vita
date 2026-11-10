@@ -1,7 +1,8 @@
 # HardRPG 0.5.2 Alpha
 
-Faster LISA: The Joyful and Ao Oni R, fewer Pocket Mirror crashes, first
-playable Pokémon Essentials games, Exit Fate fixes, and Japanese and Chinese in the launcher.
+Faster LISA: The Joyful, Ao Oni R and N.P.C. Dreams, the Pocket Mirror
+memory crash fixed, first playable Pokémon Essentials games, Exit Fate fixes,
+and Japanese and Chinese in the launcher.
 
 ## Games
 
@@ -24,6 +25,8 @@ playable Pokémon Essentials games, Exit Fate fixes, and Japanese and Chinese in
   partially supported. Uranium starts, loads saves and plays at 30–50 fps
   depending on the map; Insurgence reaches its title and gameplay. Progression
   has not been tested far.
+- **All games:** drawing pictures, windows and text into images is faster on
+  the Vita: copies onto solid images now use the Vita's NEON vector unit.
 - Fixed a random crash right after a map change.
 
 ## Launcher and controls

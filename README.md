@@ -12,7 +12,7 @@
   <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/RPG%20Maker-XP%20%2F%20VX%20%2F%20Ace%20%2F%202000%20%2F%202003-5865f2?style=for-the-badge" alt="RPG Maker: XP, VX, VX Ace, 2000, 2003"></a>
 </p>
 
-<p align="center"><a href="#install">Install</a> · <a href="#add-your-games">Add games</a> · <a href="#using-hardrpg">Use</a> · <a href="#per-game-settings-and-controls">Controls</a> · <a href="#artwork-game-info-and-title-music">Artwork</a> · <a href="#compatibility">Compatibility</a> · <a href="#something-went-wrong">Help</a> · <a href="#building">Build</a></p>
+<p align="center"><a href="#install">Install</a> · <a href="#add-your-games">Add games</a> · <a href="#using-hardrpg">Use</a> · <a href="#per-game-settings-and-controls">Controls</a> · <a href="#artwork-game-info-and-title-music">Artwork</a> · <a href="#compatibility">Compatibility</a> · <a href="#something-went-wrong">Help</a> · <a href="#faq">FAQ</a> · <a href="#building">Build</a></p>
 
 
 **HardRPG** is an RPG Maker game launcher for the PS Vita. Copy your games to
@@ -187,6 +187,8 @@ A font included in the game's own `Fonts` folder always comes first.
 - **LISA: The Joyful:** the archer cave runs at 60 fps.
 - **Ao Oni R:** rooms run at 58–60 fps.
 - **Pocket Mirror:** no longer runs out of memory after long play, including in the Rose Labyrinth.
+- **N.P.C. Dreams:** faster walking and battles.
+- **All games:** faster drawing of pictures, windows and text.
 - **Pokémon Uranium and Insurgence:** partially supported.
 - **Exit Fate:** fonts, sky and sea, and music looping fixed.
 - **Launcher:** Japanese and Simplified Chinese; in-game keyboard.
@@ -442,6 +444,53 @@ in the report.
 - The first time a new HardRPG version starts a game, it prepares its graphics
   for a few seconds ("only once").
 - Games whose title music is MIDI have no music in the library.
+
+## FAQ
+
+**Which games does it play?**
+RPG Maker XP, VX and VX Ace games, including ones packed in a `Game.rgssad`,
+`.rgss2a` or `.rgss3a` archive, and RPG Maker 2000/2003 games. RPG Maker MV
+and MZ games are not supported. Pokémon Uranium and Pokémon Insurgence are
+partially supported. The [compatibility list](docs/COMPATIBILITY.md) has
+game-by-game results.
+
+**Does HardRPG come with games?**
+No. Copy games you own to the Vita (see [Add your games](#add-your-games)).
+
+**A game says it can't find the RTP. What do I do?**
+Install that RPG Maker version's RTP once, as in
+[RTP](#rtp-only-if-a-game-needs-it). Every game that needs it then finds it.
+
+**Will updating HardRPG delete my games or saves?**
+No. Install the new VPK over HardRPG; game folders, saves and settings stay.
+
+**My game came as a ZIP.**
+Unzip it on your PC first and copy the folder to `games/`. HardRPG lists ZIP
+games but does not unpack them, because that takes minutes on the Vita.
+
+**My games are in another folder.**
+Press **Start** in the library, go to that folder and press **Square**. The
+games stay where they are.
+
+**Text shows boxes, overlaps or is cut off.**
+The game probably wants a Windows font it does not include. See
+[Fonts](#fonts-only-if-a-games-text-looks-wrong) to use your own copy.
+
+**The game needs a keyboard key, or wants me to type a name.**
+Map any keyboard key to a Vita button in **Controls**
+([Per-game settings](#per-game-settings-and-controls)). For typing, tap the
+keyboard button in the screen's left border; games that ask for text open it
+by themselves.
+
+**A game is slow.**
+Check the [compatibility list](docs/COMPATIBILITY.md): some games are known to
+drop below 60 fps. The first start after an update prepares graphics for a few
+seconds. **L + R** turns fast forward on for slow scenes.
+
+**A game crashed. Did I lose my progress?**
+Usually not. With crash rescue on, starting the game again offers to resume at
+the last map change or battle. Please [report it](#something-went-wrong), with
+your save if you can.
 
 ## Screenshots
 
