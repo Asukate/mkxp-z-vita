@@ -262,6 +262,13 @@ struct SharedStatePrivate
 		vitaStartupTimerMark("font_discovery_begin");
 #endif
 		fileSystem.initFontSets(fontState);
+		/* Fonts the player added (e.g. MS Gothic from their PC), used when
+		 * the game asks for a font it does not ship. The folder is made so
+		 * players can find it. */
+#ifdef __vita__
+		mkdir("ux0:/data/hardrpg/fonts", 0777);
+#endif
+		fontState.initUserFonts(SharedFontState::userFontDir());
 #ifdef __vita__
 		vitaStartupTimerMark("font_discovery_end");
 #endif

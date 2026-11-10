@@ -4459,9 +4459,10 @@ static std::string fixupString(const char *str)
     /* RMXP actually draws LF as a "missing gylph" box,
      * but since we might have accidentally converted CRs
      * to LFs when editing scripts on a Unix OS, treat them
-     * as white space too */
+     * as white space too. Windows draws nothing for a TAB, while our
+     * font renderer draws its box (Exit Fate ends some lines with one). */
     for (size_t i = 0; i < s.size(); ++i)
-        if (s[i] == '\r' || s[i] == '\n')
+        if (s[i] == '\r' || s[i] == '\n' || s[i] == '\t')
             s[i] = ' ';
     
     return s;
@@ -5202,6 +5203,27 @@ TEXFBO &Bitmap::getGLTypes() const
      * sampled storage matches the logical cleared state. */
     clearRead(p);
     return p->getGLTypes();
+}
+
+bool Bitmap::isKnownTransparent() const
+{
+    if (isDisposed() || !p || p->megaSurface || p->animation.enabled || hasHires())
+        return false;
+    if (p->pendingClear)
+        return p->pendingColor == Vec4();
+    if (!p->cpu)
+        return false;
+    /* CPU-composed: these pixels are the bitmap. Bitmap.new starts zeroed. */
+    const SDL_Surface *s = p->cpu;
+    const size_t rowBytes = (size_t)s->w * 4;
+    for (int y = 0; y < s->h; ++y)
+    {
+        const uint8_t *row = (const uint8_t *)s->pixels + (size_t)y * s->pitch;
+        for (size_t b = 0; b < rowBytes; ++b)
+            if (row[b])
+                return false;
+    }
+    return true;
 }
 
 SDL_Surface *Bitmap::surface() const

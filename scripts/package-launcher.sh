@@ -139,6 +139,7 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/LICENSES/GPL-3.0.txt=licenses/GPL-3.0.txt" \
     -a "$ROOT/LICENSES/LGPL-3.0.txt=licenses/LGPL-3.0.txt" \
     -a "$ROOT/LICENSES/Liberation.txt=licenses/Liberation.txt" \
+    -a "$ROOT/LICENSES/Kosugi.txt=licenses/Kosugi.txt" \
     -a "$ROOT/LICENSES/math-neon.txt=licenses/math-neon.txt" \
     -a "$ROOT/LICENSES/curl.txt=licenses/curl.txt" \
     -a "$ROOT/LICENSES/MPL-2.0.txt=licenses/MPL-2.0.txt" \

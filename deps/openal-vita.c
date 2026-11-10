@@ -171,11 +171,26 @@ static inline void mix_source_frame(VitaALSource *source, float *left,
                                     float *right) {
     while (source->state == AL_PLAYING) {
         VitaALBuffer *buf = source_buffer(source);
-        int frames = buf ? buffer_frames(buf) : 0;
+        int frames = (buf && buf->data) ? buffer_frames(buf) : 0;
 
-        if (!buf || !buf->data || frames <= 0) {
+        if (!buf || (frames <= 0 && source->attached_buffer)) {
             source->state = AL_STOPPED;
             return;
+        }
+
+        /* An empty queued buffer has nothing to play: count it as processed
+         * and move on, as OpenAL does. A stream whose length is an exact
+         * multiple of its buffer size queues one as the loop's wrap marker;
+         * stopping here without processing it stalled the stream for good. */
+        if (frames <= 0) {
+            source->cursor_frames = 0.0f;
+            source->current_buffer = NULL;
+            source->processed_count++;
+            if (source->processed_count >= source->queued_count) {
+                source->state = AL_STOPPED;
+                return;
+            }
+            continue;
         }
 
         if (source->cursor_frames < frames) {
@@ -1060,8 +1075,18 @@ void alBufferData(ALuint id, ALenum format, const void *data, ALsizei size, ALsi
     }
     al_trace("BUFDATA id=%u fmt=%d size=%d freq=%d", id, (int)format, (int)size, (int)freq);
     free(b->data);
+    b->data = NULL;
+    if (size <= 0) {
+        /* An empty upload is valid: keep an empty buffer, not the old size. */
+        b->format = format;
+        b->freq = freq;
+        b->size = 0;
+        pthread_mutex_unlock(&mixer_mutex);
+        return;
+    }
     b->data = malloc(size);
     if (!b->data) {
+        b->size = 0;
         set_error(AL_OUT_OF_MEMORY);
         pthread_mutex_unlock(&mixer_mutex);
         return;

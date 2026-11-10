@@ -55,11 +55,20 @@
 #include FT_TRUETYPE_TABLES_H
 #include FT_TRUETYPE_IDS_H
 
+#include <dirent.h>
+#include <cstdlib>
+
+#ifdef __vita__
+/* src/vita_stubs.cpp: open face 'index' of a font collection (.ttc). */
+extern "C" TTF_Font *TTF_OpenFontIndexRW(SDL_RWops *src, int freesrc, int ptsize, long index);
+#endif
+
 #ifndef MKXPZ_BUILD_XCODE
 #ifndef MKXPZ_CJK_FONT
 #include "liberation.ttf.xxd"
 #include "liberation-serif.ttf.xxd"
 #include "liberation-mono.ttf.xxd"
+#include "kosugi.ttf.xxd"
 #else
 #include "wqymicrohei.ttf.xxd"
 #endif
@@ -85,6 +94,9 @@ extern unsigned char ___assets_liberation_serif_ttf[];
 extern unsigned int ___assets_liberation_serif_ttf_len;
 extern unsigned char ___assets_liberation_mono_ttf[];
 extern unsigned int ___assets_liberation_mono_ttf_len;
+/* Kosugi (Apache 2.0, subset): half-width Latin like MS Gothic. */
+extern unsigned char ___assets_kosugi_ttf[];
+extern unsigned int ___assets_kosugi_ttf_len;
 #endif
 
 #define BUNDLED_FONT_D(f) ___assets_## f ##_ttf
@@ -150,6 +162,17 @@ struct SharedFontStatePrivate
 	/* Maps: font family name, To: set of physical
 	 * font filenames located in "Fonts/" */
 	BoostHash<std::string, FontSet> sets;
+
+	/* HardRPG user fonts (see initUserFonts): family -> font file and
+	 * face index inside it. Used only for families the game itself does
+	 * not provide. */
+	struct UserFont
+	{
+		std::string path;
+		long index = 0;
+		bool regular = false;
+	};
+	std::unordered_map<std::string, UserFont> userFonts;
 
 	/* Pool of font size to ppem values */
 	BoostHash<FontSizeKey, int> size_to_ppem;
@@ -735,11 +758,30 @@ static const char *builtinFallbackFor(const std::string &family)
 		{ "ms sans serif", "liberation sans" },
 		{ "microsoft sans serif", "liberation sans" },
 		{ "segoe ui", "liberation sans" },
+		/* MS Gothic and MS Mincho draw Latin at exactly half an em per
+		 * character, and games lay text out on that grid (Exit Fate's intro
+		 * places every letter by hand; its dialogue fills the box at 10 px
+		 * per letter). Kosugi has the same half-em Latin and a close look;
+		 * Liberation Mono (0.6 em) would overflow such layouts. */
+		{ "ms gothic", "kosugi" },
+		{ "\xef\xbc\xad\xef\xbc\xb3 \xe3\x82\xb4\xe3\x82\xb7\xe3\x83\x83\xe3\x82\xaf", "kosugi" }, /* ＭＳ ゴシック */
+		{ "ms mincho", "kosugi" },
+		{ "\xef\xbc\xad\xef\xbc\xb3 \xe6\x98\x8e\xe6\x9c\x9d", "kosugi" }, /* ＭＳ 明朝 */
 	};
 	for (const Entry &e : table)
 		if (family == e.from)
 			return e.to;
 	return 0;
+}
+
+/* Whether this build carries the engine fallback pack. */
+static bool bundledFallbackPackAvailable()
+{
+#if !defined(MKXPZ_BUILD_XCODE) && !defined(MKXPZ_CJK_FONT)
+	return true;
+#else
+	return false;
+#endif
 }
 
 static SDL_RWops *openBundledByFamily(const char *family)
@@ -753,6 +795,9 @@ static SDL_RWops *openBundledByFamily(const char *family)
 	if (fam == "liberation mono")
 		return SDL_RWFromConstMem(___assets_liberation_mono_ttf,
 		                          ___assets_liberation_mono_ttf_len);
+	if (fam == "kosugi")
+		return SDL_RWFromConstMem(___assets_kosugi_ttf,
+		                          ___assets_kosugi_ttf_len);
 	if (fam == "liberation sans")
 		return openBundledFont();
 #endif
@@ -782,7 +827,21 @@ TTF_Font *SharedFontState::getFont(std::string family,
 	 * from the game's own Fonts/ and from per-game fontSub, but covered
 	 * by the engine's generic fallback pack. */
 	std::string bundledFamily;
+	/* A font the player put in the HardRPG fonts folder: the exact font
+	 * the game asks for, when the game does not ship it. */
+	const SharedFontStatePrivate::UserFont *userFont = nullptr;
 	if (req->empty())
+	{
+		auto userIt = p->userFonts.find(family);
+		if (userIt != p->userFonts.end())
+			userFont = &userIt->second;
+	}
+	if (userFont)
+	{
+		vitaDiagLog("FONT", "user_font family=%s file=%s index=%ld",
+		            family.c_str(), userFont->path.c_str(), userFont->index);
+	}
+	else if (req->empty())
 	{
 		/* Absent from the game's own Fonts/ and from per-game fontSub:
 		 * consult the generic engine fallback pack before the built-in
@@ -828,8 +887,23 @@ TTF_Font *SharedFontState::getFont(std::string family,
 	
 	/* Not in pool; open new handle */
 	SDL_RWops *ops;
+	long faceIndex = 0;
 
-	if (family.empty())
+	if (userFont)
+	{
+		ops = SDL_RWFromFile(userFont->path.c_str(), "rb");
+		faceIndex = userFont->index;
+		if (!ops)
+		{
+			/* Removed since startup: use the built-in font. */
+			vitaDiagLog("FONT", "user_font_missing file=%s", userFont->path.c_str());
+			faceIndex = 0;
+			family = "";
+			key = FontSizeKey(family, size);
+			ops = openBundledFont();
+		}
+	}
+	else if (family.empty())
 	{
 		/* Built-in font */
 		ops = openBundledFont();
@@ -867,7 +941,7 @@ TTF_Font *SharedFontState::getFont(std::string family,
 	}
 
 	/* Try to compute the size the same way Windows does. */
-	font = TTF_OpenFontRW(ops, 1, 0);
+	font = TTF_OpenFontIndexRW(ops, 1, 0, faceIndex);
 	vitaDiagLog("FONT", "open_return font=%p family=%s size=%d",
 	            (void *)font, family.c_str(), size);
 
@@ -966,7 +1040,116 @@ TTF_Font *SharedFontState::getFont(std::string family,
 	return font;
 }
 
-bool SharedFontState::fontPresent(std::string family) const
+std::string SharedFontState::userFontDir()
+{
+#ifdef __vita__
+	return "ux0:/data/hardrpg/fonts";
+#else
+	const char *dir = getenv("HARDRPG_FONTS_DIR");
+	return dir ? dir : "";
+#endif
+}
+
+static bool isRegularStyle(const char *style)
+{
+	if (!style || !*style)
+		return true;
+	std::string s(style);
+	std::transform(s.begin(), s.end(), s.begin(),
+		[](unsigned char c){ return std::tolower(c); });
+	return s == "regular" || s == "normal" || s == "book" || s == "roman" || s == "medium";
+}
+
+/* HardRPG user fonts. HardRPG ships no licensed fonts; a player who owns
+ * the exact font a game wants (say MS Gothic from their PC) copies the file
+ * into one folder and every game that asks for it, without shipping it,
+ * gets it. Each face of a collection (.ttc) is registered under all of its
+ * family names (English and localized, e.g. "MS Gothic" and "ＭＳ ゴシック").
+ * Only the name tables are read here; a font is loaded when first drawn. */
+int SharedFontState::initUserFonts(const std::string &dir)
+{
+	if (dir.empty())
+		return 0;
+	DIR *d = opendir(dir.c_str());
+	if (!d)
+		return 0;
+	FT_Library lib;
+	if (FT_Init_FreeType(&lib))
+	{
+		closedir(d);
+		return 0;
+	}
+
+	int faces = 0;
+	while (dirent *entry = readdir(d))
+	{
+		const std::string name = entry->d_name;
+		const size_t dot = name.rfind('.');
+		if (dot == std::string::npos)
+			continue;
+		std::string ext = name.substr(dot + 1);
+		std::transform(ext.begin(), ext.end(), ext.begin(),
+			[](unsigned char c){ return std::tolower(c); });
+		if (ext != "ttf" && ext != "otf" && ext != "ttc" && ext != "otc")
+			continue;
+
+		const std::string path = dir + "/" + name;
+		FT_Face face;
+		if (FT_New_Face(lib, path.c_str(), -1, &face))
+			continue;
+		const long count = std::min<long>(face->num_faces, 64);
+		FT_Done_Face(face);
+
+		for (long i = 0; i < count; ++i)
+		{
+			if (FT_New_Face(lib, path.c_str(), i, &face))
+				continue;
+			std::vector<std::string> families;
+			if (face->family_name)
+				families.push_back(face->family_name);
+			if (FT_IS_SFNT(face))
+			{
+				for (FT_UInt n = 0, total = FT_Get_Sfnt_Name_Count(face); n < total; ++n)
+				{
+					FT_SfntName aname;
+					if (FT_Get_Sfnt_Name(face, n, &aname) == 0 &&
+					    (aname.name_id == TT_NAME_ID_FONT_FAMILY ||
+					     aname.name_id == TT_NAME_ID_TYPOGRAPHIC_FAMILY))
+						families.push_back(decodeSfntName(aname));
+				}
+			}
+			const bool regular = isRegularStyle(face->style_name);
+			for (std::string family : families)
+			{
+				std::transform(family.begin(), family.end(), family.begin(),
+					[](unsigned char c){ return std::tolower(c); });
+				if (family.empty())
+					continue;
+				auto it = p->userFonts.find(family);
+				/* First file wins, except that a regular face replaces
+				 * a bold or italic one. */
+				if (it != p->userFonts.end() && (it->second.regular || !regular))
+					continue;
+				SharedFontStatePrivate::UserFont font;
+				font.path = path;
+				font.index = i;
+				font.regular = regular;
+				p->userFonts[family] = font;
+				vitaDiagLog("FONT", "user_register family=%s file=%s index=%ld regular=%d",
+				            family.c_str(), path.c_str(), i, (int)regular);
+			}
+			FT_Done_Face(face);
+			++faces;
+		}
+	}
+	FT_Done_FreeType(lib);
+	closedir(d);
+	vitaDiagLog("FONT", "user_fonts dir=%s faces=%d families=%lu",
+	            dir.c_str(), faces, (unsigned long)p->userFonts.size());
+	return faces;
+}
+
+bool SharedFontState::fontPresent(std::string family, bool withFallbackPack) const
 {
 	std::transform(family.begin(), family.end(), family.begin(),
 		[](unsigned char c){ return std::tolower(c); });
@@ -977,7 +1160,17 @@ bool SharedFontState::fontPresent(std::string family) const
 
 	const FontSet &set = p->sets[family];
 
-	return !set->empty();
+	if (!set->empty())
+		return true;
+
+	if (p->userFonts.count(family))
+		return true;
+
+	/* getFont() draws these families with the engine fallback pack, so a
+	 * names list such as ["MS Gothic", "Courier New"] should pick them
+	 * instead of skipping to the default face. */
+	return withFallbackPack && bundledFallbackPackAvailable() &&
+	       builtinFallbackFor(family) != 0;
 }
 
 TTF_Font *SharedFontState::openBundled(int size)
@@ -993,7 +1186,8 @@ void SharedFontState::setDefaultFontFamily(const std::string &family) {
 
 static bool pickExistingFontName(const std::vector<std::string> &names,
                           std::string &out,
-                          const SharedFontState &sfs)
+                          const SharedFontState &sfs,
+                          bool withFallbackPack = true)
 {
 	/* Note: In RMXP, a names array with no existing entry
 	 * results in no text being drawn at all (same for "" and []);
@@ -1001,7 +1195,7 @@ static bool pickExistingFontName(const std::vector<std::string> &names,
 
 	for (size_t i = 0; i < names.size(); ++i)
 	{
-		if (sfs.fontPresent(names[i]))
+		if (sfs.fontPresent(names[i], withFallbackPack))
 		{
 			if (out == names[i])
 				return false;
@@ -1292,7 +1486,11 @@ void Font::initDefaults(const SharedFontState &sfs)
 		FontPrivate::defaultSize = 24;
 	}
 
-	setDefaultName(names, sfs);
+	/* The engine's own defaults keep the plain default face when none of
+	 * these is really installed. Only names a game sets itself may pick
+	 * the fallback pack: RGSS2's list includes MS Gothic and Courier New,
+	 * and every VX game would otherwise switch to a monospace face. */
+	pickExistingFontName(names, FontPrivate::defaultName, sfs, false);
 
 	FontPrivate::defaultOutline = (rgssVer >= 3 ? true : false);
 	FontPrivate::defaultShadow  = (rgssVer == 2 ? true : false);

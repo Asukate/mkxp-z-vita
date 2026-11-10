@@ -16,6 +16,9 @@ endif
 # from the game's own Fonts/ and from per-game fontSub.
 embedded_assets += 'liberation-serif.ttf'
 embedded_assets += 'liberation-mono.ttf'
+# Kosugi (MOTOYA, Apache 2.0), subset to Latin, punctuation and kana:
+# stands in for MS Gothic / MS Mincho, whose Latin is exactly half an em.
+embedded_assets += 'kosugi.ttf'
 
 embedded_assets_f = files(embedded_assets)
 

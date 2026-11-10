@@ -277,6 +277,13 @@ struct TilemapPrivate
 		/* Whether each autotile is 3x4 or not */
 		bool smallATs[autotileCount] = {false};
 
+		/* Whether tiles of each autotile slot get quads: the slot holds a
+		 * usable bitmap that is not known to be blank. RGSS draws nothing
+		 * for a missing or empty autotile (Exit Fate puts empty-slot tiles
+		 * over its sky panoramas), so emit nothing rather than sample an
+		 * atlas band that was never filled. */
+		bool drawnATs[autotileCount] = {false};
+
 		/* The number of frames for each autotile */
 		int nATFrames[autotileCount] = {1};
 	} atlas;
@@ -469,9 +476,22 @@ struct TilemapPrivate
 		usableATs.clear();
 		animatedATs.clear();
 
+		bool drawnBefore[autotileCount];
+		std::copy(atlas.drawnATs, atlas.drawnATs + autotileCount, drawnBefore);
+		std::fill(atlas.drawnATs, atlas.drawnATs + autotileCount, false);
+
 		for (int i = 0; i < autotileCount; ++i)
 		{
 			if (nullOrDisposed(autotiles[i]) || autotiles[i]->megaSurface())
+			{
+				atlas.nATFrames[i] = 1;
+				continue;
+			}
+
+			/* RPG::Cache gives Bitmap.new(32, 32) for an empty autotile
+			 * name. Nothing to show, so it is neither uploaded nor drawn
+			 * (and stays an untouched memory bitmap for the next check). */
+			if (autotiles[i]->isKnownTransparent())
 			{
 				atlas.nATFrames[i] = 1;
 				continue;
@@ -486,6 +506,7 @@ struct TilemapPrivate
 			}
 
 			usableATs.push_back(i);
+			atlas.drawnATs[i] = true;
 
 			if (autotiles[i]->height() == 32)
 			{
@@ -503,6 +524,11 @@ struct TilemapPrivate
 		}
 
 		tiles.animated = !animatedATs.empty();
+
+		/* Drawing into an autotile only rebuilds the atlas; the quads
+		 * must follow when a slot starts or stops being drawn. */
+		if (!std::equal(drawnBefore, drawnBefore + autotileCount, atlas.drawnATs))
+			buffersDirty = true;
 	}
 
 	void updateSceneGeometry(const Scene::Geometry &geo)
@@ -1146,6 +1172,8 @@ struct TilemapPrivate
 	{
 		/* Which autotile [0-7] */
 		int atInd = tileInd / 48 - 1;
+		if (!atlas.drawnATs[atInd])
+			return;
 		if (!atlas.smallATs[atInd])
 		{
 			/* Which tile pattern of the autotile [0-47] */

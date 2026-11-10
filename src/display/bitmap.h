@@ -141,6 +141,10 @@ public:
 
 	/* <internal> */
 	TEXFBO &getGLTypes() const;
+	/* True only when every pixel is known to be fully transparent (all zero)
+	 * without reading the GPU: a pending clear to transparent, or memory
+	 * pixels that are all zero. False when unknown. */
+	bool isKnownTransparent() const;
 	/* Cover the whole bitmap with a texture owned elsewhere (a decoded
 	 * video frame), scaled to fit. */
 	void drawExternalTexture(unsigned int glTexture, int texWidth, int texHeight);

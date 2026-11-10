@@ -962,7 +962,17 @@ TTF_Font *TTF_OpenFont(const char *file, int ptsize)
     return src ? TTF_OpenFontRW(src, 1, ptsize) : NULL;
 }
 
+TTF_Font *TTF_OpenFontIndexRW(SDL_RWops *src, int freesrc, int ptsize, long index);
+
 TTF_Font *TTF_OpenFontRW(SDL_RWops *src, int freesrc, int ptsize)
+{
+    return TTF_OpenFontIndexRW(src, freesrc, ptsize, 0);
+}
+
+/* 'index' picks the face inside a font collection (.ttc), like SDL_ttf.
+ * The file's bytes are shared with other faces of the same file through
+ * the blob cache. */
+TTF_Font *TTF_OpenFontIndexRW(SDL_RWops *src, int freesrc, int ptsize, long index)
 {
     if (!src) {
         vitaDiagLog("TTF", "open_failed source_null ptsize=%d", ptsize);
@@ -985,7 +995,7 @@ TTF_Font *TTF_OpenFontRW(SDL_RWops *src, int freesrc, int ptsize)
                     (unsigned long long)(lastT ? now - lastT : 0));
         lastT = now;
     }
-    if (size <= 0 || size > static_cast<Sint64>(SIZE_MAX))
+    if (size <= 0 || static_cast<uint64_t>(size) > SIZE_MAX)
     {
         vitaDiagLog("TTF", "open_stream_invalid size=%lld", (long long)size);
         if (freesrc)
@@ -1035,7 +1045,7 @@ TTF_Font *TTF_OpenFontRW(SDL_RWops *src, int freesrc, int ptsize)
 
     FT_Face face = NULL;
     const FT_Error face_error = FT_New_Memory_Face(
-        vita_ttf_library, data, static_cast<FT_Long>(size), 0, &face);
+        vita_ttf_library, data, static_cast<FT_Long>(size), static_cast<FT_Long>(index), &face);
     if (face_error != 0)
     {
         vitaDiagLog("TTF", "open_failed freetype_face size=%lld error=%d",

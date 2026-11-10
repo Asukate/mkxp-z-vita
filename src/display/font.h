@@ -50,7 +50,16 @@ public:
 	TTF_Font *getFont(std::string family,
 	                   int size, float hiresMult, int outline_size = 0);
 
-	bool fontPresent(std::string family) const;
+	/* withFallbackPack: also count families the engine fallback pack
+	 * stands in for (e.g. Courier New -> Liberation Mono). */
+	bool fontPresent(std::string family, bool withFallbackPack = true) const;
+
+	/* HardRPG user fonts: register every font file in 'dir' (see
+	 * userFontDir()). Call after the game's own Fonts/ scan; the game's
+	 * fonts win. Returns the number of faces found. */
+	int initUserFonts(const std::string &dir);
+	/* ux0:/data/hardrpg/fonts on the Vita; $HARDRPG_FONTS_DIR elsewhere. */
+	static std::string userFontDir();
 
 	static TTF_Font *openBundled(int size);
     void setDefaultFontFamily(const std::string &family);
