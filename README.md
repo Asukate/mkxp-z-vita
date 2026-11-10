@@ -52,6 +52,7 @@ ux0:/data/hardrpg/
 ├── games/
 │   ├── My Game/          ← a game folder, as it came
 │   └── Another Game/
+├── fonts/                ← optional: fonts a game asks for (see below)
 └── rtp/                  ← only if a game asks for its RTP
     ├── Standard/         RPG Maker XP
     ├── RPGVX/            RPG Maker VX
@@ -159,13 +160,41 @@ terminal in that folder and run the lines for your engine:
 
 **Settings → RTP locations** shows which RTPs HardRPG found.
 
+### Fonts (only if a game's text looks wrong)
+
+Many games use a font from Windows, such as MS Gothic, without including it.
+HardRPG then draws the text with a similar built-in font (MS Gothic and MS
+Mincho use Kosugi, which has the same letter widths). If you own the exact
+font, you can use it instead:
+
+1. Start any game once, so HardRPG creates `ux0:/data/hardrpg/fonts/`.
+2. Copy the font file into that folder. On Windows, fonts are in
+   `C:\Windows\Fonts` (MS Gothic and MS Mincho are `msgothic.ttc` and
+   `msmincho.ttc`). `.ttf`, `.otf`, `.ttc` and `.otc` files work.
+3. Start the game again.
+
+Every game that asks for that font by name, in English or Japanese, uses it.
+A font included in the game's own `Fonts` folder always comes first.
+
 ## Status
 
 > [!NOTE]
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.5.1 Alpha** is the current release. New in 0.5.1:
+**0.5.2 Alpha** is the current release. New in 0.5.2:
+
+- **LISA: The Joyful:** the archer cave runs at 60 fps.
+- **Ao Oni R:** rooms run at 58–60 fps.
+- **Pocket Mirror:** no longer runs out of memory after long play, including in the Rose Labyrinth.
+- **Pokémon Uranium and Insurgence:** partially supported.
+- **Exit Fate:** fonts, sky and sea, and music looping fixed.
+- **Launcher:** Japanese and Simplified Chinese; in-game keyboard.
+- **Your own fonts:** put a font a game asks for in `ux0:/data/hardrpg/fonts/` ([how](#fonts-only-if-a-games-text-looks-wrong)).
+
+Full list: [0.5.2 release notes](docs/RELEASE-NOTES-0.5.2.md).
+
+New in 0.5.1:
 
 - **BLACK SOULS II:** boss fights with several phases, such as the Deep Sea
   Knight, no longer crash when the next phase starts.

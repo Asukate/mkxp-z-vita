@@ -1,12 +1,22 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.5.1 Alpha"
-#define HARDRPG_VERSION_TAG "v0.5.1-alpha"
-#define HARDRPG_APP_VER "00.51"
-#define HARDRPG_RELEASE_UTC "2026-11-05"
+#define HARDRPG_VERSION "0.5.2 Alpha"
+#define HARDRPG_VERSION_TAG "v0.5.2-alpha"
+#define HARDRPG_APP_VER "00.52"
+#define HARDRPG_RELEASE_UTC "2026-11-10"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.5.1 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.5.2 Alpha - " HARDRPG_RELEASE_UTC,
+    "- LISA: The Joyful cave at 60 fps (#21)",
+    "- Ao Oni R rooms at 58-60 fps (#20)",
+    "- Pocket Mirror memory crash fixed (#19)",
+    "- Pokemon Uranium and Insurgence play",
+    "- Japanese and Chinese languages",
+    "- In-game keyboard",
+    "- Own fonts: ux0:/data/hardrpg/fonts",
+    "- Exit Fate fonts, sky and music (#22-25)",
+    "",
+    "0.5.1 Alpha - 2026-11-05",
     "- BLACK SOULS II boss fights no longer crash (#18)",
     "",
     "0.5.0 Alpha - 2026-11-04",
