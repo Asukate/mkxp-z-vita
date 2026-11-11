@@ -24,6 +24,8 @@
 
 #include "al-util.h"
 
+struct AtomicFlag;
+
 struct ALDataSource
 {
 	enum Status
@@ -51,6 +53,10 @@ struct ALDataSource
 
 	/* Returns false if not supported */
 	virtual bool setPitch(float value) = 0;
+
+	/* While this flag is set, a slow fillBuffer may stop early and
+	 * return Error (the stream is being stopped; the data is dropped). */
+	virtual void setCancelFlag(const AtomicFlag *) {}
 };
 
 ALDataSource *createSDLSource(SDL_RWops &ops,

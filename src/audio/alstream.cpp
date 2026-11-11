@@ -31,6 +31,10 @@
 #include "fluid-fun.h"
 #include "sdl-util.h"
 #include "debugwriter.h"
+#include "asset_prefetch.h"
+#ifdef __vita__
+#include <psp2/kernel/threadmgr.h>
+#endif
 
 #include <SDL_mutex.h>
 #include <SDL_thread.h>
@@ -188,6 +192,7 @@ double ALStream::queryOffset()
 void ALStream::closeSource()
 {
 	delete source;
+	source = 0;
 }
 
 struct ALStreamOpenHandler : FileSystem::OpenHandler
@@ -195,9 +200,10 @@ struct ALStreamOpenHandler : FileSystem::OpenHandler
 	bool looped;
 	ALDataSource *source;
 	std::string errorMsg;
+	ALStream *stream;
 
-	ALStreamOpenHandler(bool looped)
-	    : looped(looped), source(0)
+	ALStreamOpenHandler(bool looped, ALStream *stream)
+	    : looped(looped), source(0), stream(stream)
 	{}
 
 	bool tryRead(SDL_RWops &ops, const char *ext)
@@ -223,6 +229,11 @@ struct ALStreamOpenHandler : FileSystem::OpenHandler
 
 				if (HAVE_FLUID)
 				{
+					/* Close the playing track first: a MIDI track keeps its synth until
+					 * closed, and opening the new one alongside it made the pool load a
+					 * second synth and SoundFont (2.3 s and ~6 MB on the Vita). The old
+					 * track is closed right after the open anyway. */
+					stream->close();
 					source = createMidiSource(ops, looped);
 					return true;
 				}
@@ -246,7 +257,7 @@ struct ALStreamOpenHandler : FileSystem::OpenHandler
 
 void ALStream::openSource(const std::string &filename)
 {
-	ALStreamOpenHandler handler(looped);
+	ALStreamOpenHandler handler(looped, this);
 	try
 	{
 		shState->fileSystem().openRead(handler, filename.c_str());
@@ -306,6 +317,7 @@ void ALStream::startStream(double offset)
 
 	startOffset = offset;
 	procFrames = offset * source->sampleRate();
+	source->setCancelFlag(&threadTermReq);
 
 	thread = createSDLThread
 		<ALStream, &ALStream::streamData>(this, threadName);
@@ -365,6 +377,13 @@ void ALStream::checkStopped()
 /* thread func */
 void ALStream::streamData()
 {
+#ifdef __vita__
+	/* A MIDI buffer is 0.74 s of FluidLite rendering, done in one go. On the
+	 * game thread's core it held the game for ~700 ms a frame, on launches
+	 * where this thread happened to land there. */
+	if (int cores = AssetPrefetch::otherCoresMask())
+		sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), cores);
+#endif
 	/* Fill up queue */
 	bool firstBuffer = true;
 	ALDataSource::Status status;

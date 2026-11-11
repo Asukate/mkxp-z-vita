@@ -402,12 +402,110 @@ module HardRPGXPWeather
   end
 end
 
+# 3. Animation files ahead of use. The first load of an animation sheet took 90-180 ms on the Vita
+#    and its first sound effects ~50 ms each, so a map whose events loop through several "Show
+#    Animation" commands stuttered on each new one (Mysta's Vore RPG map 183: 33 fps). When a map
+#    is set up, or a battle starts, the animations it can show are known; the engine's prefetch
+#    worker prepares their files on another core. The game loads the same files, only sooner.
+#    Set $hardrpg_xp_anim_prefetch = false in a per-game shim to turn it off.
+module HardRPGXPAnimPrefetch
+  class << self
+    attr_reader :status
+
+    def cached?(path)
+      cache = RPG::Cache.instance_variable_get(:@cache)
+      b = cache.is_a?(Hash) && cache[path]
+      b.is_a?(Bitmap) && !b.disposed?
+    rescue StandardError
+      false
+    end
+
+    def animations(ids)
+      return unless $data_animations
+      ids.uniq.each do |id|
+        a = id.to_i > 0 && $data_animations[id.to_i]
+        next unless a
+        n = a.animation_name.to_s
+        path = "Graphics/Animations/#{n}"
+        System.prefetch_asset(:image, path) unless n.empty? || cached?(path)
+        (a.timings || []).each do |t|
+          s = t.se && t.se.name.to_s
+          System.prefetch_asset(:sound, "Audio/SE/#{s}") unless s.nil? || s.empty?
+        end
+      end
+    rescue StandardError
+      nil
+    end
+
+    # Every animation the map's event pages can show (Show Animation, code 207).
+    def map(game_map)
+      m = game_map.instance_variable_get(:@map)
+      return unless m && m.events
+      ids = []
+      m.events.each_value do |e|
+        e.pages.each { |pg| pg.list.each { |c| ids << c.parameters[1] if c.code == 207 } }
+      end
+      animations(ids)
+    rescue StandardError
+      nil
+    end
+
+    # What the battle will show first: the party's weapon and skill animations, the enemies'.
+    def battle
+      ids = []
+      $game_party.actors.each do |a|
+        w = $data_weapons[a.weapon_id]
+        ids << w.animation1_id << w.animation2_id if w
+        a.skills.each { |id| sk = $data_skills[id]; ids << sk.animation1_id << sk.animation2_id if sk }
+      end
+      $game_troop.enemies.each do |e|
+        d = $data_enemies[e.id] or next
+        ids << d.animation1_id << d.animation2_id
+        d.actions.each do |act|
+          sk = act.kind == 1 && $data_skills[act.skill_id]
+          ids << sk.animation1_id << sk.animation2_id if sk
+        end
+      end
+      animations(ids)
+    rescue StandardError
+      nil
+    end
+
+    def install
+      return @status = 'off (disabled)' if $hardrpg_xp_anim_prefetch == false
+      unless System.respond_to?(:prefetch_asset) && defined?(RPG::Cache) && defined?(Game_Map) &&
+             Game_Map.method_defined?(:setup)
+        return @status = 'off (not XP)'
+      end
+      Game_Map.class_eval do
+        alias_method :hardrpg_anim_prefetch_setup, :setup
+        def setup(*args)
+          r = hardrpg_anim_prefetch_setup(*args)
+          HardRPGXPAnimPrefetch.map(self)
+          r
+        end
+      end
+      if defined?(Scene_Battle) && Scene_Battle.method_defined?(:main)
+        Scene_Battle.class_eval do
+          alias_method :hardrpg_anim_prefetch_main, :main
+          def main(*args)
+            HardRPGXPAnimPrefetch.battle
+            hardrpg_anim_prefetch_main(*args)
+          end
+        end
+      end
+      @status = 'on'
+    end
+  end
+end
+
 # Installed at the game's first frame, after its scripts have defined the classes.
 class << Graphics
   alias_method :hardrpg_xp_switch_update, :update
   def update(*args)
     HardRPGXPTileKeep.install unless HardRPGXPTileKeep.status
     HardRPGXPWeather.install unless HardRPGXPWeather.status
+    HardRPGXPAnimPrefetch.install unless HardRPGXPAnimPrefetch.status
     hardrpg_xp_switch_update(*args)
   end
 end

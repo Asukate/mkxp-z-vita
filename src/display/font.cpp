@@ -29,6 +29,7 @@
 #include "config.h"
 #include "encoding.h"
 #include "vita_diagnostic.h"
+#include "core-font-vdmx.h"
 
 #include "debugwriter.h"
 
@@ -37,6 +38,7 @@
 #include <utility>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <cstdint>
 #include <array>
 #include <unordered_map>
@@ -668,6 +670,35 @@ static inline USHORT get_fixed_windescent(USHORT windescent)
     return abs((SHORT)windescent);
 }
 
+/* The bundled Liberation fonts have no VDMX table. For them use the table of the Windows
+ * font they replace (same widths), picking a ppem the way load_VDMX does, so a size gives
+ * the pixel size, line height and text width the game was made with. */
+static int stand_in_VDMX(Font_Container *font, int height)
+{
+	FT_Face face = *(reinterpret_cast<FT_Face *>(font->font));
+	const char *family = face->family_name ? face->family_name : "";
+	const int16_t (*table)[2] = nullptr;
+	if (!strcmp(family, "Liberation Sans")) table = vdmxArial;
+	else if (!strcmp(family, "Liberation Serif")) table = vdmxTimesNewRoman;
+	else if (!strcmp(family, "Liberation Mono")) table = vdmxCourierNew;
+	if (!table || height <= 0)
+		return 0;
+	const int count = VDMX_LAST_PPEM - VDMX_FIRST_PPEM + 1;
+	for (int i = 0; i < count; ++i) {
+		int h = table[i][0] - table[i][1];
+		if (h == height || (h > height && i > 0)) {
+			if (h > height)
+				--i;
+			font->yMax = table[i][0];
+			font->yMin = table[i][1];
+			return VDMX_FIRST_PPEM + i;
+		}
+		if (h > height)
+			return 0;
+	}
+	return 0;
+}
+
 static int calc_ppem_for_height(Font_Container *font, int height)
 {
 	FT_Face ft_face = *(reinterpret_cast<FT_Face *>( font->font ));
@@ -972,6 +1003,8 @@ TTF_Font *SharedFontState::getFont(std::string family,
 				Font_Container c = { 0 };
 				c.font = font;
 				c.ppem = load_VDMX(&c, size);
+				if (!c.ppem)
+					c.ppem = stand_in_VDMX(&c, size);
 				if (!c.ppem)
 					c.ppem = calc_ppem_for_height( &c, size );
 

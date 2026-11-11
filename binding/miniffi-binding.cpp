@@ -673,6 +673,23 @@ static bool vitaKernel32Call(const char *name, VALUE args, VALUE *result) {
     return false;
 }
 
+/* GetAsyncKeyState: 0x8000 while the key is down, plus 0x01 when it went down
+ * since this key was last asked about. Typing scripts such as Cybersam's
+ * Text_input (Mysta's Vore RPG's save name screen) read only the 0x01 bit, so
+ * without it no key ever registered. A key that is already down the first time
+ * a game asks (the button that chose New Game) does not count as a new press. */
+static int vitaAsyncKeyState(unsigned int key) {
+    static uint8_t seen[256]; /* 0 never asked, 1 up, 2 down */
+    const bool down = vitaVKPressed(key);
+    int state = down ? 0x8000 : 0;
+    if (key < 256) {
+        if (down && seen[key] == 1)
+            state |= 0x01;
+        seen[key] = down ? 2 : 1;
+    }
+    return state;
+}
+
 static bool vitaUser32Call(const char *name, VALUE args, VALUE *result) {
     if ((std::strcmp(name, "MessageBoxA") == 0 || std::strcmp(name, "MessageBoxW") == 0) &&
         RARRAY_LEN(args) == 4) {
@@ -692,7 +709,7 @@ static bool vitaUser32Call(const char *name, VALUE args, VALUE *result) {
     }
     if (std::strcmp(name, "GetAsyncKeyState") == 0 || std::strcmp(name, "GetKeyState") == 0) {
         unsigned int key = NUM2UINT(rb_ary_entry(args, 0));
-        *result = INT2NUM(vitaVKPressed(key) ? 0x8000 : 0);
+        *result = INT2NUM(name[3] == 'A' ? vitaAsyncKeyState(key) : vitaVKPressed(key) ? 0x8000 : 0);
         return true;
     }
     /* There is no mouse: report the cursor as parked outside the game window,
@@ -740,7 +757,7 @@ static bool vitaUser32Call(const char *name, VALUE args, VALUE *result) {
 enum VitaFFILib { VL_OTHER, VL_USER32, VL_KERNEL32, VL_UTILS, VL_STEAM, VL_VIDEO };
 enum VitaFFIFn {
     VF_GENERIC = 0,    /* the library's dispatcher below, then a typed zero */
-    VF_KEY_STATE = 1,  /* user32 GetAsyncKeyState / GetKeyState (native-events.cpp reads 1 and 2) */
+    VF_KEY_STATE = 1,  /* user32 GetKeyState (native-events.cpp reads 1 and 2) */
     VF_KEYBOARD = 2,   /* user32 GetKeyboardState */
     VF_RUBY,           /* a handler from launcher/rgss_extensions.rb (HardRPGWin32::HANDLERS) */
     VF_WINDOW,         /* FindWindow, GetForegroundWindow, GetActiveWindow, GetFocus */
@@ -749,6 +766,7 @@ enum VitaFFIFn {
     VF_WINDOW_THREAD,  /* user32 GetWindowThreadProcessId */
     VF_CLIENT_RECT,    /* user32 GetClientRect / GetWindowRect */
     VF_METRICS,        /* user32 GetSystemMetrics */
+    VF_ASYNC_KEY_STATE, /* user32 GetAsyncKeyState (VF_KEY_STATE is GetKeyState) */
 };
 /* Same values as HardRPGWindow in launcher/rgss_extensions.rb (its Ruby reference). */
 static const long kVitaHwnd = 0x00010010;
@@ -893,7 +911,9 @@ static VALUE vitaFFIInitialize(int argc, VALUE *argv, VALUE self) {
         }
     }
     if (f->fn == VF_GENERIC && f->lib == VL_USER32) {
-        if (!strcmp(s, "GetAsyncKeyState") || !strcmp(s, "GetKeyState"))
+        if (!strcmp(s, "GetAsyncKeyState"))
+            f->fn = n == 1 ? VF_ASYNC_KEY_STATE : VF_GENERIC;
+        else if (!strcmp(s, "GetKeyState"))
             f->fn = n == 1 ? VF_KEY_STATE : VF_GENERIC;
         else if (!strcmp(s, "GetKeyboardState"))
             f->fn = n == 1 ? VF_KEYBOARD : VF_GENERIC;
@@ -927,6 +947,10 @@ static VALUE vitaFFICall(int argc, VALUE *argv, VALUE self) {
         case VF_KEY_STATE:
             if (argc == 1)
                 return INT2NUM(vitaVKPressed(NUM2UINT(argv[0])) ? 0x8000 : 0);
+            break;
+        case VF_ASYNC_KEY_STATE:
+            if (argc == 1)
+                return INT2NUM(vitaAsyncKeyState(NUM2UINT(argv[0])));
             break;
         case VF_RUBY: {
             /* call(*args), or call([args]) as one array, like Win32API */
@@ -1010,7 +1034,7 @@ int hardrpgMiniFFIKeyKind(VALUE obj) {
     VitaFFI *f = vitaFFIGet(obj);
     if (!f || !f->ready)
         return 0;
-    return f->fn == VF_KEY_STATE ? 1 : f->fn == VF_KEYBOARD ? 2 : 0;
+    return f->fn == VF_KEY_STATE || f->fn == VF_ASYNC_KEY_STATE ? 1 : f->fn == VF_KEYBOARD ? 2 : 0;
 }
 bool hardrpgVitaKeyPressed(unsigned int key) { return vitaVKPressed(key); }
 unsigned char *hardrpgDLData(VALUE obj, size_t *size) {

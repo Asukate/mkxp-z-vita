@@ -17,14 +17,14 @@ def load_fastpath
   load File.expand_path('../launcher/sprite_fastpath.rb', __dir__)
 end
 
-class Rect; attr_reader :v; def set(*a); @v = a; end; end
+class Rect; attr_reader :v; def set(*a); @v = a; end; def width; @v ? @v[2] : 0; end; def height; @v ? @v[3] : 0; end; end
 class Sprite
   attr_accessor :x, :y, :z, :opacity, :blend_type, :bush_depth, :visible, :bitmap, :ox, :oy
   def initialize(_viewport = nil); @x = @y = @z = 0; end
   def update; @base_updates = (@base_updates || 0) + 1; end
   def src_rect; @r ||= Rect.new; end
 end
-module Graphics; def self.update; end; end
+module Graphics; def self.update; end; def self.width; 640; end; def self.height; 480; end; end
 load_fastpath
 
 # --- checksum basics -------------------------------------------------------------------------------
@@ -40,7 +40,9 @@ check('checksum unchanged after super has run', da == HardRPGSpriteFastPath.dige
 check('inherited method is not the class\'s own', !HardRPGSpriteFastPath.default?(Class.new(a), :f, da))
 
 # --- RPG Maker XP stand-ins ------------------------------------------------------------------------
-module RPG; class Sprite < ::Sprite; end; end
+module RPG; class Sprite < ::Sprite
+  def initialize(v = nil); super; @_whiten_duration = @_appear_duration = @_escape_duration = @_collapse_duration = @_damage_duration = 0; end
+end; end
 class Game_Map; attr_accessor :display_x, :display_y; def bush?(x, _y); x == 3; end; end
 class Game_Character
   attr_accessor :x, :y, :real_x, :real_y, :pattern, :direction, :opacity, :blend_type, :transparent,
@@ -56,6 +58,7 @@ class Game_Character
   def bush_depth; @always_on_top || @jump_count > 0 || !$game_map.bush?(@x, @y) ? 0 : 12; end
   def jumping?; @jump_count > 0; end
 end
+XP_SPRITE_SRC = <<~'RUBY'
 class Sprite_Character < RPG::Sprite
   def initialize(viewport, character); super(viewport); @character = character; update; end
   def update
@@ -75,6 +78,8 @@ class Sprite_Character < RPG::Sprite
     self.bush_depth = @character.bush_depth
   end
 end
+RUBY
+eval(XP_SPRITE_SRC)
 
 def xp_digests
   fp = HardRPGSpriteFastPath
@@ -120,6 +125,35 @@ check('XP: a later Game_Character#screen_x change switches it off',
       HardRPGSpriteFastPath.status == 'off (Game_Character#screen_x changed after start)')
 check('XP: after that every sprite takes the new position', xp_run.last.all? { |row| row[0] == 777 })
 $hardrpg_sprite_fastpath_off = nil
+
+# The camera scrolls far away and back: sprites off screen may keep a stale position, but every
+# sprite on screen matches the full update, and none drawn off screen ends up on screen.
+def xp_scroll_run
+  $game_map = Game_Map.new; $game_map.display_x = 0; $game_map.display_y = 0
+  cs = (2..4).map { |i| Game_Character.new(i) }
+  sprites = cs.map { |ch| Sprite_Character.new(nil, ch) }
+  steps = [0, 400, 2000, 6000, 12000, 6000, 2000, 400, 0, -3000, -9000, -3000, 0]
+  steps.map.with_index do |dx, f|
+    $game_map.display_x = dx
+    cs[1].pattern = f % 4
+    cs[2].real_y += 16 if f.odd?
+    sprites.each(&:update)
+    sprites.map { |sp| [sp.x, sp.y, sp.z, sp.opacity, sp.src_rect.v] }
+  end
+end
+on = ->(row) { row[0] + 16 >= -32 && row[0] - 16 <= 672 && row[1] >= -32 && row[1] - 48 <= 512 }
+Object.send(:remove_const, :Sprite_Character)
+eval(XP_SPRITE_SRC)
+load_fastpath; xp_digests
+$hardrpg_sprite_fastpath = false; HardRPGSpriteFastPath.install; $hardrpg_sprite_fastpath = nil
+full = xp_scroll_run
+Object.send(:remove_const, :Sprite_Character)
+eval(XP_SPRITE_SRC)
+load_fastpath; xp_digests; HardRPGSpriteFastPath.install
+fast = xp_scroll_run
+check('XP: scrolling far away and back, sprites on screen match the full update',
+      full.zip(fast).all? { |a, b| a.zip(b).all? { |r, q| on.(r) ? r == q : !on.(q) } })
+check('XP: off-screen sprites were skipped', full != fast)
 
 # A game that edited one Game_Character method keeps the full update.
 Object.send(:remove_const, :Sprite_Character)

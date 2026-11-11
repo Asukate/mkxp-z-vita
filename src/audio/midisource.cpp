@@ -28,6 +28,7 @@
 #include "util.h"
 #include "debugwriter.h"
 #include "fluid-fun.h"
+#include "sdl-util.h"
 
 #include <SDL_rwops.h>
 
@@ -54,6 +55,8 @@
 
 #define TICK_FRAMES 32
 #define BUF_TICKS (STREAM_BUF_SIZE / TICK_FRAMES)
+/* Most ticks rendered between cancel checks (64 ticks = 46 ms of audio) */
+#define CANCEL_TICKS 64
 #define DEFAULT_BPM 120
 #define MAX_CHANNELS 16
 
@@ -590,6 +593,7 @@ struct MidiSource : ALDataSource, MidiReadHandler
 	fluid_synth_t *synth;
 
 	int16_t synthBuf[BUF_TICKS*TICK_FRAMES*2];
+	const AtomicFlag *cancel = nullptr;
 
 	std::vector<Track> tracks;
 	CCResetter<CC_CTRL_VOLUME>     volReset;
@@ -806,6 +810,11 @@ struct MidiSource : ALDataSource, MidiReadHandler
 		 * have been rendered */
 		while (remTicks > 0)
 		{
+			/* A full buffer is 0.74 s of synthesis; stopping the
+			 * track (a BGM change) should not wait for all of it */
+			if (cancel && *cancel)
+				return Error;
+
 			/* Check for events that have to be activated now, activate them,
 			 * and schedule new ones if the queue isn't empty */
 			for (size_t i = 0; i < tracks.size(); ++i)
@@ -862,6 +871,7 @@ struct MidiSource : ALDataSource, MidiReadHandler
 
 			/* Calculate amount of ticks we'll render next */
 			size_t genTicks = allInvalid ? remTicks : std::min(remTicks, nextEvent);
+			genTicks = std::min<size_t>(genTicks, CANCEL_TICKS);
 
 			if (genTicks == 0)
 				continue;
@@ -893,6 +903,11 @@ struct MidiSource : ALDataSource, MidiReadHandler
 	int sampleRate()
 	{
 		return freq;
+	}
+
+	void setCancelFlag(const AtomicFlag *flag)
+	{
+		cancel = flag;
 	}
 
 	/* Midi sources cannot seek, and so always reset to beginning */

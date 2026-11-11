@@ -144,6 +144,14 @@ module HardRPGSpriteFastPath
 
     def sprite_base_update; @sprite_base_update; end
 
+    # A character sprite at screen x, y (bottom centre, as XP places them) of size w x h, with a
+    # 32-pixel margin, lies wholly outside the screen.
+    def off_screen?(x, y, w, h)
+      @sw ||= Graphics.width
+      @sh ||= Graphics.height
+      x + w / 2 < -32 || x - w / 2 > @sw + 32 || y < -32 || y - h > @sh + 32
+    end
+
     def install_xp
       return @status = 'off (custom update)' unless default?(Sprite_Character, :update, XP_SPRITE_UPDATE)
       custom = XP_CHARACTER.reject { |m, want| default?(Game_Character, m, want) }.keys
@@ -153,6 +161,16 @@ module HardRPGSpriteFastPath
         def update
           c = @character
           m = $game_map
+          # Off screen: a sprite its last full update placed off screen draws nothing; while its
+          # character stays off screen and no animation or effect runs, there is nothing to update.
+          # Maps with hundreds of events move most of them off screen while the camera scrolls.
+          if @hardrpg_off && !$hardrpg_sprite_fastpath_off && c.animation_id == 0 && !c.jumping? &&
+             !@_animation && !@_loop_animation && @_whiten_duration == 0 && @_appear_duration == 0 &&
+             @_escape_duration == 0 && @_collapse_duration == 0 && @_damage_duration == 0 &&
+             HardRPGSpriteFastPath.off_screen?((c.real_x - m.display_x + 3) / 4 + 16,
+                                               (c.real_y - m.display_y + 3) / 4 + 32, @hardrpg_cw, @hardrpg_ch)
+            return
+          end
           if @hardrpg_seen && !$hardrpg_sprite_fastpath_off && @tile_id == c.tile_id && @character_name == c.character_name &&
              @character_hue == c.character_hue && c.real_x == @hardrpg_rx && c.real_y == @hardrpg_ry &&
              m.display_x == @hardrpg_dx && m.display_y == @hardrpg_dy && c.pattern == @hardrpg_pattern &&
@@ -175,6 +193,9 @@ module HardRPGSpriteFastPath
           @hardrpg_transparent = c.transparent
           @hardrpg_jumping = c.jumping?
           @hardrpg_on_top = c.instance_variable_get(:@always_on_top)
+          @hardrpg_cw = src_rect.width
+          @hardrpg_ch = src_rect.height
+          @hardrpg_off = HardRPGSpriteFastPath.off_screen?(x, y, @hardrpg_cw, @hardrpg_ch)
         end
       end
       watch(Game_Character, XP_WATCH)

@@ -547,6 +547,9 @@ void note(char kind, const std::string &name, double ms) {
 }
 } // namespace
 
+static int otherCores = 0;
+int otherCoresMask() { return otherCores; }
+
 void start(FileSystem &fs, const std::string &gameKey, const std::string &historyDir) {
   if (state)
     return;
@@ -570,6 +573,7 @@ void start(FileSystem &fs, const std::string &gameKey, const std::string &histor
     const int mine = SCE_KERNEL_CPU_MASK_USER_0 << core;
     sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), mine);
     state->workerMask = all & ~mine;
+    otherCores = all & ~mine;
   }
 #endif
   // A pthread (SDL's locks need one); it moves itself to core 2 in run().

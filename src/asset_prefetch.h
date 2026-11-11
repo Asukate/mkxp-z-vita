@@ -77,6 +77,10 @@ struct ForegroundLoad {
 // a moment after, the worker starts no new file. Calls nest; any thread.
 void holdWorker();
 void releaseWorker();
+// Vita: the user cores other than the one start() pinned the game thread to
+// (0 before start). Busy helper threads move there so they never hold the
+// game's core.
+int otherCoresMask();
 // Loads under this cost are not worth preparing.
 constexpr double worthMs = 15.0;
 } // namespace AssetPrefetch
