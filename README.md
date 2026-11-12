@@ -182,7 +182,17 @@ A font included in the game's own `Fonts` folder always comes first.
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.5.2 Alpha** is the current release. New in 0.5.2:
+**0.5.3 Alpha** is the current release. New in 0.5.3:
+
+- **Person of Courage:** starts (it stopped with "not a PNG" before).
+- **Mysta's Vore RPG:** name entry types, text fits its windows, slow maps run at full speed.
+- **RPG Maker XP games:** faster animations in battles and on maps; maps with many events skip characters far off screen.
+- **MIDI music:** no more short freezes when a game starts or changes songs.
+- **Arial, Times New Roman and Courier New:** text is sized as on Windows, so long lines fit.
+
+Full list: [0.5.3 release notes](docs/RELEASE-NOTES-0.5.3.md).
+
+New in 0.5.2:
 
 - **LISA: The Joyful:** the archer cave runs at 60 fps.
 - **Ao Oni R:** rooms run at 58–60 fps.

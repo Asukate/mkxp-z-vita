@@ -1,12 +1,19 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.5.2 Alpha"
-#define HARDRPG_VERSION_TAG "v0.5.2-alpha"
-#define HARDRPG_APP_VER "00.52"
-#define HARDRPG_RELEASE_UTC "2026-11-10"
+#define HARDRPG_VERSION "0.5.3 Alpha"
+#define HARDRPG_VERSION_TAG "v0.5.3-alpha"
+#define HARDRPG_APP_VER "00.53"
+#define HARDRPG_RELEASE_UTC "2026-11-13"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.5.2 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.5.3 Alpha - " HARDRPG_RELEASE_UTC,
+    "- Person of Courage starts (#27)",
+    "- Mysta's Vore RPG: typing, text, speed",
+    "- Faster XP animations and busy maps",
+    "- No more MIDI music freezes",
+    "- Arial text sized like on Windows",
+    "",
+    "0.5.2 Alpha - 2026-11-10",
     "- LISA: The Joyful cave at 60 fps (#21)",
     "- Ao Oni R rooms at 58-60 fps (#20)",
     "- Pocket Mirror memory crash fixed (#19)",
