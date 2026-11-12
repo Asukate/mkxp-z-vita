@@ -28,6 +28,8 @@ animations and MIDI music for every game.
   with all 222 pictures unlocked.
 - **Hello Charlotte EP1:** some long dialogue lines are cut off by two or
   three letters at the right edge of the message window.
+- **Person of Courage:** battles pause for about 2 seconds when they start
+  and when the victory music plays, while the MIDI sound bank loads.
 - **Hylics:** holding **L + R + Start** does not open the in-game menu; tap
   the icon in the screen border instead.
 

@@ -41,7 +41,7 @@ end, so problems later in those games are still possible.
 | N.P.C. Dreams | VX Ace | ✅ Runs | Faster walking and battles since 0.5.2; some frame drops remain. |
 | Exit Fate | XP | 🟡 Partial | Change Party screen crash fixed in 0.5.0 ([#15](https://github.com/Asukate/mkxp-z-vita/issues/15)), checked with a community save. Fonts, sky and sea noise, a stray box after some lines and a music stall fixed in 0.5.2 ([#22](https://github.com/Asukate/mkxp-z-vita/issues/22)–[#25](https://github.com/Asukate/mkxp-z-vita/issues/25)). |
 | Mysta's Vore RPG | XP | 🟡 Partial | Name entry, text cut off at window edges and slow maps (18–37 fps, now the game's own 36–40) fixed in 0.5.3. Later progression untested. |
-| Person of Courage | VX | 🟡 Partial | Starts since 0.5.3 ([#27](https://github.com/Asukate/mkxp-z-vita/issues/27)); it stopped with "not a PNG" before. Opening, a busy map and a battle checked; later progression untested. |
+| Person of Courage | VX | 🟡 Partial | Starts since 0.5.3 ([#27](https://github.com/Asukate/mkxp-z-vita/issues/27)); it stopped with "not a PNG" before. Opening, a busy map and a battle checked; battles pause for about 2 s at the start and at the victory music. Later progression untested. |
 | Finding Paradise (Steam) | XP | 🟡 Partial | Starts since 0.5.0 ([#17](https://github.com/Asukate/mkxp-z-vita/issues/17)). Intro 39–40 fps, first town map 35–37 fps; later progression untested. |
 | A New Game (RJ273807, Chinese translation) | VX Ace | 🟡 Partial | Starts since 0.4.9 (it stopped with "class variable access from toplevel" before). Later progression untested. |
 
