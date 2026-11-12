@@ -16,6 +16,12 @@ raw = (b'\0' + bytes((40, 20, 10, 255)) * 960) * 1152
 (root / 'valid.png').write_bytes(b'\x89PNG\r\n\x1a\n' +
     chunk(b'IHDR', struct.pack('>IIBBBBB', 960, 1152, 8, 6, 0, 0, 0)) +
     chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+# A bottom-up, 24-bit BMP with padded rows and a misleading PNG extension.
+pixels = bytes((255, 0, 0, 0, 255, 255, 0, 0, 0, 0, 255, 0, 255, 0, 0, 0))
+(root / 'bmp-named-png.png').write_bytes(
+    struct.pack('<2sIHHI', b'BM', 54 + len(pixels), 0, 0, 54) +
+    struct.pack('<IiiHHIIiiII', 40, 2, 2, 1, 24, 0, len(pixels), 0, 0, 0, 0) +
+    pixels)
 (root / 'decoder-check.c').write_text(r'''
 #include <assert.h>
 #include <stdarg.h>
@@ -51,8 +57,11 @@ static size_t read_fn(SDL_RWops *s,void *p,size_t n,size_t count) { (void)s; siz
 static int close_fn(SDL_RWops *s) { (void)s; ++closes; return 0; }
 static SDL_Surface *decode(void) { SDL_RWops s={0}; s.size=size_fn; s.seek=seek_fn; s.read=read_fn; s.close=close_fn; error[0]=0; position=0; return IMG_LoadTyped_RW(&s,1,"PNG"); }
 static void expect_failure(size_t n,const char *reason) { fail_size=n; int before=closes; SDL_Surface *s=decode(); assert(!s); assert(closes==before+1); if(!strstr(SDL_GetError(),reason)) { fprintf(stderr,"Expected '%s', got SDL='%s' IMG='%s'\n",reason,SDL_GetError(),IMG_GetError()); abort(); } assert(!strcmp(SDL_GetError(),IMG_GetError())); fail_size=0; }
+static void load_file(const char *path) {
+ FILE *f=fopen(path,"rb"); assert(f); fseek(f,0,SEEK_END); length=ftell(f); rewind(f); bytes=malloc(length); assert(fread(bytes,1,length,f)==length); fclose(f);
+}
 int main(int argc,char **argv) {
- assert(argc==2); FILE *f=fopen(argv[1],"rb"); assert(f); fseek(f,0,SEEK_END); length=ftell(f); rewind(f); bytes=malloc(length); assert(fread(bytes,1,length,f)==length); fclose(f);
+ assert(argc==3); load_file(argv[1]);
  for(int i=0;i<20;++i) { SDL_Surface *s=decode(); if(!s) fprintf(stderr,"valid decode failed: %s\n",SDL_GetError()); assert(s && s->w==960 && s->h==1152); SDL_FreeSurface(s); }
  assert(snapshots==0);
  fail_size=length; SDL_Surface *streamed=decode(); assert(streamed); SDL_FreeSurface(streamed); fail_size=0;
@@ -61,10 +70,19 @@ int main(int argc,char **argv) {
  assert(snapshots==2);
  short_read=1; expect_failure(0,"incomplete image stream read"); short_read=0;
  bytes[0]=0; expect_failure(0,"not a PNG"); free(bytes);
- puts("PASS: actual SDL image decoder loads PNG repeatedly; allocation/read failures report precise SDL errors and close streams once");
+ load_file(argv[2]);
+ int before=closes;
+ SDL_Surface *bmp=decode(); assert(bmp && bmp->w==2 && bmp->h==2 && closes==before+1);
+ const unsigned char top[]={255,0,0,255, 0,255,0,255};
+ const unsigned char bottom[]={0,0,255,255, 255,255,0,255};
+ assert(!memcmp(bmp->pixels,top,sizeof(top)));
+ assert(!memcmp((unsigned char *)bmp->pixels+bmp->pitch,bottom,sizeof(bottom)));
+ SDL_FreeSurface(bmp);
+ length=2; expect_failure(0,"not a PNG, JPEG or BMP"); free(bytes);
+ puts("PASS: SDL image decoder loads PNG and BMP by signature and closes streams once");
 }
 ''')
 flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'freetype2', 'libpng'], text=True).split()
 shim = source/'deps/vendor/vita-sdl2-shim'
 subprocess.run(['cc','-std=c99','-g','-O1','-ffunction-sections','-fdata-sections','-fsanitize=address,undefined','-I'+str(shim/'include/SDL2'),'-I'+str(shim/'include'),str(root/'decoder-check.c'),str(shim/'src/SDL_vita_stubs.c'),'-Wl,--gc-sections','-Wl,--wrap=malloc','-Wl,--wrap=calloc','-lm',*flags,'-o',str(root/'decoder-check')],check=True)
-subprocess.run([str(root/'decoder-check'), str(root/'valid.png')],check=True)
+subprocess.run([str(root/'decoder-check'), str(root/'valid.png'), str(root/'bmp-named-png.png')],check=True)

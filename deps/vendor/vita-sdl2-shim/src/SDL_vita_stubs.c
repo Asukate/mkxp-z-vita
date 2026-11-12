@@ -28,10 +28,11 @@
 #include FT_FREETYPE_H
 #include <png.h>
 
-/* JPEG (and BMP/TGA fallback) decode via stb_image, vendored above.
- * Only the JPEG decoder is compiled in to keep the stub small; PNG keeps
+/* JPEG and BMP decode via stb_image, vendored above.
+ * Only those decoders are compiled in to keep the stub small; PNG keeps
  * its libpng fast path. */
 #define STBI_ONLY_JPEG
+#define STBI_ONLY_BMP
 /* The Vita toolchain implements stb's TLS through libgcc emutls. On-device
  * JPEG decoding faults in pthread_mutex_unlock on its null emutls_mutex.
  * This shim uses no thread-local flip setters or stb failure-reason API;
@@ -1183,30 +1184,36 @@ static SDL_Surface *vita_png_decode(SDL_RWops *source, size_t size,
     return surface;
 }
 
-/* SDL_image — PNGs decode through libpng; JPEGs through stb_image.
+/* SDL_image — PNGs decode through libpng; JPEGs and BMPs through stb_image.
  * The old stub PNG-decoded everything, so any game asset stored as JPEG
  * (e.g. To the Moon's panoramas) failed with "not a PNG". Dispatch on
  * magic bytes; the `type` hint is ignored because archive lookups often
- * carry no reliable extension. */
-static SDL_Surface *vita_jpeg_decode(const unsigned char *data, size_t size) {
+ * carry no reliable extension, and games ship misnamed files: Person of
+ * Courage (issue 27) keeps 24-bit BMPs named Actor1.png in its archive,
+ * which Windows RGSS loads by content. */
+static int vita_is_jpeg(const unsigned char *data, size_t size) {
+    return size >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff;
+}
+
+static int vita_is_bmp(const unsigned char *data, size_t size) {
+    return size >= 18 && data[0] == 'B' && data[1] == 'M';
+}
+
+static SDL_Surface *vita_stb_decode(const unsigned char *data, size_t size, const char *format) {
     SDL_Surface *surface = NULL;
     unsigned char *pixels = NULL;
     int width = 0, height = 0, channels = 0;
     int y;
 
-    if (size < 3 || data[0] != 0xff || data[1] != 0xd8 || data[2] != 0xff) {
-        vita_img_set_error("not a JPEG");
-        return NULL;
-    }
     pixels = stbi_load_from_memory(data, (int)size, &width, &height, &channels, 4);
     if (!pixels || width <= 0 || height <= 0) {
-        vita_img_set_error("JPEG decode failed");
+        vita_img_set_error(!strcmp(format, "BMP") ? "BMP decode failed" : "JPEG decode failed");
         if (pixels) stbi_image_free(pixels);
         return NULL;
     }
     surface = vita_make_surface(width, height, 0);
     if (!surface) {
-        vita_img_set_error("invalid JPEG dimensions");
+        vita_img_set_error(!strcmp(format, "BMP") ? "invalid BMP dimensions" : "invalid JPEG dimensions");
         stbi_image_free(pixels);
         return NULL;
     }
@@ -1264,10 +1271,12 @@ SDL_Surface *IMG_LoadTyped_RW(SDL_RWops *src, int freesrc, const char *type) {
     if (!data) {
         return NULL;
     }
-    if (size >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff)
-        surface = vita_jpeg_decode(data, size);
+    if (vita_is_jpeg(data, size))
+        surface = vita_stb_decode(data, size, "JPEG");
+    else if (vita_is_bmp(data, size))
+        surface = vita_stb_decode(data, size, "BMP");
     else {
-        vita_img_set_error("not a PNG");
+        vita_img_set_error("not a PNG, JPEG or BMP");
         surface = NULL;
     }
     free(data);
