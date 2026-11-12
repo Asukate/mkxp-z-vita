@@ -46,3 +46,5 @@ releases and keeps existing game folders, saves and settings.
 
 This is still an alpha: compatibility and speed vary by game. See the
 [compatibility list](COMPATIBILITY.md).
+
+<!-- 174219a5777cea0177b6743ceb989de5b9c9f009b8e2fe5053d03a0379fb0844 -->
