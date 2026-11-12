@@ -58,6 +58,7 @@ python3 tests/bitmap-direct-pixel.py 2>&1 | tee "$WS/logs/bitmap-direct-pixel.lo
 python3 tests/bitmap-mapped-clear.py 2>&1 | tee "$WS/logs/bitmap-mapped-clear.log"
 python3 tests/tilemap-empty-autotile.py 2>&1 | tee "$WS/logs/tilemap-empty-autotile.log"
 python3 tests/font-vdmx.py 2>&1 | tee "$WS/logs/font-vdmx.log"
+python3 tests/font-size.py 2>&1 | tee "$WS/logs/font-size.log"
 ./scripts/bootstrap-vita.sh --ws "$WS" --profile "$PROFILE" -j "$JOBS" 2>&1 | tee "$WS/logs/bootstrap.log"
 python3 tests/pixel-transfer.py "$WS/src/vitaGL" 2>&1 | tee "$WS/logs/pixel-transfer.log"
 ./scripts/build-vita.sh --ws "$WS" --profile "$PROFILE" -j "$JOBS" 2>&1 | tee "$WS/logs/build.log"

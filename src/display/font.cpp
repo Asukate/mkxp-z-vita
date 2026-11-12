@@ -713,8 +713,9 @@ static int calc_ppem_for_height(Font_Container *font, int height)
 		}
 		ppem = (int)FT_MulDiv(ft_face->units_per_EM, height, units);
 
-		/* If rounding ends up getting a font exceeding height, choose a smaller ppem */
-		if(ppem > 1 && FT_MulDiv(units, ppem, ft_face->units_per_EM) > height)
+		/* FT_MulDiv rounds to nearest. Compare unrounded heights so a small
+		 * overshoot is not rounded away a second time. */
+		if(ppem > 1 && int64_t(units) * ppem > int64_t(height) * ft_face->units_per_EM)
 			--ppem;
 
 		if(ppem > MAX_PPEM) {
