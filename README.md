@@ -12,21 +12,33 @@
   <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/RPG%20Maker-XP%20%2F%20VX%20%2F%20Ace%20%2F%202000%20%2F%202003-5865f2?style=for-the-badge" alt="RPG Maker: XP, VX, VX Ace, 2000, 2003"></a>
 </p>
 
-<p align="center"><a href="#install">Install</a> · <a href="#add-your-games">Add games</a> · <a href="#using-hardrpg">Use</a> · <a href="#per-game-settings-and-controls">Controls</a> · <a href="#artwork-game-info-and-title-music">Artwork</a> · <a href="#compatibility">Compatibility</a> · <a href="#something-went-wrong">Help</a> · <a href="#faq">FAQ</a> · <a href="#building">Build</a></p>
+<p align="center"><a href="#install">Install</a> · <a href="#add-your-games">Add games</a> · <a href="#what-hardrpg-can-do">Features</a> · <a href="#using-hardrpg">Use</a> · <a href="#per-game-settings-and-controls">Controls</a> · <a href="#artwork-game-info-and-title-music">Artwork</a> · <a href="#compatibility">Compatibility</a> · <a href="#something-went-wrong">Help</a> · <a href="#faq">FAQ</a> · <a href="#building">Build</a></p>
 
 
-**HardRPG** is an RPG Maker game launcher for the PS Vita. Copy your games to
-the Vita and play them. It runs XP, VX and VX Ace games natively (a Vita port
-of [mkxp-z](https://github.com/mkxp-z/mkxp-z)) and RPG Maker 2000/2003 games
-through a bundled [EasyRPG Player](https://easyrpg.org/).
+**HardRPG** plays RPG Maker XP, VX, VX Ace, 2000 and 2003 games on the PS Vita.
+Copy your games to the Vita and play them from a game library with covers.
+XP, VX and VX Ace games run natively on mkxp-z-vita, this repository's Vita
+port of [mkxp-z](https://github.com/mkxp-z/mkxp-z). RPG Maker 2000 and 2003
+games run on the [EasyRPG Player](https://easyrpg.org/) that comes built in.
+It is free, open source homebrew for any Vita with HENkaku or Ensō.
 
 ## Install
 
-You need a Vita with homebrew enabled and [VitaShell](https://github.com/TheOfficialFloW/VitaShell).
+You need a Vita with homebrew enabled (HENkaku or Ensō). Get HardRPG from any
+of these; they all install the same app:
 
-1. Download the newest **HardRPG** `.vpk` from [Releases](https://github.com/Asukate/mkxp-z-vita/releases) (the release at the top).
-2. Copy it to your Vita and install it with VitaShell.
-3. Open **HardRPG** once. It creates its folders in `ux0:/data/hardrpg/`.
+| Where | How |
+| --- | --- |
+| [VitaDB Downloader](https://github.com/Rinnegatamante/VitaDB-Downloader) | On the Vita, search for **HardRPG** and install. |
+| [NeoVitaDB Downloader](https://github.com/robin994/NeoVitaDB-Downloader) | On the Vita, search for **HardRPG** and install. |
+| [VitaForge](https://github.com/josephinoo/vitaForge) | On the Vita, search for **HardRPG** and install. |
+| [GitHub Releases](https://github.com/Asukate/mkxp-z-vita/releases/latest) | Download the `.vpk`, copy it to the Vita and install it with [VitaShell](https://github.com/TheOfficialFloW/VitaShell). |
+
+Then open **HardRPG** once. It creates its folders in `ux0:/data/hardrpg/`.
+
+**Updating:** VitaDB Downloader, NeoVitaDB Downloader and VitaForge show when a
+new HardRPG is out and install it for you. From GitHub, install the new `.vpk`
+over the old one. Your games, saves and settings stay either way.
 
 <details>
 <summary>HardRPG closes right away or shows a black screen on start</summary>
@@ -192,121 +204,68 @@ A font included in the game's own `Fonts` folder always comes first.
 
 Full list: [0.5.3 release notes](docs/RELEASE-NOTES-0.5.3.md).
 
-New in 0.5.2:
+Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
+[0.5.1](docs/RELEASE-NOTES-0.5.1.md) · [0.5.0](docs/RELEASE-NOTES-0.5.0.md) ·
+[0.4.9](docs/RELEASE-NOTES-0.4.9.md) · [0.4.8](docs/RELEASE-NOTES-0.4.8.md) ·
+[0.4.7](docs/RELEASE-NOTES-0.4.7.md) · [0.4.6](docs/RELEASE-NOTES-0.4.6.md) ·
+[0.4.5](docs/RELEASE-NOTES-0.4.5.md) · [0.4.0](docs/RELEASE-NOTES-0.4.0.md) ·
+[0.3.1](docs/RELEASE-NOTES-0.3.1.md) · [0.3.0](docs/RELEASE-NOTES-0.3.0.md) ·
+[0.2.1](docs/RELEASE-NOTES-0.2.1.md) · [all releases](https://github.com/Asukate/mkxp-z-vita/releases)
 
-- **LISA: The Joyful:** the archer cave runs at 60 fps.
-- **Ao Oni R:** rooms run at 58–60 fps.
-- **Pocket Mirror:** no longer runs out of memory after long play, including in the Rose Labyrinth.
-- **N.P.C. Dreams:** faster walking and battles.
-- **All games:** faster drawing of pictures, windows and text.
-- **Pokémon Uranium and Insurgence:** partially supported.
-- **Exit Fate:** fonts, sky and sea, and music looping fixed.
-- **Launcher:** Japanese and Simplified Chinese; in-game keyboard.
-- **Your own fonts:** put a font a game asks for in `ux0:/data/hardrpg/fonts/` ([how](#fonts-only-if-a-games-text-looks-wrong)).
+## What HardRPG can do
 
-Full list: [0.5.2 release notes](docs/RELEASE-NOTES-0.5.2.md).
+**Games**
 
-New in 0.5.1:
+- RPG Maker **XP, VX and VX Ace** games run natively (RGSS1, RGSS2 and RGSS3,
+  with real Ruby), including games packed in `Game.rgssad`, `.rgss2a` or
+  `.rgss3a` archives.
+- RPG Maker **2000 and 2003** games run on the built-in EasyRPG Player, from the
+  same library.
+- Games from Steam, itch.io or a free download are added the same way: copy
+  the game's folder.
+- Some **Pokémon Essentials** fan games (Pokémon Uranium, Pokémon Insurgence)
+  partly work.
 
-- **BLACK SOULS II:** boss fights with several phases, such as the Deep Sea
-  Knight, no longer crash when the next phase starts.
+**Library**
 
-Full list: [0.5.1 release notes](docs/RELEASE-NOTES-0.5.1.md).
+- Carousel, grid and list views, with search, sorting, favourites and one tab
+  per engine.
+- Covers, backgrounds, logos, screenshots and game details found online by
+  itself (Steam, DLsite, VNDB, itch.io and more), or your own pictures.
+- Each game's own title music plays while it is highlighted.
+- Add games from any folder with the built-in folder browser; they stay where
+  they are.
+- English, Español, Português (Brasil), 日本語 and 简体中文.
 
-New in 0.5.0:
+**Controls**
 
-- **Finding Paradise (Steam):** starts, plays and opens its menu.
-- **Exit Fate:** the Change Party screen no longer crashes.
-- **JPEG colours:** red and blue were swapped in every JPEG picture; they
-  show their real colours now.
-- **Faster menus:** Pocket Mirror's menus close in under half a second
-  instead of up to 5 seconds.
-- **Hello Charlotte EP3:** played from start to finish.
+- Remap every button to an RPG Maker button or **any keyboard key**, so games
+  made for a PC keyboard play on the Vita.
+- **Touch screen and rear touch pad** as buttons: whole surface, halves or four
+  corners.
+- **Tap to walk:** tap a spot on the map and your character walks there.
+- An **on-screen keyboard** for games that ask you to type a name.
+- Settings are saved per game.
 
-Full list: [0.5.0 release notes](docs/RELEASE-NOTES-0.5.0.md).
+**While playing**
 
-New in 0.4.9:
+- **In-game menu** (hold L + R + Start): controls, display, audio and speed
+  without leaving the game.
+- **Fast forward** (L + R), up to twice the game's speed.
+- **Volume boost** up to 400% for quiet games.
+- Display options: aspect ratio, scaling, a Sharp or smooth filter.
+- An **FPS and performance overlay** (frame time, CPU, memory, battery).
 
-- **Mario The Music Box:** starts and plays. Its custom archive and video
-  files are now read on the Vita.
-- **Random start-up crash fixed:** about one launch in eight could crash
-  while the game's scripts loaded. This applied to every game.
-- **Faster XP games:** map changes, weather and image loading are quicker.
-  To the Moon's worst hitches are about half as long.
-- **Volume boost:** quiet games such as Hylics can play at up to 400%.
-- **Leaving keeps your place:** with crash rescue on, leaving with
-  **L + R + Select** or **Back to library** saves the game where it is, and
-  **Resume where you left** opens it again.
-- **Performance counter:** a narrow column in the screen border.
-- **A New Game:** starts (it stopped with "class variable access from
-  toplevel"), and VX Ace maps with many events run faster.
-- **Faster loading:** game data and saves load faster; BLACK SOULS II reaches
-  its title in about 12 seconds instead of 17.
-- **Safe saves:** a save that stops part way (the app closed or lost power)
-  no longer replaces the old save with a broken one.
+**Safety**
 
-Full list: [0.4.9 release notes](docs/RELEASE-NOTES-0.4.9.md).
-
-New in 0.4.8:
-
-- **Pocket Mirror (original VX Ace edition):** fixed the startup crash after
-  the team splash.
-- **Font sizing:** affected fonts now use the correct size, preventing
-  enormous text allocations. The correction applies across games.
-- **Hello Charlotte EP1:** fixed the item popup crash. Boolean options now
-  accept Ruby values as RGSS does, benefiting other games with similar scripts.
-- **Error reports:** the exception, message and backtrace appear before memory
-  diagnostics. Saved reports retain the complete original details.
-
-Full list: [0.4.8 release notes](docs/RELEASE-NOTES-0.4.8.md).
-
-New in 0.4.7:
-
-- **BLACK SOULS II:** weapon upgrade menus with long lists no longer crash
-  when their contents exceed the hardware texture size.
-- **Large window contents** preserve their complete list and draw only the
-  visible region. This also covers scrolling windows in XP, VX and VX Ace.
-
-Previous changes: [0.4.7 release notes](docs/RELEASE-NOTES-0.4.7.md).
-
-New in 0.4.6:
-
-- **Shin Megami Tensei VX: The Genesis** starts and plays, with fixes for
-  loading games, 3D dungeons and crash rescue.
-- **Faster 3D dungeons and bitmap drawing**, including wall images and tints.
-- **BLACK SOULS II:** the weapon upgrade list no longer disappears when it
-  contains many weapons. The fix also applies to large bitmap contents in
-  other games.
-- **Clearer error reports:** messages from games that use Windows error
-  dialogs are included in the report.
-
-Previous changes: [0.4.6 release notes](docs/RELEASE-NOTES-0.4.6.md).
-
-New in 0.4.5:
-
-- **Crash rescue:** if a game stops, starting it again offers to resume at the
-  last map change or battle start. Your saves are never touched.
-- **Fewer crashes:** long BLACK SOULS II sessions and Hylics' Crystal Beach no
-  longer run out of memory.
-- **Faster VX Ace maps** in games that use the default or popular map scripts.
-- **List view** in the library, and a setting for the view it opens in.
-
-Full list: [0.4.5 release notes](docs/RELEASE-NOTES-0.4.5.md).
-
-New in 0.4:
-
-- **A new library:** a carousel of your games with covers, backgrounds,
-  details and screenshots, downloaded automatically in the background.
-- **Title music:** each game's own title theme plays while it is highlighted.
-- **In-game menu:** hold **L + R + Start** (or tap the icon in the screen's
-  empty border) to change controls, display, volume boost and speed without
-  leaving the game.
-- **Fast forward:** **L + R** runs a game at up to twice its speed.
-- **Faster:** quicker starts, smoother maps and sprites, and a Sharp screen
-  filter by default.
-- **Español and Português (Brasil)**, and a welcome guide on the first start.
-
-Full list: [0.4.0 release notes](docs/RELEASE-NOTES-0.4.0.md).
+- **Crash rescue:** if a game stops, start it again and resume from the last
+  map change or battle. Your own saves are never touched.
+- **Leave and resume:** with crash rescue on, leaving a game keeps your place
+  for next time.
+- **Safe saves:** a save cut off by a crash or power loss keeps the old save
+  instead of a broken one.
+- Error reports you can read and export, to send with a bug report.
+- Missing Windows fonts are replaced by matching built-in ones, or use your own.
 
 ## Using HardRPG
 
@@ -406,13 +365,43 @@ Sound**.
 HardRPG runs RPG Maker XP, VX, VX Ace, 2000 and 2003 games. Some games stop
 with a script error, and very demanding games can run slowly.
 
-> [!WARNING]
-> **Pokémon Essentials games** (Pokémon Infinite Fusion and other fan games)
-> are a work in progress and **not supported yet**.
+**Can I play … on the Vita?** Popular games, as tested on a real PS Vita:
 
-See the [compatibility list](docs/COMPATIBILITY.md) for game-by-game results. Played a game that is
-not on the list? [Tell us](docs/COMPATIBILITY.md#tested-a-game), even if it runs
-fine.
+| Game | Engine | On HardRPG |
+| --- | --- | --- |
+| To the Moon | XP | ✅ Yes (slowdowns in some areas) |
+| Finding Paradise (Steam) | XP | 🟡 Plays, 35–40 fps |
+| LISA: The Painful, LISA: The Joyful | VX Ace | ✅ Yes |
+| Ao Oni | XP | ✅ Yes, played start to finish |
+| Ao Oni R | VX Ace | ✅ Yes |
+| The Witch's House (original) | VX | ✅ Yes |
+| Hylics | VX Ace | ✅ Yes (slow in some areas) |
+| BLACK SOULS, BLACK SOULS II | VX Ace | ✅ Yes |
+| Hello Charlotte EP1, EP2, EP3 | VX Ace | ✅ Yes, all played start to finish |
+| Pocket Mirror (original 2016 edition) | VX Ace | 🟡 Plays, later parts untested |
+| Mogeko Castle (English) | VX Ace | ✅ Yes |
+| FNaF b Final Mix | VX Ace | ✅ Yes |
+| The Endless Empty | VX Ace | ✅ Yes |
+| Red Hood's Woods | VX Ace | ✅ Yes |
+| Shin Megami Tensei VX: The Genesis | VX | ✅ Yes |
+| N.P.C. Dreams | VX Ace | ✅ Yes |
+| Exit Fate | XP | 🟡 Plays |
+| The Music Box (Mario) | XP | 🟡 Plays, later parts untested |
+| OFF, Ib, Yume Nikki, Flow | 2000/2003 | ✅ Yes, through the built-in EasyRPG Player |
+| Pokémon Uranium, Pokémon Insurgence | XP (Pokémon Essentials) | 🟡 Plays, 30–50 fps, progression untested |
+| Pokémon Infinite Fusion | XP (Pokémon Essentials) | ⛔ No: needs more memory than the Vita gives the game |
+| OMORI, Fear & Hunger, Look Outside | MV / MZ | ⛔ No: RPG Maker MV and MZ games are not supported |
+
+A game that is not listed has not been tested yet. Most XP, VX, VX Ace, 2000
+and 2003 games start, so try it. The full
+[compatibility list](docs/COMPATIBILITY.md) has notes for each game. Played a
+game that is not on the list? [Tell us](docs/COMPATIBILITY.md#tested-a-game),
+even if it runs fine.
+
+> [!NOTE]
+> **Pokémon Essentials games** are new and only partly supported: Pokémon
+> Uranium and Pokémon Insurgence play, slower than 60 fps; Pokémon Infinite
+> Fusion does not start. Other Essentials fan games have not been tested.
 
 ## Something went wrong?
 
@@ -457,12 +446,52 @@ in the report.
 
 ## FAQ
 
-**Which games does it play?**
-RPG Maker XP, VX and VX Ace games, including ones packed in a `Game.rgssad`,
-`.rgss2a` or `.rgss3a` archive, and RPG Maker 2000/2003 games. RPG Maker MV
-and MZ games are not supported. Pokémon Uranium and Pokémon Insurgence are
-partially supported. The [compatibility list](docs/COMPATIBILITY.md) has
-game-by-game results.
+**Can a PS Vita play RPG Maker games?**
+Yes, with homebrew (HENkaku or Ensō). HardRPG plays RPG Maker XP, VX, VX Ace,
+2000 and 2003 games. See [Install](#install).
+
+**Can I play RPG Maker XP, VX or VX Ace games on the Vita?**
+Yes. HardRPG runs them natively, with a real Ruby interpreter, like the PC
+version of the game. Games packed in a `Game.rgssad`, `.rgss2a` or `.rgss3a`
+archive work too.
+
+**Can I play To the Moon, LISA, Ao Oni, Hylics, BLACK SOULS or The Witch's House on the Vita?**
+Yes, all of them play on HardRPG. See the [popular games table](#compatibility).
+
+**What about RPG Maker MV and MZ games, such as OMORI or Fear & Hunger?**
+Not supported. MV and MZ games are web (JavaScript) games and need a different
+engine.
+
+**Is this the same as mkxp-vita?**
+No. mkxp-vita is an older Vita fork of mkxp without releases. HardRPG is a
+Vita port of mkxp-z, the maintained successor of mkxp, with regular releases
+you can install.
+
+**How is it different from EasyRPG Player for the Vita?**
+EasyRPG Player plays RPG Maker 2000 and 2003 games only. HardRPG includes
+EasyRPG Player for those, and adds XP, VX and VX Ace games, all in one library
+with covers, per-game controls, crash rescue and the in-game menu. Your 2000
+and 2003 games can stay in EasyRPG's folder: add it with the folder browser.
+
+**Can I play my Steam RPG Maker games on the Vita?**
+If the game was made with RPG Maker XP, VX, VX Ace, 2000 or 2003, yes. Copy
+its folder from Steam's install folder (`steamapps/common/<game>`) to
+`ux0:/data/hardrpg/games/`. The folder with `Game.ini` or `RPG_RT.ini` in it
+is the one to copy.
+
+**Which RPG Maker made my game?**
+Look in the game's folder: `Game.rgssad` or `Data/*.rxdata` is XP, `.rvdata`
+is VX, `.rvdata2` or `Game.rgss3a` is VX Ace, `RPG_RT.ldb` is 2000/2003, and a
+`www` folder or `js/rpg_core.js` is MV/MZ. In HardRPG, **L / R** in the
+library shows one engine at a time.
+
+**Where do I download HardRPG, and how do I update it?**
+From VitaDB Downloader, NeoVitaDB Downloader, VitaForge or GitHub Releases (see
+[Install](#install)). The three Vita stores show updates and install them. From
+GitHub, install the new VPK over the old one.
+
+**Will updating HardRPG delete my games or saves?**
+No. Game folders, saves and settings stay.
 
 **Does HardRPG come with games?**
 No. Copy games you own to the Vita (see [Add your games](#add-your-games)).
@@ -471,9 +500,6 @@ No. Copy games you own to the Vita (see [Add your games](#add-your-games)).
 Install that RPG Maker version's RTP once, as in
 [RTP](#rtp-only-if-a-game-needs-it). Every game that needs it then finds it.
 
-**Will updating HardRPG delete my games or saves?**
-No. Install the new VPK over HardRPG; game folders, saves and settings stay.
-
 **My game came as a ZIP.**
 Unzip it on your PC first and copy the folder to `games/`. HardRPG lists ZIP
 games but does not unpack them, because that takes minutes on the Vita.
@@ -481,6 +507,11 @@ games but does not unpack them, because that takes minutes on the Vita.
 **My games are in another folder.**
 Press **Start** in the library, go to that folder and press **Square**. The
 games stay where they are.
+
+**Can I use the touch screen?**
+Yes. Tap to walk moves your character to the spot you tap, and the touch
+screen and rear touch pad can act as buttons or keyboard keys. Turn them on in
+**Triangle → Game settings → Controls**.
 
 **Text shows boxes, overlaps or is cut off.**
 The game probably wants a Windows font it does not include. See
@@ -492,6 +523,10 @@ Map any keyboard key to a Vita button in **Controls**
 keyboard button in the screen's left border; games that ask for text open it
 by themselves.
 
+**A game is too quiet.**
+Turn up **Volume boost** (up to 400%) in the game's audio settings or the
+in-game menu.
+
 **A game is slow.**
 Check the [compatibility list](docs/COMPATIBILITY.md): some games are known to
 drop below 60 fps. The first start after an update prepares graphics for a few
@@ -499,8 +534,8 @@ seconds. **L + R** turns fast forward on for slow scenes.
 
 **A game crashed. Did I lose my progress?**
 Usually not. With crash rescue on, starting the game again offers to resume at
-the last map change or battle. Please [report it](#something-went-wrong), with
-your save if you can.
+the last map change or battle. A save cut off by the crash keeps the old save.
+Please [report it](#something-went-wrong), with your save if you can.
 
 ## Screenshots
 
