@@ -24,15 +24,14 @@ It is free, open source homebrew for any Vita with HENkaku or Ensō.
 
 ## Install
 
-You need a Vita with homebrew enabled (HENkaku or Ensō). Get HardRPG from any
-of these; they all install the same app:
+You need a homebrew-enabled Vita. Get HardRPG from these sources:
 
 | Where | How |
 | --- | --- |
+| [GitHub Releases](https://github.com/Asukate/mkxp-z-vita/releases/latest) | Download the `.vpk`, copy it to the Vita and install it with [VitaShell](https://github.com/TheOfficialFloW/VitaShell). |
 | [VitaDB Downloader](https://github.com/Rinnegatamante/VitaDB-Downloader) | On the Vita, search for **HardRPG** and install. |
 | [NeoVitaDB Downloader](https://github.com/robin994/NeoVitaDB-Downloader) | On the Vita, search for **HardRPG** and install. |
 | [VitaForge](https://github.com/josephinoo/vitaForge) | On the Vita, search for **HardRPG** and install. |
-| [GitHub Releases](https://github.com/Asukate/mkxp-z-vita/releases/latest) | Download the `.vpk`, copy it to the Vita and install it with [VitaShell](https://github.com/TheOfficialFloW/VitaShell). |
 
 Then open **HardRPG** once. It creates its folders in `ux0:/data/hardrpg/`.
 
@@ -172,12 +171,13 @@ terminal in that folder and run the lines for your engine:
 
 **Settings → RTP locations** shows which RTPs HardRPG found.
 
-### Fonts (only if a game's text looks wrong)
+### Original game fonts
 
 Many games use a font from Windows, such as MS Gothic, without including it.
-HardRPG then draws the text with a similar built-in font (MS Gothic and MS
-Mincho use Kosugi, which has the same letter widths). If you own the exact
-font, you can use it instead:
+HardRPG then uses a similar built-in font instead (MS Gothic and MS Mincho use
+Kosugi, which has the same letter widths). The text reads fine, but it may not
+look the way the game's artist intended. To see the game with its original
+font, add that font yourself:
 
 1. Start any game once, so HardRPG creates `ux0:/data/hardrpg/fonts/`.
 2. Copy the font file into that folder. On Windows, fonts are in
@@ -221,8 +221,9 @@ Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
   `.rgss3a` archives.
 - RPG Maker **2000 and 2003** games run on the built-in EasyRPG Player, from the
   same library.
-- Games from Steam, itch.io or a free download are added the same way: copy
-  the game's folder.
+- Games from Steam, itch.io, DLsite or a free download are added the same
+  way: copy the game's folder to the Vita as it is, with nothing to convert or
+  repack.
 - Some **Pokémon Essentials** fan games (Pokémon Uranium, Pokémon Insurgence)
   partly work.
 
@@ -244,13 +245,16 @@ Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
 - **Touch screen and rear touch pad** as buttons: whole surface, halves or four
   corners.
 - **Tap to walk:** tap a spot on the map and your character walks there.
-- An **on-screen keyboard** for games that ask you to type a name.
+- An **on-screen keyboard** for games that ask you to type: tap the keyboard
+  icon in the screen's border while playing. Games that ask for a name open it
+  by themselves.
 - Settings are saved per game.
 
 **While playing**
 
-- **In-game menu** (hold L + R + Start): controls, display, audio and speed
-  without leaving the game.
+- **In-game menu:** tap the ☰ icon in the screen's border, or hold
+  L + R + Start, to change controls, display, audio and speed without leaving
+  the game. The keyboard icon is right below it.
 - **Fast forward** (L + R), up to twice the game's speed.
 - **Volume boost** up to 400% for quiet games.
 - Display options: aspect ratio, scaling, a Sharp or smooth filter.
@@ -285,7 +289,7 @@ Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
 
 | Buttons | In a game |
 | --- | --- |
-| **L + R + Start** (hold) | In-game menu: controls, display, audio, speed, back to library |
+| **L + R + Start** (hold), or tap ☰ in the screen's border | In-game menu: controls, display, audio, speed, back to library |
 | **L + R** | Fast forward on and off |
 | **L + R + Select** (hold) | Back to the library; with crash rescue on, **Resume where you left** returns to that moment |
 
@@ -365,12 +369,17 @@ Sound**.
 HardRPG runs RPG Maker XP, VX, VX Ace, 2000 and 2003 games. Some games stop
 with a script error, and very demanding games can run slowly.
 
+**Frame rates:** each RPG Maker version has its own speed limit. XP games run
+at up to **40 fps**, so 40 fps is full speed for an XP game; a few set their
+own limit (Pokémon Uranium runs at up to 50). VX and VX Ace games run at up
+to **60 fps**. RPG Maker 2000 and 2003 games run at 60 fps.
+
 **Can I play … on the Vita?** Popular games, as tested on a real PS Vita:
 
 | Game | Engine | On HardRPG |
 | --- | --- | --- |
 | To the Moon | XP | ✅ Yes (slowdowns in some areas) |
-| Finding Paradise (Steam) | XP | 🟡 Plays, 35–40 fps |
+| Finding Paradise (Steam) | XP | ✅ Yes, 35–40 fps |
 | LISA: The Painful, LISA: The Joyful | VX Ace | ✅ Yes |
 | Ao Oni | XP | ✅ Yes, played start to finish |
 | Ao Oni R | VX Ace | ✅ Yes |
@@ -388,9 +397,9 @@ with a script error, and very demanding games can run slowly.
 | Exit Fate | XP | 🟡 Plays |
 | The Music Box (Mario) | XP | 🟡 Plays, later parts untested |
 | OFF, Ib, Yume Nikki, Flow | 2000/2003 | ✅ Yes, through the built-in EasyRPG Player |
-| Pokémon Uranium, Pokémon Insurgence | XP (Pokémon Essentials) | 🟡 Plays, 30–50 fps, progression untested |
+| Pokémon Uranium, Pokémon Insurgence | XP (Pokémon Essentials) | 🟡 Plays, progression untested |
 | Pokémon Infinite Fusion | XP (Pokémon Essentials) | ⛔ No: needs more memory than the Vita gives the game |
-| OMORI, Fear & Hunger, Look Outside | MV / MZ | ⛔ No: RPG Maker MV and MZ games are not supported |
+| OMORI, Fear & Hunger, Look Outside | MV / MZ | 🛠️ Not yet: MV and MZ support is in development |
 
 A game that is not listed has not been tested yet. Most XP, VX, VX Ace, 2000
 and 2003 games start, so try it. The full
@@ -400,8 +409,9 @@ even if it runs fine.
 
 > [!NOTE]
 > **Pokémon Essentials games** are new and only partly supported: Pokémon
-> Uranium and Pokémon Insurgence play, slower than 60 fps; Pokémon Infinite
-> Fusion does not start. Other Essentials fan games have not been tested.
+> Uranium and Pokémon Insurgence play, but some maps and battles run below
+> the game's own speed limit; Pokémon Infinite Fusion does not start. Other
+> Essentials fan games have not been tested.
 
 ## Something went wrong?
 
@@ -459,8 +469,10 @@ archive work too.
 Yes, all of them play on HardRPG. See the [popular games table](#compatibility).
 
 **What about RPG Maker MV and MZ games, such as OMORI or Fear & Hunger?**
-Not supported. MV and MZ games are web (JavaScript) games and need a different
-engine.
+Not playable yet, but planned and in development. MV and MZ games are web
+(JavaScript) games and need a new engine on the Vita. Test games already run
+on it, and it is being made faster until they are playable. Follow the
+[releases](https://github.com/Asukate/mkxp-z-vita/releases) for news.
 
 **Is this the same as mkxp-vita?**
 No. mkxp-vita is an older Vita fork of mkxp without releases. HardRPG is a
@@ -515,7 +527,7 @@ screen and rear touch pad can act as buttons or keyboard keys. Turn them on in
 
 **Text shows boxes, overlaps or is cut off.**
 The game probably wants a Windows font it does not include. See
-[Fonts](#fonts-only-if-a-games-text-looks-wrong) to use your own copy.
+[Original game fonts](#original-game-fonts) to use your own copy.
 
 **The game needs a keyboard key, or wants me to type a name.**
 Map any keyboard key to a Vita button in **Controls**

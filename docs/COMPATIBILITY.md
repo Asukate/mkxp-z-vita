@@ -10,6 +10,11 @@ Games change between versions and editions, so your copy may behave differently.
 | 🟡 Partial | Plays, with known problems or parts not yet tested. |
 | ⛔ Not supported | Does not start, or stops early. |
 
+**Frame rates:** each RPG Maker version has its own speed limit. XP games run
+at up to **40 fps**, so 40 fps is full speed for an XP game; a few set their
+own limit (Pokémon Uranium runs at up to 50). VX and VX Ace games run at up to
+**60 fps**. RPG Maker 2000 and 2003 games run at 60 fps.
+
 ## RPG Maker XP, VX and VX Ace
 
 Of these, Ao Oni and Hello Charlotte EP1, EP2 and EP3 have been played from start
@@ -42,7 +47,7 @@ end, so problems later in those games are still possible.
 | Exit Fate | XP | 🟡 Partial | Change Party screen crash fixed in 0.5.0 ([#15](https://github.com/Asukate/mkxp-z-vita/issues/15)), checked with a community save. Fonts, sky and sea noise, a stray box after some lines and a music stall fixed in 0.5.2 ([#22](https://github.com/Asukate/mkxp-z-vita/issues/22)–[#25](https://github.com/Asukate/mkxp-z-vita/issues/25)). |
 | Mysta's Vore RPG | XP | 🟡 Partial | Name entry, text cut off at window edges and slow maps (18–37 fps, now the game's own 36–40) fixed in 0.5.3. Later progression untested. |
 | Person of Courage | VX | 🟡 Partial | Starts since 0.5.3 ([#27](https://github.com/Asukate/mkxp-z-vita/issues/27)); it stopped with "not a PNG" before. Opening, a busy map and a battle checked; battles pause for about 2 s at the start and at the victory music. Later progression untested. |
-| Finding Paradise (Steam) | XP | 🟡 Partial | Starts since 0.5.0 ([#17](https://github.com/Asukate/mkxp-z-vita/issues/17)). Intro 39–40 fps, first town map 35–37 fps; later progression untested. |
+| Finding Paradise (Steam) | XP | ✅ Runs | Starts since 0.5.0 ([#17](https://github.com/Asukate/mkxp-z-vita/issues/17)). Intro 39–40 fps, first town map 35–37 fps (XP games run at up to 40); later progression untested. |
 | A New Game (RJ273807, Chinese translation) | VX Ace | 🟡 Partial | Starts since 0.4.9 (it stopped with "class variable access from toplevel" before). Later progression untested. |
 
 ## RPG Maker 2000 and 2003 (EasyRPG)
@@ -60,7 +65,8 @@ These run through the bundled EasyRPG Player.
 
 > [!NOTE]
 > **Pokémon Essentials support is new in 0.5.2.** These games start and play,
-> but speed is below 60 fps and progression has not been tested far.
+> but some maps and battles run below the game's own speed limit, and
+> progression has not been tested far.
 
 | Game | Engine | Status | Notes |
 | --- | --- | --- | --- |
