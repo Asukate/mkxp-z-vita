@@ -74,8 +74,8 @@ diff -ruN --no-dereference a/source/buffers.c b/source/buffers.c
  #ifndef SKIP_ERROR_HANDLING
  	if (n < 0) {
 diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
---- a/source/custom_shaders.c	2026-05-12 21:04:08.000000000 -0300
-+++ b/source/custom_shaders.c	2026-11-01 04:22:52.161127880 -0300
+--- a/source/custom_shaders.c
++++ b/source/custom_shaders.c
 @@ -616,7 +616,11 @@
  #define vgl_compile_shader(shd, sv) compile_shader(shd, sv)
  static inline __attribute__((always_inline)) void compile_shader(shader *s, GLboolean save_bindings) {
@@ -152,7 +152,22 @@ diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
  #endif
  			sceGxmSetFragmentTexture(gxm_context, i, &tex->gxm_tex);
  #ifdef HAVE_GLSL_TEXTURE_SIZE
-@@ -1718,11 +1722,6 @@
+@@ -1700,7 +1704,13 @@
+ 		size += lengths[i];
+ 	}
+ 
+-	s->source = (char *)vglMalloc(size);
++	char *source = vglMalloc(size);
++	if (!source) {
++		SET_GL_ERROR(GL_OUT_OF_MEMORY)
++	}
++	if (s->source)
++		vgl_free(s->source);
++	s->source = source;
+ 	s->source[0] = 0;
+ 
+ 	for (int i = 0; i < count; i++) {
+@@ -1718,11 +1728,6 @@
  }
  
  void glCompileShader(GLuint handle) {
@@ -164,6 +179,42 @@ diff -ruN --no-dereference a/source/custom_shaders.c b/source/custom_shaders.c
  	// Grabbing passed shader
  	shader *s = &shaders[handle - 1];
  	
+@@ -1748,8 +1753,8 @@
+ 	}
+ #endif
+ 
+-	if (s->is_glsl) {
+-		glsl_translator_process(s);
++	if (s->is_glsl && !glsl_translator_process(s)) {
++		SET_GL_ERROR(GL_OUT_OF_MEMORY)
+ 	}
+ 	vgl_compile_shader(s, GL_FALSE);
+ }
+@@ -2121,8 +2126,10 @@
+ 		}
+ #endif
+ 		if (!p->vshader->prog || !p->fshader->prog) {
+-			if (p->vshader->is_glsl || p->fshader->is_glsl) {
+-				glsl_translator_set_process(p->vshader, p->fshader);
++			if ((p->vshader->is_glsl || p->fshader->is_glsl) &&
++			    !glsl_translator_set_process(p->vshader, p->fshader)) {
++				glsl_sema_mode = VGL_MODE_POSTPONED;
++				SET_GL_ERROR(GL_OUT_OF_MEMORY)
+ 			}
+ 			if (!p->vshader->prog) {
+ #ifdef HAVE_SHADER_CACHE
+@@ -2138,6 +2145,11 @@
+ 			}
+ 		}
+ 
++		if (!p->vshader->prog || !p->fshader->prog) {
++			glsl_sema_mode = VGL_MODE_POSTPONED;
++			return;
++		}
++
+ 		// Setting progressive default attribute bindings
+ 		set_default_attrib_binding();
+ 
 diff -ruN --no-dereference a/source/draw.c b/source/draw.c
 --- a/source/draw.c	2026-05-12 21:04:08.000000000 -0300
 +++ b/source/draw.c	2026-11-01 04:22:52.161296635 -0300
@@ -1685,3 +1736,339 @@ diff -ruN --no-dereference a/source/vitaGL.h b/source/vitaGL.h
  // Sets the number of buffers to use for the display swapchain. Default value: 3.
  void vglSetDisplayBufferCount(int count);
  
+--- a/source/utils/glsl_utils.c
++++ b/source/utils/glsl_utils.c
+@@ -27,8 +27,6 @@
+ #include "glsl_utils.h"
+ #include "preprocessor/preprocessor_c.h"
+ 
+-#define MEM_ENLARGER_SIZE (1024 * 1024) // FIXME: Check if this is too big/small
+-
+ #define glsl_get_existing_texcoord_bind(idx, s) \
+ 	for (int j = 0; j < MAX_CG_TEXCOORD_ID; j++) { \
+ 		if (glsl_bindings_map.texcoord_used[j] && !strcmp(glsl_bindings_map.texcoord_names[j], s)) { \
+@@ -68,7 +66,8 @@
+ #define glsl_replace_marker(m, r) \
+ 	type = strstr(txt + preamble_size, m); \
+ 	while (type) { \
+-		char *res = (char *)vglMalloc(MEM_ENLARGER_SIZE); \
++		char *res = vglMalloc(strlen(txt) + strlen(r)); \
++		if (!res) return GL_FALSE; \
+ 		type[0] = 0; \
+ 		strcpy(res, txt); \
+ 		strcat(res, r); \
+@@ -85,7 +84,8 @@
+ 	while (type) { \
+ 		char line[32]; \
+ 		sprintf(line, "%s%u%s", r1, idx++, r2); \
+-		char *res = (char *)vglMalloc(MEM_ENLARGER_SIZE); \
++		char *res = vglMalloc(strlen(txt) + strlen(line)); \
++		if (!res) return GL_FALSE; \
+ 		type[0] = 0; \
+ 		strcpy(res, txt); \
+ 		strcat(res, line); \
+@@ -725,7 +725,7 @@
+  * The idea behind this is to check if a uniform is auniform block, and if so, bind to a
+  * specific index.
+  */
+-void glsl_handle_ubos(char *txt, char *out, GLsizei preamble_size) {
++static GLboolean glsl_handle_ubos(char *txt, char *out, GLsizei preamble_size) {
+ 	GLboolean has_ubos = GL_FALSE;
+ 	char *src = txt;
+ 	out[0] = 0;
+@@ -748,6 +748,7 @@
+ 	} else {
+ 		strcpy(out, src);
+ 	}
++	return GL_TRUE;
+ }
+ #endif
+ 
+@@ -757,7 +758,7 @@
+  * add to it static keyword only if not uniform. This is required cause CG handles
+  * global variables by default as uniforms.
+  */
+-void glsl_handle_globals(char *txt, char *out, GLsizei preamble_size) {
++static GLboolean glsl_handle_globals(char *txt, char *out, GLsizei preamble_size) {
+ 	GLboolean has_globals = GL_FALSE;
+ 	char *src = txt;
+ 	out[0] = 0;
+@@ -829,6 +830,7 @@
+ 	} else {
+ 		strcpy(out, src);
+ 	}
++	return GL_TRUE;
+ }
+ 
+ #ifdef HAVE_GLSL_TEXTURE_SIZE
+@@ -889,7 +891,7 @@
+  * and vector * matrix operations. This implementation is very likely non exhaustive
+  * since, for a proper implementation, ideally we'd want a proper GLSL parser.
+  */
+-void glsl_inject_mul(char *txt, char *out, GLsizei preamble_size) {
++static GLboolean glsl_inject_mul(char *txt, char *out, GLsizei preamble_size) {
+ 	char *star = strstr(txt + preamble_size, "*");
+ 	while (star) {
+ 		if (star[1] == '=') // FIXME: *= still not handled
+@@ -899,7 +901,7 @@
+ 	}
+ 	if (!star) {
+ 		strcpy(out, txt);
+-		return;
++		return GL_TRUE;
+ 	}
+ 	char *left;
+ LOOP_START:
+@@ -1013,7 +1015,10 @@
+ 		else
+ 			right++;
+ 	}
+-	char *res = (char *)vglMalloc(MEM_ENLARGER_SIZE);
++	// Each replacement adds " vglMul(" and a closing parenthesis.
++	char *res = vglMalloc(strlen(txt) + sizeof(" vglMul()"));
++	if (!res)
++		return GL_FALSE;
+ 	if (found < 2) { // Standard match
+ 		char tmp = *left;
+ 		left[0] = 0;
+@@ -1045,9 +1050,27 @@
+ 		else
+ 			goto LOOP_START;
+ 	}
++	return GL_TRUE;
++}
++
++/* Only text after the preamble can expand. Bound each pass by the
++ * maximum bytes one of its rewrite sites can add. */
++static size_t glsl_rewrite_capacity(const char *text, GLsizei preamble_size,
++                                   const char *marker, size_t growth) {
++	size_t size = strlen(text) + 1;
++	for (const char *p = text + preamble_size; (p = strstr(p, marker)); ++p)
++		size += growth;
++	return size;
++}
++
++static void *glsl_allocate(size_t size) {
++	return vglMalloc(size);
+ }
+ 
+-void glsl_translator_process(shader *s) {
++GLboolean glsl_translator_process(shader *s) {
++	char *original = s->source;
++	char *dst = NULL;
++	char *dst2 = NULL;
+ 	uint32_t source_size = 1 + strlen(s->source);
+ 	uint32_t size = 1;
+ 	GLboolean hasFragCoord = GL_FALSE, hasInstanceID = GL_FALSE, hasVertexID = GL_FALSE, hasPointCoord = GL_FALSE;
+@@ -1067,6 +1090,8 @@
+ 		size += strlen("#define VGL_IS_VERTEX_SHADER\n");
+ 	
+ 	char *input = vglMalloc(source_size);
++	if (!input)
++		return GL_FALSE;
+ 	vgl_fast_memcpy(input, s->source, source_size - 1);
+ 	input[source_size - 1] = 0;
+ 	
+@@ -1087,9 +1112,10 @@
+ 	vgl_log("%s:%d %s: GLSL translation input:\n\n%s\n\n", __FILE__, __LINE__, __func__, input);
+ #endif
+ 
+-	char *out = vglMalloc(strlen(input));
+-	glsl_preprocess("full", input, out);
++	char *out = glsl_preprocess("full", input, glsl_allocate);
+ 	vgl_free(input);
++	if (!out)
++		return GL_FALSE;
+ #ifdef DEBUG_GLSL_PREPROCESSOR
+ 	vgl_log("%s:%d %s: GLSL preprocessor output:\n\n%s\n\n", __FILE__, __LINE__, __func__, out);
+ #endif
+@@ -1158,8 +1184,12 @@
+ 			size += strlen("varying in float4 gl_Color : COLOR;\n");
+ 	}
+ 	
+-	vgl_free(s->source);
+-	s->source = (char *)vglMalloc(size);
++	char *source = vglMalloc(size);
++	if (!source) {
++		vgl_free(out);
++		return GL_FALSE;
++	}
++	s->source = source;
+ 	s->source[0] = 0;
+ 	
+ 	// Injecting GLSL to CG header
+@@ -1302,46 +1332,49 @@
+ 		}
+ 	}
+ 
+-	// Manually handle * operator replacements for vector * matrix and matrix * vector operations support
+-	char *dst = vglMalloc(size + MEM_ENLARGER_SIZE); // FIXME: This is just an estimation, check if 1MB is enough/too big
+-	glsl_inject_mul(s->source, dst, preamble_size);
+-	vgl_free(s->source);
+-	// Manually handle global variables, adding "static" to them
+-	char *dst2 = vglMalloc(strlen(dst) + MEM_ENLARGER_SIZE); // FIXME: This is just an estimation, check if 1MB is enough/too big
+-	glsl_handle_globals(dst, dst2, preamble_size);
++	// Multiplication adds up to nine bytes per star. Each global rewrite
++	// adds "static " before a declaration ending with a semicolon.
++	dst = vglMalloc(glsl_rewrite_capacity(s->source, preamble_size, "*", 9));
++	if (!dst || !glsl_inject_mul(s->source, dst, preamble_size))
++		goto out_of_memory;
++	dst2 = vglMalloc(glsl_rewrite_capacity(dst, preamble_size, ";", 7));
++	if (!dst2 || !glsl_handle_globals(dst, dst2, preamble_size))
++		goto out_of_memory;
+ 	vgl_free(dst);
++	dst = NULL;
+ #ifdef HAVE_GLSL_UBOS
+-	// Manually handle ubos
+-	dst = vglMalloc(strlen(dst) + MEM_ENLARGER_SIZE); // FIXME: This is just an estimation, check if 1MB is enough/too big
+-	glsl_handle_ubos(dst2, dst, preamble_size);
+-	vgl_free(dst2);	
++	dst = vglMalloc(glsl_rewrite_capacity(dst2, preamble_size, "uniform", 16));
++	if (!dst || !glsl_handle_ubos(dst2, dst, preamble_size))
++		goto out_of_memory;
++	vgl_free(dst2);
+ 	dst2 = dst;
++	dst = NULL;
+ #endif
+ 
+ 	char *final;
+ #ifdef HAVE_GLSL_TEXTURE_SIZE
+-	// Manually handle textureSize calls
+ 	glsl_handle_tex_size(dst2, preamble_size, s->sized_samplers, &s->sized_samplers_num);
+ 	if (s->sized_samplers_num > 0) {
+-		char *samplers_blk = (char *)vglMalloc(2048); // FIXME: Is this big enough?
++		char samplers[2048];
+ 		size_t sz = 0;
+-		for (uint8_t i = 0; i < s->sized_samplers_num; i++) {
+-			sz += sprintf(&samplers_blk[sz], "uniform float2 vgl_smp%u;\n", i);
+-		}
+-		// Keeping on mem only the strict minimum necessary for the translated shader
+-		final = vglMalloc(strlen(dst2) + sz + 1);
+-		vgl_fast_memcpy(final, samplers_blk, sz);
++		for (uint8_t i = 0; i < s->sized_samplers_num; i++)
++			sz += sprintf(&samplers[sz], "uniform float2 vgl_smp%u;\n", i);
++		final = vglMalloc(sz + strlen(dst2) + 1);
++		if (!final)
++			goto out_of_memory;
++		vgl_fast_memcpy(final, samplers, sz);
+ 		vgl_fast_memcpy(final + sz, dst2, strlen(dst2) + 1);
+-		vgl_free(samplers_blk);
+-	}
+-	else
++	} else
+ #endif
+ 	{
+-		// Keeping on mem only the strict minimum necessary for the translated shader
+ 		final = vglMalloc(strlen(dst2) + 1);
++		if (!final)
++			goto out_of_memory;
+ 		vgl_fast_memcpy(final, dst2, strlen(dst2) + 1);
+ 	}
+ 	vgl_free(dst2);
++	vgl_free(s->source);
++	vgl_free(original);
+ 	s->source = final;
+ #ifdef DEBUG_GLSL_TRANSLATOR
+ 	vgl_log("%s:%d %s: GLSL translation output (%s shader):\n\n%s\n\n", __FILE__, __LINE__, __func__, glsl_is_first_shader ? "first" : "second", s->source);
+@@ -1357,12 +1390,22 @@
+ 	}
+ 	s->size = strlen(s->source);
+ 	s->is_glsl = GL_FALSE;
++	return GL_TRUE;
++
++out_of_memory:
++	if (dst)
++		vgl_free(dst);
++	if (dst2)
++		vgl_free(dst2);
++	vgl_free(s->source);
++	s->source = original;
++	return GL_FALSE;
+ }
+ 
+-void glsl_translator_set_process(shader *vs, shader *fs) {
+-	if (vs->prog || fs->prog) {
++GLboolean glsl_translator_set_process(shader *vs, shader *fs) {
++	if (!vs->is_glsl || !fs->is_glsl || vs->prog || fs->prog) {
+ 		glsl_is_first_shader = GL_FALSE;
+-		if (vs->prog) {
++		if (!vs->is_glsl || vs->prog) {
+ 			vgl_fast_memcpy(&glsl_bindings_map, &vs->semantics, sizeof(binds_map));
+ #ifdef DEBUG_GLSL_TRANSLATOR
+ 			vgl_log("%s:%d %s: Overloading semantic bindings with precompiled vertex shader ones.\n", __FILE__, __LINE__, __func__);
+@@ -1374,10 +1417,11 @@
+ #endif
+ 		}
+ 	}
+-	if (!vs->prog) {
+-		glsl_translator_process(vs);
+-	}
+-	if (!fs->prog) {
+-		glsl_translator_process(fs);
++	if ((!vs->prog && vs->is_glsl && !glsl_translator_process(vs)) ||
++	    (!fs->prog && fs->is_glsl && !glsl_translator_process(fs))) {
++		glsl_is_first_shader = GL_TRUE;
++		memset(&glsl_bindings_map, 0, sizeof(glsl_bindings_map));
++		return GL_FALSE;
+ 	}
++	return GL_TRUE;
+ }
+--- a/source/utils/glsl_utils.h
++++ b/source/utils/glsl_utils.h
+@@ -47,7 +47,7 @@
+ 
+ void glsl_nuke_comments(char *txt);
+ 
+-void glsl_translator_process(shader *s);
+-void glsl_translator_set_process(shader *vs, shader *fs);
++GLboolean glsl_translator_process(shader *s);
++GLboolean glsl_translator_set_process(shader *vs, shader *fs);
+ 
+ #endif
+--- a/source/utils/preprocessor/preprocessor.cpp
++++ b/source/utils/preprocessor/preprocessor.cpp
+@@ -12,6 +12,7 @@
+ #include <set>
+ #include <map>
+ #include <stack>
++#include <new>
+ #include <time.h>
+ #include "const.h"
+ #include "expression.h"
+@@ -2135,13 +2136,20 @@
+ }
+ 
+ extern "C" {
+-void glsl_preprocess(char *mode, const char *infile, char *output) {
+-	std::list<std::string> dummy;
+-	std::list<std::string> defines;
+-	defines.push_back("#define GL_ES 1");
+-	defines.push_back("#define VITAGL");
+-	std::map<std::string, std::string> hasCppAttributeMap;
+-	std::string out = preprocessor::preprocess(mode, infile, "", defines, dummy, dummy, dummy, hasCppAttributeMap, false);
+-	strcpy(output, out.c_str());
++char *glsl_preprocess(const char *mode, const char *input, void *(*allocate)(size_t)) {
++	try {
++		std::list<std::string> dummy;
++		std::list<std::string> defines;
++		defines.push_back("#define GL_ES 1");
++		defines.push_back("#define VITAGL");
++		std::map<std::string, std::string> hasCppAttributeMap;
++		std::string out = preprocessor::preprocess(mode, input, "", defines, dummy, dummy, dummy, hasCppAttributeMap, false);
++		char *result = static_cast<char *>(allocate(out.size() + 1));
++		if (result)
++			memcpy(result, out.c_str(), out.size() + 1);
++		return result;
++	} catch (const std::bad_alloc &) {
++		return nullptr;
++	}
+ }
+ }
+--- a/source/utils/preprocessor/preprocessor_c.h
++++ b/source/utils/preprocessor/preprocessor_c.h
+@@ -1 +1,3 @@
+-void glsl_preprocess(char *mode, const char *fname, char *output);
+\ No newline at end of file
++#include <stddef.h>
++
++char *glsl_preprocess(const char *mode, const char *input, void *(*allocate)(size_t));
