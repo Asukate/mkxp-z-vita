@@ -40,6 +40,9 @@ preamble = r'''
 #define HAVE_CUSTOM_HEAP
 #define SCE_KERNEL_MEMBLOCK_TYPE_USER_RW 1
 #define SCE_GXM_MEMORY_ATTRIB_RW 3
+struct SceKernelFreeMemorySizeInfo { unsigned size; int size_user; };
+static int kernel_free;
+int sceKernelGetFreeMemorySize(SceKernelFreeMemorySizeInfo *info) { info->size_user=kernel_free; return 0; }
 static std::map<int,void*> blocks;
 static unsigned maps,unmaps,frees,allocations;
 static int next_uid;
@@ -72,7 +75,8 @@ struct texture{int status=0,mip_count=0,last_frame=0;GxmTexture gxm_tex={};void 
 static unsigned vgl_texture_alloc_failures;
 static void *color_table;
 unsigned tex_format_to_bytespp(unsigned n){return n;}
-void *gpu_alloc_mapped(size_t n,vglMemType){++allocations;return pool_allowed?std::malloc(n):nullptr;}
+void *gpu_try_alloc_mapped(size_t n,vglMemType){++allocations;return pool_allowed?std::malloc(n):nullptr;}
+void *gpu_alloc_mapped(size_t n,vglMemType t){return gpu_try_alloc_mapped(n,t);}
 void vgl_fast_memcpy(void *d,const void *s,size_t n){std::memcpy(d,s,n);}
 void vgl_memset(void *d,int c,size_t n){std::memset(d,c,n);}
 void vglInitLinearTexture(GxmTexture *t,void *p,unsigned,unsigned w,unsigned h,int){*t={p,w,h};}
@@ -135,6 +139,15 @@ int main(){
  gpu_alloc_texture(screenWidth,screenHeight,4,p,&screen,4,nullptr,nullptr,true);vitaEndPixelTransfer();
  assert(screen.status==TEX_VALID&&screen.data==p&&((unsigned char*)p)[screenBytes-1]==0xab);
  vita_big_free(p);vgl_free(screen.data);clean();
+ // Empty RGBA textures can borrow spare kernel pages after pool exhaustion.
+ kernel_free=16*1024*1024;
+ texture empty;gpu_alloc_texture(screenWidth,screenHeight,4,nullptr,&empty,4,nullptr,nullptr,false);
+ assert(empty.status==TEX_VALID&&blocks.size()==1&&vgl_malloc_usable_size(empty.data)>=screenBytes);
+ assert(((unsigned char*)empty.data)[0]==0&&((unsigned char*)empty.data)[screenBytes-1]==0);
+ vgl_free(empty.data);clean();
+ // Map failure or insufficient room above the reserve leaves no allocation behind.
+ map_fail=true;assert(!mkxp_alloc_texture_pixels(screenBytes));map_fail=false;clean();
+ kernel_free=12*1024*1024;assert(!mkxp_alloc_texture_pixels(screenBytes));clean();
  // A tracked buffer with insufficient address alignment must still copy.
  p=image();int slot=0;while(vita_blocks[slot].ptr!=p)++slot;
  void *unaligned=(char*)p+8;vita_blocks[slot].ptr=unaligned;vitaBeginPixelTransfer(unaligned);

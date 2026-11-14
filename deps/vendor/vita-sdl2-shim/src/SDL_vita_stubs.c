@@ -102,9 +102,16 @@ static int vita_block_register(void *ptr, int uid, uint32_t size) {
             vita_blocks[i].gpu_owned = 0;
             if (uid >= 0)
                 vita_block_bytes += size;
-            return 1;
+            return i;
         }
-    return 0;
+    return -1;
+}
+static void vita_block_transfer(unsigned i) {
+    vita_blocks[i].gpu_owned = 1;
+    if (vita_blocks[i].uid >= 0)
+        vita_block_bytes -= vita_blocks[i].size;
+    vita_texture_slots[vita_texture_count] = i;
+    __atomic_add_fetch(&vita_texture_count, 1, __ATOMIC_RELAXED);
 }
 /* Figures for the engine's memory snapshot: live blocks and their bytes. */
 void vitaPixelBlockFigures(uint32_t *count, uint32_t *bytes) {
@@ -156,11 +163,7 @@ int mkxp_adopt_texture_pixels(const void *ptr, uint32_t bytes) {
             if (vita_blocks[i].uid < 0 ||
                 sceGxmMapMemory(vita_blocks[i].ptr, vita_blocks[i].size,
                                 SCE_GXM_MEMORY_ATTRIB_RW) >= 0) {
-                vita_blocks[i].gpu_owned = 1;
-                if (vita_blocks[i].uid >= 0)
-                    vita_block_bytes -= vita_blocks[i].size;
-                vita_texture_slots[vita_texture_count] = i;
-                __atomic_add_fetch(&vita_texture_count, 1, __ATOMIC_RELAXED);
+                vita_block_transfer(i);
                 vita_transfer_candidate = NULL;
                 adopted = 1;
             }
@@ -168,6 +171,38 @@ int mkxp_adopt_texture_pixels(const void *ptr, uint32_t bytes) {
         }
     vita_blocks_leave();
     return adopted;
+}
+
+/* Used after vitaGL exhausts its pools. Reserve some general-purpose pages
+ * for Ruby and IO, and release each mapped block with the texture. */
+void *mkxp_alloc_texture_pixels(uint32_t bytes) {
+    if (bytes < VITA_BLOCK_MIN || bytes >= 0x40000000u)
+        return NULL;
+    const uint32_t whole = (bytes + 4095u) & ~4095u;
+    const uint32_t reserve = 12u * 1024u * 1024u;
+    SceKernelFreeMemorySizeInfo info = {0};
+    info.size = sizeof(info);
+    vita_blocks_enter();
+    void *base = NULL;
+    if (sceKernelGetFreeMemorySize(&info) >= 0 && info.size_user > 0 &&
+        (uint32_t)info.size_user >= whole + reserve) {
+        int uid = sceKernelAllocMemBlock("hardrpg_texture", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, whole, NULL);
+        if (uid >= 0) {
+            if (sceKernelGetMemBlockBase(uid, &base) >= 0 && base &&
+                sceGxmMapMemory(base, whole, SCE_GXM_MEMORY_ATTRIB_RW) >= 0) {
+                const int slot = vita_block_register(base, uid, whole);
+                if (slot >= 0) {
+                    vita_block_transfer((unsigned)slot);
+                    vita_blocks_leave();
+                    return base;
+                }
+                sceGxmUnmapMemory(base);
+            }
+            sceKernelFreeMemBlock(uid);
+        }
+    }
+    vita_blocks_leave();
+    return NULL;
 }
 
 size_t mkxp_texture_pixels_size(const void *ptr) {
@@ -243,7 +278,7 @@ static void *vita_big_alloc(size_t size, int zero, int *outside, int reclaim_gpu
             void *base = NULL;
             int uid = sceKernelAllocMemBlock("hardrpg_pixels", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, whole, NULL);
             if (uid >= 0 && sceKernelGetMemBlockBase(uid, &base) >= 0 && base &&
-                vita_block_register(base, uid, whole)) {
+                vita_block_register(base, uid, whole) >= 0) {
                 vita_blocks_leave();
                 if (zero)
                     memset(base, 0, size);
@@ -267,7 +302,7 @@ static void *vita_big_alloc(size_t size, int zero, int *outside, int reclaim_gpu
             vita_blocks_enter();
             kept = vita_block_register(ptr, -2, (uint32_t)size);
             vita_blocks_leave();
-            if (!kept) {
+            if (kept < 0) {
                 free(ptr);
                 return NULL;
             }
@@ -292,7 +327,7 @@ static void *vita_big_alloc(size_t size, int zero, int *outside, int reclaim_gpu
             vita_blocks_enter();
             kept = vita_block_register(ptr, -1, (uint32_t)size);
             vita_blocks_leave();
-            if (!kept) {
+            if (kept < 0) {
                 vglFree(ptr);
                 return NULL;
             }

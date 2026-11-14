@@ -1148,17 +1148,18 @@ diff -ruN --no-dereference a/source/textures.c b/source/textures.c
 diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
 --- a/source/utils/gpu_utils.c
 +++ b/source/utils/gpu_utils.c
-@@ -23,6 +23,9 @@
+@@ -23,6 +23,10 @@
  
  #include "../shared.h"
  
 +/* Optional ownership transfer for explicitly offered, disposable RGBA pixels. */
++extern void *mkxp_alloc_texture_pixels(uint32_t) __attribute__((weak));
 +extern int mkxp_adopt_texture_pixels(const void *, uint32_t) __attribute__((weak));
 +
  #include "texture_swizzler.h"
  
  #ifdef HAVE_TEX_CACHE
-@@ -85,16 +88,50 @@
+@@ -85,16 +89,50 @@
  }
  
  static int unsafe_allocator_counter = 0;
@@ -1211,18 +1212,22 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
  #endif
  
  	// Allocating requested memblock
-@@ -336,10 +373,17 @@
+@@ -335,11 +373,19 @@
+ 	// Allocating texture data buffer
  	const int aligned_w = VGL_ALIGN(w, 8);
  	const int tex_size = aligned_w * h * bpp;
- 	void *texture_data = gpu_alloc_mapped(tex_size, VGL_MEM_MAIN);
-+	/* Keep ordinary images in the graphics pools when they fit. On allocation
-+	 * failure an offered decode buffer avoids the otherwise overlapping copy. */
-+	GLboolean adopted = !texture_data && data && fast_store && bpp == 4 && src_bpp == 4 &&
-+		aligned_w == w && mkxp_adopt_texture_pixels &&
-+		mkxp_adopt_texture_pixels(data, tex_size);
+-	void *texture_data = gpu_alloc_mapped(tex_size, VGL_MEM_MAIN);
+-
++	const GLboolean transferable = data && fast_store && bpp == 4 && src_bpp == 4 &&
++		aligned_w == w && mkxp_adopt_texture_pixels;
++	void *texture_data = gpu_try_alloc_mapped(tex_size, VGL_MEM_MAIN);
++	GLboolean adopted = !texture_data && transferable && mkxp_adopt_texture_pixels(data, tex_size);
 +	if (adopted)
 +		texture_data = (void *)data;
- 
++	if (!texture_data && bpp == 4 && mkxp_alloc_texture_pixels)
++		texture_data = mkxp_alloc_texture_pixels(tex_size);
++	if (!texture_data)
++		texture_data = gpu_alloc_mapped(tex_size, VGL_MEM_MAIN);
  	if (texture_data != NULL) {
  		// Initializing texture data buffer
 -		if (data != NULL) {
@@ -1230,7 +1235,7 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
  			uint8_t *src = (uint8_t *)data;
  			uint8_t *dst;
  			if (fast_store) { // Internal Format and Data Format are the same, we can just use vgl_fast_memcpy for better performance
-@@ -364,7 +408,7 @@
+@@ -364,7 +410,7 @@
  					}
  				}
  			}
@@ -1239,7 +1244,7 @@ diff -ruN --no-dereference a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
  			vgl_memset(texture_data, 0, tex_size);
  
  		// Initializing texture and validating it
-@@ -382,6 +426,16 @@
+@@ -382,6 +428,16 @@
  #ifdef HAVE_TEX_CACHE
  		mark_as_cacheable(tex)
  #endif
