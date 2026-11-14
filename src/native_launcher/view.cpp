@@ -5,8 +5,9 @@
 namespace hardrpg {
 constexpr int View::width;
 constexpr int View::height;
-View::View(const std::string &font)
-    : pixels(width * height * 4, 255), fontData(readFile(font, 4194304)) {
+View::View(const std::string &font, Output output)
+    : pixels(output == Output::Frame ? width * height * 4 : 0, 255),
+      fontData(readFile(font, 4194304)) {
   if (FT_Init_FreeType(&library) ||
       FT_New_Memory_Face(library,
                          reinterpret_cast<const FT_Byte *>(fontData.data()),

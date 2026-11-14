@@ -19,7 +19,8 @@ void drawGameButtons(Image &, int gameX, bool keyboardOpen, bool menuLit);
 class View {
 public:
   static constexpr int width = 960, height = 544;
-  explicit View(const std::string &font);
+  enum class Output { Frame, Layers };
+  explicit View(const std::string &font, Output output = Output::Frame);
   ~View();
   View(const View &) = delete;
   std::vector<uint8_t> pixels;

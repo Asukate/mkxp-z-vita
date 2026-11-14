@@ -1476,8 +1476,9 @@ struct GraphicsPrivate {
         if (!overlayView && !overlayViewFailed) {
             try {
                 hardrpg::useLauncherLanguage();
-                overlayView.reset(new hardrpg::View("app0:/font.ttf"));
-            } catch (...) {
+                overlayView.reset(new hardrpg::View("app0:/font.ttf", hardrpg::View::Output::Layers));
+            } catch (const std::exception &e) {
+                std::fprintf(stderr, "Game overlay: %s\n", e.what());
                 overlayViewFailed = true;
             }
         }
