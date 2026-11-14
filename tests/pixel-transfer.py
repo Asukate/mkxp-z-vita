@@ -99,6 +99,12 @@ int main(){
  // Releasing SDL's surface must keep mapped storage alive until GPU free.
  vita_big_free(p);assert(blocks.size()==1&&unmaps==0&&frees==0);
  vgl_free(p);assert(unmaps==1&&frees==1);assert(!mkxp_free_texture_pixels(p));clean();
+ // A character sheet also keeps its original pixels if the second allocation fails.
+ constexpr unsigned sheetWidth=912,sheetHeight=544,sheetBytes=sheetWidth*sheetHeight*4;
+ p=image(sheetBytes);texture sheet;vitaBeginPixelTransfer(p);
+ gpu_alloc_texture(sheetWidth,sheetHeight,4,p,&sheet,4,nullptr,nullptr,true);vitaEndPixelTransfer();
+ assert(sheet.status==TEX_VALID&&sheet.data==p&&((unsigned char*)p)[sheetBytes-1]==0xab);
+ vita_big_free(p);assert(blocks.size()==1);vgl_free(sheet.data);clean();
  // A failed map leaves SDL in charge; failure does not leak or double-free.
  p=image();map_fail=true;vitaBeginPixelTransfer(p);texture failed;
  gpu_alloc_texture(w,h,4,p,&failed,4,nullptr,nullptr,true);vitaEndPixelTransfer();

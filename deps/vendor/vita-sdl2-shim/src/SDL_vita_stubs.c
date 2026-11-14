@@ -62,6 +62,7 @@
 #include <psp2/kernel/threadmgr.h>
 #define VITA_BLOCK_MIN (128u * 1024u)
 #define VITA_BLOCK_BUDGET (56u * 1024u * 1024u)
+#define VITA_TEXTURE_TRANSFER_MIN (1024u * 1024u)
 #define VITA_BLOCK_SLOTS 1024
 extern void *vglMalloc(uint32_t size) __attribute__((weak));
 extern void *vglForceAlloc(uint32_t size) __attribute__((weak));
@@ -146,7 +147,7 @@ void vitaEndPixelTransfer(void) { vita_transfer_candidate = NULL; }
 int mkxp_adopt_texture_pixels(const void *ptr, uint32_t bytes) {
     int i, adopted = 0;
     if (ptr != vita_transfer_candidate || ((uintptr_t)ptr & 15u) ||
-        bytes < 8u * 1024u * 1024u)
+        bytes < VITA_TEXTURE_TRANSFER_MIN)
         return 0;
     vita_blocks_enter();
     for (i = 0; i < VITA_BLOCK_SLOTS; ++i)
