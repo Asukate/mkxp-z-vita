@@ -29,6 +29,11 @@
 #include "binding-util.h"
 #include "disposable-binding.h"
 
+#ifdef __vita__
+#include "texpool.h"
+#include "vita_error_report.h"
+#endif
+
 #if RAPI_FULL > 187
 DEF_TYPE_CUSTOMNAME(TilemapVX, "Tilemap");
 
@@ -38,10 +43,27 @@ DEF_ALLOCFUNC(TilemapVX);
 #define BitmapArrayType "BitmapArray"
 #endif
 
-RB_METHOD(tilemapVXInitialize) {
-    TilemapVX *t;
-    
-    GFX_LOCK;
+#ifdef __vita__
+static VALUE collectForTilemap(VALUE) {
+    return rb_gc_start();
+}
+
+static void reclaimTilemapMemory() {
+    GFX_GUARD_EXC(
+        shState->texPool().clearCache();
+        Bitmap::releaseRecreatableMemory();
+        Bitmap::suspendImageReuse(true);
+    )
+    vitaReleaseGameImageCache();
+    int state = 0;
+    rb_protect(collectForTilemap, Qnil, &state);
+    Bitmap::suspendImageReuse(false);
+    if (state)
+        rb_jump_tag(state);
+}
+#endif
+
+RB_METHOD_GUARD(tilemapVXInitialize) {
     /* Get parameters */
     VALUE viewportObj = Qnil;
     Viewport *viewport = 0;
@@ -51,10 +73,31 @@ RB_METHOD(tilemapVXInitialize) {
     if (!NIL_P(viewportObj))
         viewport = getPrivateDataCheck<Viewport>(viewportObj, ViewportType);
     
-    /* Construct object */
-    t = new TilemapVX(viewport);
-    
-    setPrivateData(self, t);
+    TilemapVX *t = nullptr;
+#ifdef __vita__
+    try {
+        GFX_GUARD_EXC(t = new TilemapVX(viewport);)
+    } catch (const Exception &error) {
+        if (error.type != Exception::MKXPError ||
+            error.msg.find("Graphics memory: out of memory allocating ") != 0)
+            throw;
+    }
+    if (!t) {
+        fprintf(stderr, "Tilemap.new: reclaiming graphics memory before retry\n");
+        vitaErrorImageStart();
+        vitaErrorMemoryEvent("before-gc-retry", "Tilemap.new");
+        reclaimTilemapMemory();
+        vitaErrorMemoryEvent("after-gc-before-retry", "Tilemap.new");
+        if (!NIL_P(viewportObj))
+            viewport = getPrivateDataCheck<Viewport>(viewportObj, ViewportType);
+        GFX_GUARD_EXC(t = new TilemapVX(viewport);)
+        fprintf(stderr, "Tilemap.new: graphics memory retry succeeded\n");
+    }
+#else
+    GFX_GUARD_EXC(t = new TilemapVX(viewport);)
+#endif
+
+    GFX_GUARD_EXC(setPrivateData(self, t);)
     
     rb_iv_set(self, "viewport", viewportObj);
     
@@ -79,9 +122,9 @@ RB_METHOD(tilemapVXInitialize) {
      * alive at the same time */
     rb_iv_set(autotilesObj, "tilemap", self);
     
-    GFX_UNLOCK;
     return self;
 }
+RB_METHOD_GUARD_END
 
 RB_METHOD(tilemapVXGetBitmapArray) {
     RB_UNUSED_PARAM;

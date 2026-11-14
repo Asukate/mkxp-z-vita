@@ -154,7 +154,15 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 			double scalingFactor = shState->config().atlasScalingFactor;
 			int hiresWidth = (int)lround(scalingFactor * ATLASVX_W);
 			int hiresHeight = (int)lround(scalingFactor * ATLASVX_H);
-			shState->requestAtlasTex(hiresWidth, hiresHeight, atlasHires);
+			try
+			{
+				shState->requestAtlasTex(hiresWidth, hiresHeight, atlasHires);
+			}
+			catch (...)
+			{
+				shState->releaseAtlasTex(atlas);
+				throw;
+			}
 			atlas.selfHires = &atlasHires;
 		}
 
