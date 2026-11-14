@@ -290,16 +290,58 @@ ensure
   Dir.glob(File.join(dir, '**', '*')).sort.reverse.each { |f| File.directory?(f) ? Dir.rmdir(f) : File.delete(f) }
   Dir.rmdir(dir)
 end
-# The database loads with collection paused, and collection is back on afterwards (also after an error).
-module DataManager
-  def self.load_database; $gc_during = GC.disable; GC.enable unless $gc_during; :loaded; end
-end
-HardRPGDatabaseLoad.wrap
-check('database load', DataManager.load_database == :loaded && $gc_during == true && GC.enable == false)
-module DataManager
-  class << self
-    alias_method :plain_load, :load_database
+# Use a small stand-in for the stock methods, with the same script-section
+# mapping the engine supplies. Test eligibility separately from the GC policy.
+database = <<~RUBY
+  module DataManager
+    def self.load_database
+      load_normal_database
+    end
+    def self.load_normal_database
+      $gc_during = GC.disable
+      GC.enable unless $gc_during
+      raise 'database read failed' if $database_error
+      :loaded
+    end
+    def self.load_battle_test_database
+      :battle_test
+    end
+    def self.check_player_location
+      nil
+    end
   end
+RUBY
+eval(database, TOPLEVEL_BINDING, '{0000}')
+$RGSS_SCRIPTS = sections(database)
+loader = HardRPGDatabaseLoad
+check('custom database keeps GC enabled', (loader.wrap; DataManager.load_database == :loaded && $gc_during == false))
+
+known = N.methods(database)
+loader.send(:remove_const, :STOCK)
+loader.const_set(:STOCK, known.to_h do |key, (text, _)|
+  [key.split('#').last.to_sym, HardRPGKnownMethods.digest(text)]
+end)
+check('recognized database loader', loader.stock?)
+eval(database.sub(':loaded', ':custom'), TOPLEVEL_BINDING, 'external.rb')
+check('external replacement is rejected', !loader.stock?)
+eval(database, TOPLEVEL_BINDING, '000:DataManager')
+check('named RGSS section is recognized', loader.stock?)
+loader.wrap
+check('stock database pauses GC', DataManager.load_database == :loaded && $gc_during == true && GC.enable == false)
+begin
+  $database_error = true
+  DataManager.load_database
+  raise 'expected the database read to fail'
+rescue RuntimeError => error
+  check('GC restored after database error', error.message == 'database read failed' && GC.enable == false)
+ensure
+  $database_error = false
 end
-check('wrapped once', (HardRPGDatabaseLoad.wrap; true))
+GC.disable
+begin
+  DataManager.load_database
+  check('preexisting GC pause preserved', GC.disable == true)
+ensure
+  GC.enable
+end
 puts 'VX Ace map speedup checks passed'

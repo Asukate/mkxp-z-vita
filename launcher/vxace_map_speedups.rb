@@ -905,10 +905,6 @@ module HardRPGOffscreenSprites
   end
 end
 
-# Database load without garbage collection. DataManager.load_database reads a dozen files that are
-# almost all objects the game keeps; collecting while they load only marks them again and again
-# (BLACK SOULS II: 8 collections, 1.4 s of an 8.1 s load on the Vita). The engine already pauses
-# collection for files of 1 MB and up; this covers the smaller ones and the gaps between them.
 # Popular per-sprite scripts with native versions (binding/sprite-scripts.cpp). Each script is matched by
 # its whole section text, and every method the native module replaces must still be that text's.
 module HardRPGSpriteScripts
@@ -1191,10 +1187,36 @@ module HardRPGSteadySprites
   end
 end
 
+# Stock VX Ace keeps almost everything it loads here. Custom database loaders
+# can also scan many maps or parse text, creating temporary objects that must
+# be collected during startup. Verify the resolved methods before pausing GC.
 module HardRPGDatabaseLoad
+  STOCK = {
+    load_database: '2368556974:3003328761:110',
+    load_normal_database: '1477784392:3720216057:734',
+    load_battle_test_database: '1833122437:1882585765:726',
+    check_player_location: '63569226:3245811084:103',
+  }.freeze
+
+  def self.stock?
+    return false unless defined?(DataManager) && defined?(HardRPGNative::Norm)
+    parsed = {}
+    STOCK.all? do |name, digest|
+      next false unless DataManager.respond_to?(name, true)
+      method = DataManager.method(name)
+      next false unless method.owner.equal?(DataManager.singleton_class)
+      file, line = method.source_location
+      section = HardRPGKnownMethods.section_of(file)
+      next false unless section
+      index, src = section
+      text, source_line = (parsed[index] ||= HardRPGNative::Norm.methods(src))["DataManager.self##{name}"]
+      source_line == line && text && HardRPGKnownMethods.digest(text) == digest
+    end
+  end
+
   def self.wrap
     return if @wrapped || $hardrpg_vxace_map_speedups == false
-    return unless defined?(DataManager) && DataManager.respond_to?(:load_database)
+    return unless stock?
     @wrapped = true
     DataManager.singleton_class.prepend(Module.new do
       def load_database(*args, &block)
