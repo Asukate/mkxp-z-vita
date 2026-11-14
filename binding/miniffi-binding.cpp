@@ -386,7 +386,9 @@ static int vitaVKButton(unsigned int key) {
     switch (key) {
         case 0x0d: case 0x20: case 'C': return Input::C;
         case 0x1b: case 'X': case 0x60: return Input::B;
-        case 0x10: case 0xa0: case 0xa1: case 'Z': return Input::A;
+        case 0x10: case 0xa0: case 0xa1: return Input::A;
+        // Match the engine's default keyboard bindings for each RGSS version.
+        case 'Z': return rgssVer == 1 ? Input::A : Input::C;
         case 0x21: return Input::L;
         case 0x22: return Input::R;
         case 0x25: return Input::Left;
