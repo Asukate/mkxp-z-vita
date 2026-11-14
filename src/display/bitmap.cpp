@@ -1697,6 +1697,40 @@ static void cpuBlit(SDL_Surface *dst, const IntRect &destRect, SDL_Surface *src,
     }
 }
 
+#ifdef __vita__
+/* A cropped file bitmap can be a blit source without expanding it into a
+ * full GPU texture. Treat its stored rectangle as a surface with a padded
+ * stride. Pixels outside it are transparent and leave the destination alone. */
+static bool cpuBlitCropped(SDL_Surface *dst, const IntRect &destRect,
+                           BitmapPrivate *src, const IntRect &sourceRect, int opacity)
+{
+    const ImageCrop &crop = src->imageCrop;
+    if (!crop.active() || !src->bands.empty() || (crop.background >> 24) != 0 ||
+        sourceRect.w != destRect.w || sourceRect.h != destRect.h)
+        return false;
+
+    const IntRect local(sourceRect.x - crop.x, sourceRect.y - crop.y,
+                        sourceRect.w, sourceRect.h);
+    const IntRect visible = cpuClip(local, crop.width, crop.height);
+    if (!visible.w || !visible.h)
+        return true;
+
+    /* glFinish is required if this source is a previous render target. */
+    gl.Finish();
+    SDL_Surface pixels{};
+    pixels.pixels = vglGetTexDataPointerByID(src->gl.tex.gl);
+    if (!pixels.pixels)
+        return false;
+    pixels.w = crop.width;
+    pixels.h = crop.height;
+    pixels.pitch = ((crop.width + 7) & ~7) * 4;
+    const IntRect target(destRect.x + visible.x - local.x, destRect.y + visible.y - local.y,
+                         visible.w, visible.h);
+    cpuBlit(dst, target, &pixels, visible, opacity, false);
+    return true;
+}
+#endif
+
 static SDL_Surface *readImageStream(SDL_RWops &ops, const char *ext)
 {
 #ifdef __vita__
@@ -3311,16 +3345,26 @@ void Bitmap::stretchBlt(IntRect destRect,
     if (p->cpu)
     {
         SDL_Surface *pixels = 0;
+        bool copied = false;
         if (mode == NORMAL && source.p != p && sourceRect.w > 0 && sourceRect.h > 0 &&
             destRect.w > 0 && destRect.h > 0)
-            pixels = cpuSourcePixels(source, source.p);
-        if (pixels)
         {
-            const bool unscaled = sourceRect.w == destRect.w && sourceRect.h == destRect.h;
-            const uint32_t *spans = 0;
-            if (unscaled && (pixels == source.p->cpu || pixels == source.p->surface))
-                spans = cpuRowSpans(source.p, pixels);
-            cpuBlit(p->cpu, destRect, pixels, sourceRect, opacity, smooth && !unscaled, spans);
+#ifdef __vita__
+            copied = cpuBlitCropped(p->cpu, destRect, source.p, sourceRect, opacity);
+#endif
+            if (!copied)
+                pixels = cpuSourcePixels(source, source.p);
+        }
+        if (pixels || copied)
+        {
+            if (pixels)
+            {
+                const bool unscaled = sourceRect.w == destRect.w && sourceRect.h == destRect.h;
+                const uint32_t *spans = 0;
+                if (unscaled && (pixels == source.p->cpu || pixels == source.p->surface))
+                    spans = cpuRowSpans(source.p, pixels);
+                cpuBlit(p->cpu, destRect, pixels, sourceRect, opacity, smooth && !unscaled, spans);
+            }
             const IntRect changed = cpuClip(destRect, p->cpu->w, p->cpu->h);
             p->addTaintedArea(changed);
             cpuTouch(p, changed);
