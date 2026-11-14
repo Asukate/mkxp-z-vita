@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <pthread.h>
 
 /* Keep the GLES types visible without making the SDL core archive require a
  * strong link against vitaGL.  Non-GL SDL clients must remain linkable. */
@@ -797,13 +798,18 @@ const char *SDL_GameControllerGetStringForButton(SDL_GameControllerButton btn) {
 static SDL_Event event_queue[64];
 static int event_head = 0;
 static int event_tail = 0;
+static pthread_mutex_t event_queue_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static void push_event(const SDL_Event *ev) {
+static int push_event(const SDL_Event *ev) {
+    pthread_mutex_lock(&event_queue_lock);
     int next = (event_tail + 1) % 64;
-    if (next != event_head) {
+    int queued = next != event_head;
+    if (queued) {
         event_queue[event_tail] = *ev;
         event_tail = next;
     }
+    pthread_mutex_unlock(&event_queue_lock);
+    return queued;
 }
 
 enum {
@@ -901,16 +907,15 @@ void SDL_PumpEvents(void) {
 
 int SDL_PollEvent(SDL_Event *event) {
     SDL_PumpEvents();
-    
-    if (event_head == event_tail) {
-        return 0; /* No events */
-    }
-    
-    if (event) {
+
+    pthread_mutex_lock(&event_queue_lock);
+    int queued = event_head != event_tail;
+    if (queued && event) {
         *event = event_queue[event_head];
+        event_head = (event_head + 1) % 64;
     }
-    event_head = (event_head + 1) % 64;
-    return 1;
+    pthread_mutex_unlock(&event_queue_lock);
+    return queued;
 }
 
 int SDL_WaitEvent(SDL_Event *event) {
@@ -932,8 +937,7 @@ int SDL_WaitEventTimeout(SDL_Event *event, int timeout) {
 }
 
 int SDL_PushEvent(SDL_Event *event) {
-    if (event) push_event(event);
-    return 1;
+    return event && push_event(event) ? 1 : SDL_SetError("SDL event queue is full or event is null");
 }
 
 int SDL_PeepEvents(SDL_Event *events, int numevents, int action, Uint32 minType, Uint32 maxType) {
@@ -1133,7 +1137,6 @@ void SDL_MixAudioFormat(Uint8 *dst, const Uint8 *src, Uint16 format, Uint32 len,
  * Threading (pthreads-based)
  * ====================================================== */
 
-#include <pthread.h>
 
 struct SDL_Thread {
     pthread_t thread;

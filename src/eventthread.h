@@ -28,6 +28,7 @@
 #include <SDL_atomic.h>
 #include <SDL_gamecontroller.h>
 
+#include <atomic>
 #include <string>
 
 #include <stdint.h>
@@ -140,7 +141,7 @@ private:
 	                       const SDL_Rect &screen);
 	void cursorTimer();
 
-	bool fullscreen;
+	std::atomic<bool> fullscreen;
 	bool showCursor;
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
     bool returnToLauncher;

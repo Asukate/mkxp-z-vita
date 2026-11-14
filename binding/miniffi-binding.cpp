@@ -516,6 +516,15 @@ static long vitaLongArg(VALUE value) {
     return RB_INTEGER_TYPE_P(value) ? NUM2LONG(value) : 0;
 }
 
+static ID vitaWin32LastError() {
+    static const ID id = rb_intern("hardrpg_win32_last_error");
+    return id;
+}
+
+static void vitaSetWin32LastError(unsigned int error) {
+    rb_ivar_set(rb_thread_current(), vitaWin32LastError(), UINT2NUM(error));
+}
+
 DECL_TYPE(Bitmap);
 
 static VALUE vitaIdToRef(VALUE id) {
@@ -659,6 +668,16 @@ static bool vitaPowerStatus(VALUE buffer, VALUE *result) {
 
 static bool vitaKernel32Call(const char *name, VALUE args, VALUE *result) {
     using namespace hardrpg::win32text;
+    if (std::strcmp(name, "GetLastError") == 0 && RARRAY_LEN(args) == 0) {
+        VALUE error = rb_ivar_get(rb_thread_current(), vitaWin32LastError());
+        *result = NIL_P(error) ? INT2FIX(0) : error;
+        return true;
+    }
+    if (std::strcmp(name, "SetLastError") == 0 && RARRAY_LEN(args) == 1) {
+        vitaSetWin32LastError(NUM2UINT(rb_ary_entry(args, 0)));
+        *result = INT2FIX(0);
+        return true;
+    }
     if (std::strcmp(name, "GetSystemPowerStatus") == 0 && RARRAY_LEN(args) == 1)
         return vitaPowerStatus(rb_ary_entry(args, 0), result);
     if (std::strcmp(name, "MultiByteToWideChar") == 0 && RARRAY_LEN(args) == 6) {
@@ -718,7 +737,89 @@ static int vitaAsyncKeyState(unsigned int key) {
     return state;
 }
 
+// The 32-bit Win32 INPUT layout has a 4-byte type and a 24-byte union.
+// Support the desktop fullscreen shortcut by forwarding Alt+Enter to the
+// engine's normal shortcut handler. The synthetic keys never reach gameplay.
+static unsigned int vitaInjectedAlt;
+
+static VALUE vitaSendInput(VALUE args) {
+    constexpr long inputSize = 28;
+    constexpr uint32_t inputKeyboard = 1;
+    constexpr uint32_t extendedKey = 1, keyUp = 2, scanCode = 8;
+    const long count = vitaLongArg(rb_ary_entry(args, 0));
+    const VALUE buffer = rb_ary_entry(args, 1);
+    const long size = vitaLongArg(rb_ary_entry(args, 2));
+    if (count <= 0 || size != inputSize || !RB_TYPE_P(buffer, T_STRING) ||
+        count > RSTRING_LEN(buffer) / inputSize) {
+        vitaSetWin32LastError(87); // ERROR_INVALID_PARAMETER
+        return INT2FIX(0);
+    }
+
+    const char *record = RSTRING_PTR(buffer);
+    for (long i = 0; i < count; ++i, record += inputSize) {
+        uint32_t type, flags;
+        uint16_t vk, scan;
+        memcpy(&type, record, sizeof type);
+        memcpy(&vk, record + 4, sizeof vk);
+        memcpy(&scan, record + 6, sizeof scan);
+        memcpy(&flags, record + 8, sizeof flags);
+        if (flags & scanCode) {
+            vk = scan == 0x38 ? (flags & extendedKey ? 0xa5 : 0xa4) :
+                 scan == 0x1c ? 0x0d : 0;
+        }
+        if (type != inputKeyboard || (flags & ~(extendedKey | keyUp | scanCode)) ||
+            (vk != 0x12 && vk != 0xa4 && vk != 0xa5 && vk != 0x0d)) {
+            vitaSetWin32LastError(120); // ERROR_CALL_NOT_IMPLEMENTED
+            return LONG2NUM(i);
+        }
+        const bool released = (flags & keyUp) != 0;
+        if (vk != 0x0d) {
+            const unsigned int mod = vk == 0xa5 ? KMOD_RALT : KMOD_LALT;
+            if (released)
+                vitaInjectedAlt &= ~mod;
+            else
+                vitaInjectedAlt |= mod;
+        } else if (!released) {
+            const unsigned int mod = vitaInjectedAlt | (SDL_GetModState() & KMOD_ALT);
+            if (!mod) {
+                vitaSetWin32LastError(120);
+                return LONG2NUM(i);
+            }
+            SDL_Event event{};
+            event.type = SDL_KEYDOWN;
+            event.key.state = SDL_PRESSED;
+            event.key.keysym.scancode = SDL_SCANCODE_RETURN;
+            event.key.keysym.sym = SDLK_RETURN;
+            // RGSS's Windows shortcut accepts either Alt key. Normalize to
+            // left Alt for the engine's default shortcut binding.
+            event.key.keysym.mod = KMOD_LALT;
+            if (SDL_PushEvent(&event) != 1) {
+                vitaSetWin32LastError(8); // ERROR_NOT_ENOUGH_MEMORY
+                return LONG2NUM(i);
+            }
+        }
+    }
+    return LONG2NUM(count);
+}
+
 static bool vitaUser32Call(const char *name, VALUE args, VALUE *result) {
+    if (std::strcmp(name, "SendInput") == 0 && RARRAY_LEN(args) == 3) {
+        *result = vitaSendInput(args);
+        return true;
+    }
+    if ((std::strcmp(name, "MapVirtualKey") == 0 || std::strcmp(name, "MapVirtualKeyA") == 0 ||
+         std::strcmp(name, "MapVirtualKeyW") == 0) && RARRAY_LEN(args) == 2) {
+        const long vk = vitaLongArg(rb_ary_entry(args, 0));
+        const long mode = vitaLongArg(rb_ary_entry(args, 1));
+        int scan = 0;
+        if (mode == 0 || mode == 4) { // MAPVK_VK_TO_VSC / MAPVK_VK_TO_VSC_EX
+            if (vk == 0x0d) scan = 0x1c;
+            if (vk == 0x12 || vk == 0xa4 || vk == 0xa5)
+                scan = vk == 0xa5 && mode == 4 ? 0xe038 : 0x38;
+        }
+        *result = INT2FIX(scan);
+        return true;
+    }
     if ((std::strcmp(name, "MessageBoxA") == 0 || std::strcmp(name, "MessageBoxW") == 0) &&
         RARRAY_LEN(args) == 4) {
         using namespace hardrpg::win32text;
@@ -792,7 +893,9 @@ enum VitaFFIFn {
     VF_WINDOW_AFTER,   /* FindWindowEx: the window when no "after" window is given */
     VF_THREAD,         /* kernel32 GetCurrentThreadId / GetCurrentProcessId */
     VF_WINDOW_THREAD,  /* user32 GetWindowThreadProcessId */
-    VF_CLIENT_RECT,    /* user32 GetClientRect / GetWindowRect */
+    VF_CLIENT_RECT,    /* user32 GetClientRect */
+    VF_WINDOW_RECT,    /* user32 GetWindowRect */
+    VF_WINDOW_LONG,    /* user32 GetWindowLong: the virtual window style */
     VF_METRICS,        /* user32 GetSystemMetrics */
     VF_ASYNC_KEY_STATE, /* user32 GetAsyncKeyState (VF_KEY_STATE is GetKeyState) */
 };
@@ -913,8 +1016,12 @@ static VALUE vitaFFIInitialize(int argc, VALUE *argv, VALUE self) {
             f->fn = VF_WINDOW_AFTER;
         else if (!strcmp(s, "GetWindowThreadProcessId"))
             f->fn = VF_WINDOW_THREAD;
-        else if (!strcmp(s, "GetClientRect") || !strcmp(s, "GetWindowRect"))
+        else if (!strcmp(s, "GetClientRect"))
             f->fn = VF_CLIENT_RECT;
+        else if (!strcmp(s, "GetWindowRect"))
+            f->fn = VF_WINDOW_RECT;
+        else if (!strcmp(s, "GetWindowLong") || !strcmp(s, "GetWindowLongA") || !strcmp(s, "GetWindowLongW"))
+            f->fn = VF_WINDOW_LONG;
         else if (!strcmp(s, "GetSystemMetrics"))
             f->fn = VF_METRICS;
     } else if (f->lib == VL_KERNEL32) {
@@ -999,18 +1106,31 @@ static VALUE vitaFFICall(int argc, VALUE *argv, VALUE self) {
                 vitaFFIWrite(argv[1], &thread, 4);
             }
             return LONG2NUM(kVitaThread);
-        case VF_CLIENT_RECT: {
+        case VF_WINDOW_LONG:
+            if (argc < 2 || vitaFFIToI(argv[0]) != kVitaHwnd || vitaFFIToI(argv[1]) != -16)
+                return INT2FIX(0);
+            return INT2FIX(shState && !shState->graphics().getFullscreen() ? 0x00c00000 : 0);
+        case VF_CLIENT_RECT:
+        case VF_WINDOW_RECT: {
             if (argc < 2 || vitaFFIToI(argv[0]) != kVitaHwnd)
                 return INT2FIX(0);
             int32_t rect[4] = {0, 0, 640, 480};
             if (shState) {
                 rect[2] = shState->graphics().width();
                 rect[3] = shState->graphics().height();
+                if (f->fn == VF_WINDOW_RECT && !shState->graphics().getFullscreen()) {
+                    // Classic RGSS fixed frame: three pixels on each edge
+                    // and a 23-pixel caption above the client area.
+                    rect[2] += 6;
+                    rect[3] += 29;
+                }
             }
             return INT2FIX(vitaFFIWrite(argv[1], rect, sizeof rect));
         }
         case VF_METRICS: {
             long index = argc >= 1 ? vitaFFIToI(argv[0]) : -1;
+            if (shState && (index == 78 || index == 79)) // virtual desktop extent
+                return INT2FIX(index == 78 ? shState->graphics().width() : shState->graphics().height());
             return INT2FIX(index == 0 || index == 16 ? 960 : index == 1 || index == 17 ? 544 : 0);
         }
         default:
@@ -1169,6 +1289,7 @@ void MiniFFIBindingInit() {
     VALUE cMiniFFI = rb_define_class("MiniFFI", rb_cObject);
 #if defined(__vita__) || defined(__psp2__)
     g_miniFFIClass = cMiniFFI;
+    vitaInjectedAlt = 0;
 #endif
 #if defined(__vita__) || defined(__psp2__)
     rb_define_alloc_func(cMiniFFI, vitaFFIAllocate);
