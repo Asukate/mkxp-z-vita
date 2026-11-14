@@ -127,9 +127,14 @@ int main(){
  p=image();vitaBeginPixelTransfer(p);texture converted;
  gpu_alloc_texture(w,h,4,p,&converted,3,nullptr,nullptr,false);vitaEndPixelTransfer();
  assert(converted.status==TEX_UNINITIALIZED&&!mkxp_texture_pixels_size(p));vita_big_free(p);clean();
- // A cropped image must not keep a larger original block; small images copy too.
+ // A cropped image must not keep a larger original block.
  p=image(bytes*2);vitaBeginPixelTransfer(p);assert(!mkxp_adopt_texture_pixels(p,bytes));vitaEndPixelTransfer();vita_big_free(p);clean();
- p=image(128*1024);vitaBeginPixelTransfer(p);assert(!mkxp_adopt_texture_pixels(p,128*1024));vitaEndPixelTransfer();vita_big_free(p);clean();
+ // A screen-sized image below 1 MiB can still use a tracked kernel block.
+ constexpr unsigned screenWidth=640,screenHeight=360,screenBytes=screenWidth*screenHeight*4;
+ p=image(screenBytes);texture screen;vitaBeginPixelTransfer(p);
+ gpu_alloc_texture(screenWidth,screenHeight,4,p,&screen,4,nullptr,nullptr,true);vitaEndPixelTransfer();
+ assert(screen.status==TEX_VALID&&screen.data==p&&((unsigned char*)p)[screenBytes-1]==0xab);
+ vita_big_free(p);vgl_free(screen.data);clean();
  // A tracked buffer with insufficient address alignment must still copy.
  p=image();int slot=0;while(vita_blocks[slot].ptr!=p)++slot;
  void *unaligned=(char*)p+8;vita_blocks[slot].ptr=unaligned;vitaBeginPixelTransfer(unaligned);
