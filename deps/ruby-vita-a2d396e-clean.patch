@@ -1149,3 +1149,41 @@ diff --git a/vm_insnhelper.c b/vm_insnhelper.c
          return klass;
      }
      else {
+diff --git a/io.c b/io.c
+index 4ed4ee3..0b24f30 100644
+--- a/io.c
++++ b/io.c
+@@ -1721,6 +1721,15 @@ io_binwrite(VALUE str, const char *ptr, long len, rb_io_t *fptr, int nosync)
+ # define MODE_BTMODE(a,b,c) ((fmode & FMODE_BINMODE) ? (b) : \
+                              (fmode & FMODE_TEXTMODE) ? (c) : (a))
+ 
++/* RGSS games were written against Windows Ruby's text reads. On the Vita
++ * use Ruby's streaming newline converter because newlib reads raw bytes.
++ * Binary mode and explicit newline options still take precedence. */
++#ifdef __vita__
++# define FILE_TEXT_READ_NEWLINE ECONV_UNIVERSAL_NEWLINE_DECORATOR
++#else
++# define FILE_TEXT_READ_NEWLINE ECONV_DEFAULT_NEWLINE_DECORATOR
++#endif
++
+ #define MODE_BTXMODE(a, b, c, d, e, f) ((fmode & FMODE_EXCL) ? \
+                                         MODE_BTMODE(d, e, f) : \
+                                         MODE_BTMODE(a, b, c))
+@@ -6331,7 +6340,7 @@ rb_io_extract_modeenc(VALUE *vmode_p, VALUE *vperm_p, VALUE opthash,
+ 
+     if (NIL_P(opthash)) {
+ 	ecflags = (fmode & FMODE_READABLE) ?
+-	    MODE_BTMODE(ECONV_DEFAULT_NEWLINE_DECORATOR,
++	    MODE_BTMODE(FILE_TEXT_READ_NEWLINE,
+ 			0, ECONV_UNIVERSAL_NEWLINE_DECORATOR) : 0;
+ #ifdef TEXTMODE_NEWLINE_DECORATOR_ON_WRITE
+ 	ecflags |= (fmode & FMODE_WRITABLE) ?
+@@ -6399,7 +6408,7 @@ rb_io_extract_modeenc(VALUE *vmode_p, VALUE *vperm_p, VALUE opthash,
+ 	    }
+ 	}
+ 	ecflags = (fmode & FMODE_READABLE) ?
+-	    MODE_BTMODE(ECONV_DEFAULT_NEWLINE_DECORATOR,
++	    MODE_BTMODE(FILE_TEXT_READ_NEWLINE,
+ 			0, ECONV_UNIVERSAL_NEWLINE_DECORATOR) : 0;
+ #ifdef TEXTMODE_NEWLINE_DECORATOR_ON_WRITE
+ 	ecflags |= (fmode & FMODE_WRITABLE) ?

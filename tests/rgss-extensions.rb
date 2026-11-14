@@ -40,6 +40,15 @@ Dir.mktmpdir do |dir|
     check('ini int', 42, Win32API.new('KERNEL32.DLL', 'GetPrivateProfileIntA', 'ppip', 'i').call('Other', 'n', 0, 'Game.ini'))
     check('untouched call', 0, Win32API.new('user32', 'ShowWindow', 'll', 'l').call(0, 0))
     check('array arguments', 960, Win32API.new('user32', 'GetSystemMetrics', 'l', 'l').call([0]))
+    %w[SystemParametersInfo SystemParametersInfoA SystemParametersInfoW].each do |name|
+      spi = Win32API.new('user32', name, 'llpl', 'i')
+      rect = "\0" * 16
+      check('work area result', 1, spi.call(0x30, 0, rect, 0))
+      check('work area rectangle', [0, 0, 960, 544], rect.unpack('l4'))
+      check('undersized work area buffer', 0, spi.call(0x30, 0, "\0" * 15, 0))
+      check('unsupported system parameter', 0, spi.call(0x31, 0, rect, 0))
+      check('unsupported system parameter preserves the buffer', [0, 0, 960, 544], rect.unpack('l4'))
+    end
   end
 end
 

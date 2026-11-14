@@ -147,6 +147,8 @@ HardRPGWin32.define('kernel32', 'GetUserDefaultLangID', 'GetSystemDefaultLangID'
 module HardRPGWindow
   HWND = 0x00010010
   THREAD = 1
+  SCREEN_WIDTH = 960
+  SCREEN_HEIGHT = 544
 
   def self.size
     [Graphics.width.to_i, Graphics.height.to_i]
@@ -179,10 +181,16 @@ end
 # user32: the "screen" is the Vita's.
 HardRPGWin32.define('user32', 'GetSystemMetrics') do |index|
   case index.to_i
-  when 0, 16 then 960 # SM_CXSCREEN, SM_CXFULLSCREEN
-  when 1, 17 then 544
+  when 0, 16 then HardRPGWindow::SCREEN_WIDTH # SM_CXSCREEN, SM_CXFULLSCREEN
+  when 1, 17 then HardRPGWindow::SCREEN_HEIGHT
   else 0
   end
+end
+
+# SPI_GETWORKAREA gives fullscreen scripts a desktop rectangle for sizing.
+HardRPGWin32.define('user32', 'SystemParametersInfo', 'SystemParametersInfoA', 'SystemParametersInfoW') do |action, _param, rect, _flags|
+  next 0 unless action.to_i == 0x30
+  HardRPGWindow.write(rect, [0, 0, HardRPGWindow::SCREEN_WIDTH, HardRPGWindow::SCREEN_HEIGHT].pack('l4'))
 end
 
 # Winsock (ws2_32/wsock32): games' online features (Pokemon Insurgence's
