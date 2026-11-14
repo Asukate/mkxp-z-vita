@@ -1162,7 +1162,7 @@ index d77dc2c..542ecac 100644
 +rb_vita_gc_for_fd(void)
 +{
 +    rb_objspace_t *objspace = &rb_objspace;
-+    rb_gc();
++    garbage_collect(objspace, GPR_DEFAULT_REASON | GPR_FLAG_METHOD);
 +    gc_finalize_deferred(objspace);
 +}
 +#endif
