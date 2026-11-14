@@ -76,6 +76,7 @@ static uint32_t vita_block_bytes;
 static uint32_t vita_texture_count;
 static unsigned vita_texture_slots[VITA_BLOCK_SLOTS];
 static const void *vita_transfer_candidate; /* GL thread, scoped to one upload */
+static int vita_allow_mapped_texture; /* GL thread, scoped to one upload */
 static volatile int vita_block_lock;
 /* Spins briefly, then sleeps: the Vita does not time-slice between priorities, so a pure spin
  * by a higher-priority thread (the game) never lets a lower one holding the lock (an image
@@ -144,6 +145,7 @@ void vitaPixelPoolFigures(uint32_t *count, uint32_t *bytes) {
  * glTexImage2D callers retain ownership, including clones and CPU surfaces. */
 void vitaBeginPixelTransfer(const void *ptr) { vita_transfer_candidate = ptr; }
 void vitaEndPixelTransfer(void) { vita_transfer_candidate = NULL; }
+void vitaAllowMappedTexture(int allowed) { vita_allow_mapped_texture = allowed; }
 
 /* Optional vitaGL hook. Linear RGBA uploads with matching row alignment can
  * keep the decoded buffer itself rather than allocate a second image.
@@ -176,7 +178,7 @@ int mkxp_adopt_texture_pixels(const void *ptr, uint32_t bytes) {
 /* Used after vitaGL exhausts its pools. Reserve some general-purpose pages
  * for Ruby and IO, and release each mapped block with the texture. */
 void *mkxp_alloc_texture_pixels(uint32_t bytes) {
-    if (bytes < VITA_BLOCK_MIN || bytes >= 0x40000000u)
+    if (!vita_allow_mapped_texture || bytes < VITA_BLOCK_MIN || bytes >= 0x40000000u)
         return NULL;
     const uint32_t whole = (bytes + 4095u) & ~4095u;
     const uint32_t reserve = 12u * 1024u * 1024u;

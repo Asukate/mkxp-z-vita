@@ -141,6 +141,8 @@ int main(){
  vita_big_free(p);vgl_free(screen.data);clean();
  // Empty RGBA textures can borrow spare kernel pages after pool exhaustion.
  kernel_free=16*1024*1024;
+ assert(!mkxp_alloc_texture_pixels(screenBytes));
+ vitaAllowMappedTexture(1);
  texture empty;gpu_alloc_texture(screenWidth,screenHeight,4,nullptr,&empty,4,nullptr,nullptr,false);
  assert(empty.status==TEX_VALID&&blocks.size()==1&&vgl_malloc_usable_size(empty.data)>=screenBytes);
  assert(((unsigned char*)empty.data)[0]==0&&((unsigned char*)empty.data)[screenBytes-1]==0);
@@ -148,6 +150,7 @@ int main(){
  // Map failure or insufficient room above the reserve leaves no allocation behind.
  map_fail=true;assert(!mkxp_alloc_texture_pixels(screenBytes));map_fail=false;clean();
  kernel_free=12*1024*1024;assert(!mkxp_alloc_texture_pixels(screenBytes));clean();
+ vitaAllowMappedTexture(0);
  // A tracked buffer with insufficient address alignment must still copy.
  p=image();int slot=0;while(vita_blocks[slot].ptr!=p)++slot;
  void *unaligned=(char*)p+8;vita_blocks[slot].ptr=unaligned;vitaBeginPixelTransfer(unaligned);

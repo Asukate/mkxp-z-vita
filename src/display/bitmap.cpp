@@ -42,6 +42,7 @@
 extern "C" void *vglGetTexDataPointerByID(unsigned int texture);
 extern "C" void vitaBeginPixelTransfer(const void *pixels);
 extern "C" void vitaEndPixelTransfer(void);
+extern "C" void vitaAllowMappedTexture(int allowed);
 extern "C" {
 extern unsigned int vgl_upload_barrier_count;
 extern unsigned long long vgl_upload_barrier_us;
@@ -1056,6 +1057,12 @@ static bool cpuSync(BitmapPrivate *p)
         TEX::setSmooth(false);
         try
         {
+#ifdef __vita__
+            struct MappedTextureScope {
+                MappedTextureScope() { vitaAllowMappedTexture(1); }
+                ~MappedTextureScope() { vitaAllowMappedTexture(0); }
+            } mappedTextureScope;
+#endif
             try
             {
                 TEX::allocEmpty(p->gl.width, p->gl.height);
