@@ -810,7 +810,7 @@ static SDL_GLContext initGL(SDL_Window *win, Config &conf,
    * Vertex arrays also need no legacy glBegin/glEnd pool; reserving one
    * repeatedly overflows temporary storage and forces allocation waits. */
   {
-    vitaDiagLog("GL", "vgl_preinit_begin msaa=none ram64 phycont1m");
+    vitaDiagLog("GL", "vgl_preinit_begin msaa=none ram76 phycont12m");
     /* vitaGL takes all main memory except this first figure. About 24 MiB
      * of it is what the system and thread stacks need, as on 0.3.0 (the RGSS
      * thread's stack, Fiber region included, is not counted in it). The other
@@ -830,8 +830,10 @@ static SDL_GLContext initGL(SDL_Window *win, Config &conf,
      * pools need at once and a background thread allocates the rest, which
      * joins the same pool; an allocation that needs it before then waits. */
     vglSetRamPoolDeferral(40 * 1024 * 1024);
+    /* Reserve 12 MiB of contiguous pages for video and system use. The
+     * remaining pages can back graphics when the RAM and VRAM pools fill. */
     vglInitWithCustomThreshold(0, 960, 544,
-                               76 * 1024 * 1024, 0, 25 * 1024 * 1024,
+                               76 * 1024 * 1024, 0, 12 * 1024 * 1024,
                                0x8C6000, 0);
     vitaDiagLog("GL", "vgl_preinit_done");
     vitaDiagLog("BOOTPERF", "vgl_preinit_done");
