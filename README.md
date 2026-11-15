@@ -12,7 +12,7 @@
   <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/RPG%20Maker-XP%20%2F%20VX%20%2F%20Ace%20%2F%202000%20%2F%202003-5865f2?style=for-the-badge" alt="RPG Maker: XP, VX, VX Ace, 2000, 2003"></a>
 </p>
 
-<p align="center"><a href="#install">Install</a> · <a href="#add-your-games">Add games</a> · <a href="#what-hardrpg-can-do">Features</a> · <a href="#using-hardrpg">Use</a> · <a href="#per-game-settings-and-controls">Controls</a> · <a href="#artwork-game-info-and-title-music">Artwork</a> · <a href="#compatibility">Compatibility</a> · <a href="#something-went-wrong">Help</a> · <a href="#faq">FAQ</a> · <a href="#building">Build</a></p>
+<p align="center"><a href="#install">Install</a> · <a href="#add-your-games">Add games</a> · <a href="#what-hardrpg-can-do">Features</a> · <a href="#using-hardrpg">Use</a> · <a href="#per-game-settings-and-controls">Controls</a> · <a href="#artwork-game-info-and-title-music">Artwork</a> · <a href="#compatibility">Compatibility</a> · <a href="#something-went-wrong">Help</a> · <a href="#faq">FAQ</a> · <a href="#building">Build</a> · <a href="#support-hardrpg">Support</a></p>
 
 
 **HardRPG** plays RPG Maker XP, VX, VX Ace, 2000 and 2003 games on the PS Vita.
@@ -655,6 +655,14 @@ for quick UI work.
 | `deps/` | Pinned dependencies and their patches |
 | `scripts/`, `ci/` | Build, package, verification and CI |
 | `docs/` | Guides, compatibility and README images |
+
+## Support HardRPG
+
+Sponsorship helps fund development, game compatibility fixes, and testing on
+real PS Vita hardware. You can support the project monthly or make a one-time
+contribution. Both options let you choose your own amount.
+
+[Sponsor HardRPG on GitHub](https://github.com/sponsors/Asukate)
 
 ## Credits and licenses
 
