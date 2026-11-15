@@ -726,6 +726,7 @@ int main(int argc, char **argv) {
     state.as_object()["controls"] = ui.controls.json();
     state.as_object()["controlsTesting"] = ui.controlsTesting;
     state.as_object()["controlsPad"] = ui.controlsPad;
+    state.as_object()["controlsAdvanced"] = ui.controlsAdvanced;
     state.as_object()["controlPicking"] = ui.controlPicking;
     state.as_object()["gameOptions"] = ui.gameOptions;
     state.as_object()["configuredGame"] = ui.gameOptions ? ui.gameEntry.name : "";

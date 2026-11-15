@@ -38,6 +38,19 @@ constexpr int hintsY = 502;
 // shorter.
 constexpr int sheetX = 130, sheetW = 700, sheetTitleY = 72, sheetTop = 151, sheetRowH = 42, sheetRows = 7;
 constexpr int rtpRowH = 54, browserRowH = 40, browserRows = 8;
+// Over a running game the sheets use the whole width and taller rows with
+// bigger text, easier to read over the game and to hit with a thumb. Seven
+// rows still fit, so scrolling is the same.
+struct SheetGeom {
+  int x, w, top, rowH;
+};
+constexpr int wideSheetX = 16, wideSheetW = 928, wideSheetTop = 132, wideSheetRowH = 48;
+// The menu over a running game (its first page): six taller rows; its help
+// is one line just above the hint bar.
+constexpr int inGameMenuRowH = 56, inGameMenuFooterY = hintsY - 26;
+inline SheetGeom sheetGeom(bool wide) {
+  return wide ? SheetGeom{wideSheetX, wideSheetW, wideSheetTop, wideSheetRowH} : SheetGeom{sheetX, sheetW, sheetTop, sheetRowH};
+}
 // Artwork chooser: a row per kind (cover, background, logo), thumbnails left
 // to right with the source named underneath.
 constexpr int pickerX = 168, pickerGap = 16, pickerLabel = 18;

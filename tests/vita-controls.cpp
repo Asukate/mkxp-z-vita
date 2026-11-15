@@ -106,7 +106,7 @@ int main() {
   assert(state.update(p, s).x > x);
   s.buttons = 0;
   s.rear.clear();
-  p.rightPointer = true;
+  p.rightStick = RightStickPointer;
   s.rx = 255;
   s.milliseconds += 16;
   x = state.update(p, s).x;
@@ -226,7 +226,7 @@ int main() {
       assert(controlValid(controlPicks[i].value) && controlPickIndex(controlPicks[i].value) == i);
       int x, y, w, h;
       controlPickRect(i, x, y, w, h);
-      assert(x >= 194 && x + w <= 912 && y >= 146 && y + h <= 460);
+      assert(x >= 16 && x + w <= 944 && y >= 120 && y + h <= 496);
     }
   }
   {
@@ -315,6 +315,51 @@ int main() {
     ControlProfile again = ControlProfile::parse(f.json());
     assert(again.front == 6 && again.frontBottomRight == controlKeyBase + 7);
   }
-  std::cout << "Control transitions, touch filtering, key mappings, profile "
+  {
+    // The right stick mirrors the left stick by default.
+    ControlProfile r;
+    r.enabled = true;
+    assert(r.rightMirrors());
+    auto push = [](ControlProfile &q, int rx, int ry) {
+      ControlState st;
+      ControlSample s;
+      s.milliseconds = 10;
+      st.update(q, s);
+      s.milliseconds = 26;
+      s.rx = rx, s.ry = ry;
+      return st.update(q, s);
+    };
+    auto o = push(r, 255, 128);
+    assert(o.actions[6] && !o.actions[4] && !o.pointer);
+    o = push(r, 128, 0);
+    assert(o.actions[8] && !o.actions[2]);
+    // Its directions can be mapped to anything, keys included.
+    r.rightDirs = {{controlKeyBase + 82, 40, 38, 13}};
+    assert(!r.rightMirrors());
+    o = push(r, 128, 0);
+    assert(o.keys[82] && !o.actions[8]);
+    o = push(r, 255, 128);
+    assert(o.actions[13] && !o.actions[6]);
+    // Off: nothing; pointer: moves the pointer only.
+    r.rightStick = RightStickOff;
+    o = push(r, 255, 128);
+    assert(!o.actions[13] && !o.actions[6]);
+    r.rightStick = RightStickPointer;
+    o = push(r, 255, 128);
+    assert(o.pointer && !o.actions[13]);
+    // Saved and read back; an older profile's rightPointer still means pointer.
+    ControlProfile back = ControlProfile::parse(r.json());
+    assert(back.rightStick == RightStickPointer && back.rightDirs[0] == controlKeyBase + 82);
+    assert(ControlProfile::parse(json5pp::parse("{\"rightPointer\": true}")).rightStick == RightStickPointer);
+    assert(ControlProfile::parse(json5pp::parse("{\"rightPointer\": false}")).rightMirrors());
+    bool refused = false;
+    try {
+      ControlProfile::parse(json5pp::parse("{\"rightDirs\": [8, 2, 4]}"));
+    } catch (const std::exception &) {
+      refused = true;
+    }
+    assert(refused);
+  }
+  std::cout << "Control transitions, touch filtering, key mappings, right stick, profile "
                "validation and release ordering passed\n";
 }

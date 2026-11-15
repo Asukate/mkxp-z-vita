@@ -1527,8 +1527,32 @@ class NativeLauncher(unittest.TestCase):
         self.assertTrue(self.ui(GAME+',cross,up,up,cross')['controlPicking'])
         self.assertEqual(self.ui(GAME+',cross,up,right,cross')['controlsPad'], 1)
         # A tap focuses a label; a second tap opens it.
-        self.assertEqual(self.ui(GAME+',cross,touch:850:330')['setting'], 1)
-        self.assertTrue(self.ui(GAME+',cross,touch:850:330,touch:850:330')['controlPicking'])
+        self.assertEqual(self.ui(GAME+',cross,touch:850:300')['setting'], 1)
+        self.assertTrue(self.ui(GAME+',cross,touch:850:300,touch:850:300')['controlPicking'])
+
+    def test_right_stick_mirrors_and_maps(self):
+        self.game(self.games/'stick',title='Stick fixture')
+        profile=lambda: json.loads(next((self.root/'controls').glob('*.json')).read_text())
+        # Its label sits under Cross; it mirrors the left stick until changed.
+        state=self.ui(GAME+',cross,touch:850:340')
+        self.assertEqual(state['setting'], 19)
+        self.assertEqual(state['controls']['rightStick'], 0)
+        self.assertEqual(state['controls']['rightDirs'], [8, 2, 4, 6])
+        # A second tap opens the sticks page on the right stick's mode.
+        state=self.ui(GAME+',cross,touch:850:340,touch:850:340')
+        self.assertTrue(state['controlsAdvanced'])
+        self.assertEqual(state['setting'], 0)
+        # Right: the mouse pointer; saved, with the old flag for older builds.
+        self.ui(GAME+',cross,touch:850:340,touch:850:340,right')
+        self.assertEqual((profile()['rightStick'], profile()['rightPointer']), (1, True))
+        # Mapping a direction sets the stick back to mapped directions.
+        state=self.ui(GAME+',cross,touch:850:340,touch:850:340,down,cross'+',right'*4+',cross')
+        self.assertEqual(profile()['rightStick'], 0)
+        self.assertEqual(profile()['rightDirs'][0], 13)     # Up now confirms
+        # Square mirrors the left stick again; Circle goes back to its label.
+        state=self.ui(GAME+',cross,touch:850:340,touch:850:340,down,square,circle')
+        self.assertEqual(profile()['rightDirs'], [8, 2, 4, 6])
+        self.assertEqual((state['controlsAdvanced'], state['setting']), (False, 19))
 
     def test_buttons_and_touch_zones_map_to_keys(self):
         self.game(self.games/'keys',title='Keys fixture')

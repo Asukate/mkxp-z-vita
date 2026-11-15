@@ -105,10 +105,86 @@ std::vector<std::string> View::wrap(const std::string &text, int size, int maxWi
   return lines;
 }
 
+const Image &View::shoulder(int side, int &x, int &y) {
+  Image &glow = shoulderGlow[side];
+  if (glow.empty()) {
+    const Image &art = icon("vita-640");
+    if (art.empty() || art.width < 640)
+      return glow;
+    // The light grey wedge in the top corner; an opening (erode then
+    // dilate by 2 px) drops the thin outline and the top rim it touches.
+    const int x0 = side ? 420 : 0, x1 = side ? art.width : 220, y1 = std::min(40, art.height), r = 2;
+    const int w = x1 - x0, h = y1;
+    auto bright = [&](int px, int py) {
+      if (px < x0 || px >= x1 || py < 0 || py >= y1)
+        return false;
+      const uint8_t *p = &art.rgba[(size_t(py) * art.width + px) * 4];
+      return p[3] > 200 && (p[0] + p[1] + p[2]) > 140 * 3;
+    };
+    std::vector<uint8_t> core(size_t(w) * h), keep(size_t(w) * h);
+    for (int py = 0; py < h; ++py)
+      for (int px = 0; px < w; ++px) {
+        bool all = true;
+        for (int dy = -r; dy <= r && all; ++dy)
+          for (int dx = -r; dx <= r && all; ++dx)
+            all = bright(x0 + px + dx, py + dy);
+        core[size_t(py) * w + px] = all;
+      }
+    int left = w, top = h, right = -1, bottom = -1;
+    for (int py = 0; py < h; ++py)
+      for (int px = 0; px < w; ++px) {
+        if (!bright(x0 + px, py))
+          continue;
+        bool near = false;
+        for (int dy = -r; dy <= r && !near; ++dy)
+          for (int dx = -r; dx <= r && !near; ++dx) {
+            int cx = px + dx, cy = py + dy;
+            near = cx >= 0 && cy >= 0 && cx < w && cy < h && core[size_t(cy) * w + cx];
+          }
+        if (near) {
+          keep[size_t(py) * w + px] = 1;
+          left = std::min(left, px), right = std::max(right, px);
+          top = std::min(top, py), bottom = std::max(bottom, py);
+        }
+      }
+    if (right < 0)
+      return glow;
+    // One pixel of soft edge around the shape.
+    left = std::max(0, left - 1), top = std::max(0, top - 1);
+    right = std::min(w - 1, right + 1), bottom = std::min(h - 1, bottom + 1);
+    glow = Image::blank(right - left + 1, bottom - top + 1);
+    for (int py = top; py <= bottom; ++py)
+      for (int px = left; px <= right; ++px) {
+        int a = 0;
+        if (keep[size_t(py) * w + px])
+          a = 255;
+        else
+          for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+              int cx = px + dx, cy = py + dy;
+              if (cx >= 0 && cy >= 0 && cx < w && cy < h && keep[size_t(cy) * w + cx])
+                a = 110;
+            }
+        uint8_t *q = &glow.rgba[(size_t(py - top) * glow.width + (px - left)) * 4];
+        q[0] = uint8_t(ruby[0] * a / 255), q[1] = uint8_t(ruby[1] * a / 255), q[2] = uint8_t(ruby[2] * a / 255);
+        q[3] = uint8_t(a);
+      }
+    glow.touch();
+    shoulderX[side] = x0 + left;
+    shoulderY[side] = top;
+  }
+  x = shoulderX[side];
+  y = shoulderY[side];
+  return glow;
+}
+
 void View::buildSheet(const UI &u) {
   scene.clear();
   ensureStrips();
   pendingLoads = false;
+  // The column the header, rows and notes use: wide over a running game.
+  const bool wide = u.inGame;
+  const auto G = sheetGeom(wide);
 
   // What the screen shows, filled in by state below, then drawn.
   struct Row {
@@ -118,7 +194,8 @@ void View::buildSheet(const UI &u) {
   };
   std::string section, title, subtitle;
   std::vector<Row> rows;
-  int focusRow = -1, first = 0, shown = sheetRows, rowH = sheetRowH;
+  int focusRow = -1, first = 0, shown = sheetRows, rowH = G.rowH;
+  bool menuPage = false; // the first page over a running game
   std::vector<std::string> notes, body;
   int bodyFirst = 0, bodyLines = 12;
   std::vector<Hint> left, right;
@@ -169,8 +246,20 @@ void View::buildSheet(const UI &u) {
     bool full = depth != values().end() && depth->second.is_integer() && depth->second.as_integer() == 32;
     row(Row::Choice, "Image quality", full ? "32-bit (more memory)" : "16-bit (recommended)");
     focusRow = u.setting;
-    notes = {tr(u.gameOptions ? "Saved for this game. <square> Square goes back to the default for every game."
-                              : "Used by games without settings of their own.")};
+    // What each choice of the focused row gives and costs.
+    if (u.setting == 0)
+      notes = {tr("Original: the game's own shape, nothing stretched. Black borders fill the sides."),
+               tr("Fill screen: no borders, the whole screen is used, but the picture is stretched wider, so round "
+                  "things look oval.")};
+    else if (u.setting == 1)
+      notes = {tr("Whole pixels: the sharpest picture. Every game pixel is drawn the same size, so lines and text stay "
+                  "even and nothing shimmers when the map scrolls. The picture is smaller, with wider borders."),
+               tr("Fit screen: the biggest picture, but game pixels end up slightly different sizes, so thin lines and "
+                  "small text can look uneven.")};
+    else if (u.setting == 2)
+      notes = {tr("Sharp: crisp pixels with only their edges smoothed. Hides uneven pixels with Fit screen and stays clear."),
+               tr("Nearest: hard, blocky pixels. Sharpest with Whole pixels; with Fit screen some pixels are wider than others."),
+               tr("Bilinear: soft and smooth, hides uneven pixels, but the whole picture looks blurry.")};
     if (u.setting == 3)
       notes = {tr("16-bit keeps game pictures in half the video memory, with a fine dither that is hard to see on the "
                   "Vita screen. Recommended for every game."),
@@ -178,6 +267,9 @@ void View::buildSheet(const UI &u) {
                   "crash. Only use it if a game looks wrong in 16-bit."),
                tr(u.gameOptions ? "Saved for this game; applies the next time it starts."
                                 : "Used by games without settings of their own. Applies the next time a game starts.")};
+    else
+      notes.push_back(tr(u.gameOptions ? "Saved for this game. <square> Square goes back to the default for every game."
+                                       : "Used by games without settings of their own."));
     left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", u.gameOptions ? "Use default" : "Reset", Button::Square), back};
   };
   auto metricsPage = [&] {
@@ -279,16 +371,25 @@ void View::buildSheet(const UI &u) {
       right = {{nullptr, tr("D-pad: move around the picture"), Button::None}};
     } else {
       title = tr(u.controlsAdvanced ? "Sticks and pointer" : "Controls");
-      for (int i = 0; i < u.controlsCount(); ++i)
-        row(i >= 1 && i <= 12 && !u.controlsAdvanced ? Row::Nav : Row::Choice, u.controlLabel(i), u.controlValue(i));
+      for (int i = 0; i < u.controlsCount(); ++i) {
+        bool picks = u.controlsAdvanced ? i >= 1 && i <= 4 : i >= 1 && i <= 12;
+        row(picks ? Row::Nav : Row::Choice, u.controlLabel(i), u.controlValue(i));
+      }
       focusRow = u.setting;
       first = u.settingFirst;
       notes = {!u.message.empty() ? u.message
+               : u.controlsAdvanced && u.setting == 0
+                   ? tr("Same as left stick: the right stick moves like the left one. Mouse pointer: it moves the "
+                        "pointer, for games played with the mouse. Or map each direction below to any action or key.")
+               : u.controlsAdvanced && u.setting <= 4
+                   ? tr("<cross> Cross gives this direction an RPG Maker action or a keyboard key. <square> Square: same as the left stick again.")
                : tr(u.controlsAdvanced ? "Pointer options need a game that reads the mouse."
                     : u.setting >= 1 && u.setting <= 12 ? "<cross> Cross gives this button a keyboard key or an RPG Maker action."
                     : u.controls.enabled ? "Each button does what is shown. Saved for this game."
                                          : "Pick a button and press <cross> Cross to map it to any keyboard key.")};
       left = {cross, back};
+      if (u.controlsAdvanced && u.setting <= 4)
+        left = {cross, hint("btn-square-26", "Mirror left stick", Button::Square), back};
     }
   } else if (!u.errorReport.empty()) {
     section = tr("Error report");
@@ -342,15 +443,17 @@ void View::buildSheet(const UI &u) {
       Row::Kind kinds[] = {Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Action, Row::Nav, Row::Primary, Row::Danger, Row::Danger};
       // Over a running game: resume, the settings that apply at once, leave.
       const char *playing[] = {"Resume", "Controls", "Display", "Audio", "Performance and speed", "Back to library"};
-      Row::Kind playingKinds[] = {Row::Primary, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Plain};
+      // Resume is a row like the others: only the focus is ruby.
+      Row::Kind playingKinds[] = {Row::Plain, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Plain};
       for (int i = 0; i < u.gameOptionsCount(); ++i)
         row(u.inGame ? playingKinds[i] : kinds[i], u.inGame ? playing[i] : names[i]);
       focusRow = u.setting;
       first = u.settingFirst;
       if (u.inGame) {
         section = tr("Paused");
-        notes = {tr("Changes apply as soon as you make them and are saved for this game."),
-                 tr("Open this menu again: hold <l>+<r>+<start>, or tap the icon in the screen's empty border.")};
+        menuPage = true;
+        rowH = inGameMenuRowH;
+        notes = {tr("Changes apply at once and are saved for this game. Reopen: hold <l>+<r>+<start>, or tap the icon in the empty border.")};
         left = {hint("btn-cross-26", "Open", Button::Cross), hint("btn-circle-26", "Resume", Button::Circle)};
       } else
         left = {hint("btn-cross-26", "Open", Button::Cross), back};
@@ -658,20 +761,20 @@ void View::buildSheet(const UI &u) {
   // Header: a small section name over the title, the subtitle after it.
   if (special != About) {
     std::string key = section + "|" + title + "|" + subtitle;
-    if (beginLayer(headerLayer, key, width - sheetX, 76)) {
+    if (beginLayer(headerLayer, key, width - G.x, 76)) {
       label(0, 0, upper(section), 12, faint);
       int tw = measure(title, 30, true);
-      label(0, 16, title, 30, white, 255, true, -1, sheetW + 40);
+      label(0, 16, title, 30, white, 255, true, -1, G.w + 40);
       if (!subtitle.empty()) {
         int sw = measure(subtitle, 15);
-        if (tw + 18 + sw <= sheetW + 40)
+        if (tw + 18 + sw <= G.w + 40)
           label(tw + 18, 29, subtitle, 15, muted);
         else
-          label(0, 54, subtitle, 15, muted, 255, false, -1, sheetW + 40);
+          label(0, 54, subtitle, 15, muted, 255, false, -1, G.w + 40);
       }
       endLayer();
     }
-    place(headerLayer.image, sheetX, sheetTitleY);
+    place(headerLayer.image, G.x, sheetTitleY);
   }
 
   // Rows: cached text over a quad; the focused one brighter, with the ruby mark.
@@ -679,19 +782,30 @@ void View::buildSheet(const UI &u) {
   int box = rowH - 6;
   for (int i = 0; i < rowsShown; ++i) {
     auto &r = rows[first + i];
-    int y = sheetTop + i * rowH;
+    int y = G.top + i * rowH;
     bool focused = first + i == focusRow;
-    if (r.kind == Row::Primary)
-      solidQuad(ruby, sheetX, y, sheetW, box, focused ? 1 : 0.7, 8);
-    else if (r.kind != Row::Info || focused)
-      solidQuad(white, sheetX, y, sheetW, box, focused ? 0.16 : 0.06, 8);
-    if (focused && r.kind != Row::Primary)
-      solidQuad(ruby, sheetX, y, 4, box, 1, 2);
+    if (menuPage && focused) {
+      // The menu over a game: see-through ruby, so the focus is clear
+      // without a slab of red across the screen.
+      solidQuad({0, 0, 0}, G.x, y, G.w, box, 0.38, 10);
+      solidQuad(ruby, G.x, y, G.w, box, 0.42, 10);
+    } else if (r.kind == Row::Primary)
+      solidQuad(ruby, G.x, y, G.w, box, focused ? 1 : 0.7, wide ? 10 : 8);
+    else if (r.kind != Row::Info || focused) {
+      if (!(menuPage && focused)) {
+      // Over a game each row is a clear button: a dark plate under the tint.
+      if (wide)
+        solidQuad({0, 0, 0}, G.x, y, G.w, box, 0.38, 10);
+      solidQuad(white, G.x, y, G.w, box, focused ? (wide ? 0.2 : 0.16) : wide ? 0.1 : 0.06, wide ? 10 : 8);
+      }
+    }
+    if (focused && r.kind != Row::Primary && !menuPage)
+      solidQuad(ruby, G.x, y, wide ? 6 : 4, box, 1, wide ? 3 : 2);
     std::string key = std::to_string(int(r.kind)) + "|" + r.label + "|" + r.value + "|" + r.detail + "|" + std::to_string(r.on) + "|" +
                       std::to_string(box);
     auto &layer = rowCache[key];
     if (layer.key.empty()) {
-      beginLayer(layer, key, sheetW, box);
+      beginLayer(layer, key, G.w, box);
       int textX = 18;
       const char *glyphName = r.kind == Row::Folder ? "folder-26" : r.kind == Row::Zip ? "memcard-26" : r.kind == Row::Action && r.label == tr("Add another folder") ? "plus-31" : nullptr;
       if (glyphName) {
@@ -699,10 +813,11 @@ void View::buildSheet(const UI &u) {
         blitScaled(g, 14, (box - 24) / 2, 24, 24);
         textX = 50;
       }
-      int labelY = r.detail.empty() ? (box - 22) / 2 : 5;
+      int labelY = r.detail.empty() ? (box - (menuPage ? 29 : wide ? 25 : 22)) / 2 : 5;
       Color labelColor = r.kind == Row::Danger ? rubyHi : r.kind == Row::Info ? muted : white;
-      int labelSize = r.kind == Row::Info ? 16 : 18;
-      int right = sheetW - 16;
+      int labelSize = r.kind == Row::Info ? 16 : menuPage ? 24 : wide ? 21 : 18;
+      bool bold = r.kind == Row::Primary || (wide && r.kind != Row::Info);
+      int right = G.w - 16;
       if (r.kind == Row::Toggle) {
         // A switch: ruby and to the right when on.
         rect(right - 44, (box - 24) / 2, 44, 24, r.on ? ruby : Color{80, 80, 86}, 255, 12);
@@ -710,62 +825,65 @@ void View::buildSheet(const UI &u) {
         right -= 58;
       } else if (r.kind == Row::Choice) {
         label(right, (box - 22) / 2, "\xe2\x80\xba", 20, muted, 255, false, 1);
-        int vw = measure(r.value, 17);
-        label(right - 20, (box - 20) / 2, r.value, 17, white, 255, false, 1);
+        int vs = wide ? 19 : 17, vw = measure(r.value, vs);
+        label(right - 20, (box - (wide ? 23 : 20)) / 2, r.value, vs, white, 255, false, 1);
         label(right - 30 - vw, (box - 22) / 2, "\xe2\x80\xb9", 20, muted, 255, false, 1);
         right -= vw + 46;
       } else if (r.kind == Row::Nav) {
         label(right, (box - 22) / 2, "\xe2\x80\xba", 20, muted, 255, false, 1);
         right -= 22;
         if (!r.value.empty()) {
-          label(right, (box - 20) / 2, r.value, 15, muted, 255, false, 1, 260);
-          right -= std::min(260, measure(r.value, 15)) + 16;
+          int vs = wide ? 18 : 15;
+          label(right, (box - (vs + 5)) / 2, r.value, vs, wide ? soft : muted, 255, false, 1, 300);
+          right -= std::min(300, measure(r.value, vs)) + 16;
         }
       } else if (r.kind == Row::Info) {
-        label(right, (box - 20) / 2, r.value, 16, white, 255, false, 1, sheetW - 200);
-        right = std::max(180, right - std::min(sheetW - 200, measure(r.value, 16)) - 20);
+        label(right, (box - 20) / 2, r.value, 16, white, 255, false, 1, G.w - 200);
+        right = std::max(180, right - std::min(G.w - 200, measure(r.value, 16)) - 20);
       }
-      label(textX, labelY, r.label, labelSize, labelColor, 255, r.kind == Row::Primary, -1, std::max(60, right - textX - 8));
+      label(textX, labelY, r.label, labelSize, labelColor, 255, bold, -1, std::max(60, right - textX - 8));
       if (!r.detail.empty())
-        label(textX, labelY + 24, r.detail, 13, faint, 255, false, -1, sheetW - textX - 16);
+        label(textX, labelY + 24, r.detail, 13, faint, 255, false, -1, G.w - textX - 16);
       endLayer();
     }
-    place(layer.image, sheetX, y);
+    place(layer.image, G.x, y);
   }
   if (int(rows.size()) > shown) {
     int trackH = shown * rowH - 6, thumb = std::max(24, trackH * shown / int(rows.size()));
     int offset = (trackH - thumb) * first / std::max(1, int(rows.size()) - shown);
-    solidQuad(white, sheetX + sheetW + 10, sheetTop, 4, trackH, 0.1, 2);
-    solidQuad(white, sheetX + sheetW + 10, sheetTop + offset, 4, thumb, 0.6, 2);
+    solidQuad(white, G.x + G.w + 10, G.top, 4, trackH, 0.1, 2);
+    solidQuad(white, G.x + G.w + 10, G.top + offset, 4, thumb, 0.6, 2);
   }
   if (rowCache.size() > 300)
     for (auto it = rowCache.begin(); it != rowCache.end();)
       it = rowCache.size() > 150 ? rowCache.erase(it) : std::next(it);
 
   // Long text (reports, release notes): one cached layer per line.
-  int y = rows.empty() ? sheetTop : sheetTop + rowsShown * rowH + 6;
+  int y = rows.empty() ? G.top : G.top + rowsShown * rowH + 6;
+  if (menuPage)
+    y = inGameMenuFooterY - 2; // one line just above the hint bar
   if (special == About) {
-    place(icon("emblem-72"), sheetX, 84);
-    place(icon("wordmark-46"), sheetX + 90, 92);
+    place(icon("emblem-72"), G.x, 84);
+    place(icon("wordmark-46"), G.x + 90, 92);
     std::string key = std::string("about|") + languageCode(language());
     // The credits on one line, or two when the language makes them longer.
     std::string site = std::string("github.com/Asukate/mkxp-z-vita  \xc2\xb7  ") + tr("powered by mkxp-z and EasyRPG Player"),
                 drawing = tr("Vita drawing by Tokyoship, CC BY 3.0"), dot = "  \xc2\xb7  ";
-    bool oneLine = measure(site + dot + drawing, 13) <= sheetW - 92;
-    if (beginLayer(headerLayer, key, sheetW, 80)) {
+    bool oneLine = measure(site + dot + drawing, 13) <= G.w - 92;
+    if (beginLayer(headerLayer, key, G.w, 80)) {
       label(0, 0, trf("Version {}", {HARDRPG_VERSION}), 16, white);
       label(0, 24, tr("Classic RPG games on the PS Vita. Made by Asukate."), 15, muted);
       if (oneLine)
         label(0, 46, site + dot + drawing, 13, faint);
       else {
-        label(0, 46, site, 13, faint, 255, false, -1, sheetW - 92);
-        label(0, 63, drawing, 13, faint, 255, false, -1, sheetW - 92);
+        label(0, 46, site, 13, faint, 255, false, -1, G.w - 92);
+        label(0, 63, drawing, 13, faint, 255, false, -1, G.w - 92);
       }
       endLayer();
     }
-    place(headerLayer.image, sheetX + 92, 144);
+    place(headerLayer.image, G.x + 92, 144);
     y = oneLine ? 230 : 240;
-    solidQuad(white, sheetX, y - 8, sheetW, 1, 0.12);
+    solidQuad(white, G.x, y - 8, G.w, 1, 0.12);
   }
   if (!body.empty()) {
     int lineH = 25;
@@ -774,17 +892,17 @@ void View::buildSheet(const UI &u) {
       std::string key = "body|" + text;
       auto &layer = rowCache[key];
       if (layer.key.empty()) {
-        beginLayer(layer, key, sheetW, lineH);
-        label(0, 2, text, 16, soft, 255, false, -1, sheetW);
+        beginLayer(layer, key, G.w, lineH);
+        label(0, 2, text, 16, soft, 255, false, -1, G.w);
         endLayer();
       }
-      place(layer.image, sheetX, y + i * lineH);
+      place(layer.image, G.x, y + i * lineH);
     }
     if (int(body.size()) > bodyLines) {
       int trackH = bodyLines * lineH, thumb = std::max(24, trackH * bodyLines / int(body.size()));
       int offset = (trackH - thumb) * bodyFirst / std::max(1, int(body.size()) - bodyLines);
-      solidQuad(white, sheetX + sheetW + 10, y, 4, trackH, 0.1, 2);
-      solidQuad(white, sheetX + sheetW + 10, y + offset, 4, thumb, 0.6, 2);
+      solidQuad(white, G.x + G.w + 10, y, 4, trackH, 0.1, 2);
+      solidQuad(white, G.x + G.w + 10, y + offset, 4, thumb, 0.6, 2);
     }
     y += std::min(bodyLines, int(body.size())) * lineH + 6;
   }
@@ -803,20 +921,44 @@ void View::buildSheet(const UI &u) {
       bool keyRow = controlIsKey(controlPicks[i].value);
       if (here)
         solidQuad(ruby, x, ky, w, h, 1, 6);
-      else
+      else {
+        // A dark plate under each key so it reads over the game.
+        if (overlay)
+          solidQuad({0, 0, 0}, x, ky, w, h, 0.42, 6);
         solidQuad(white, x, ky, w, h, used ? 0.05 : keyRow ? 0.1 : 0.16, 6);
+      }
       // RPG Maker actions are translated; keyboard keys keep their names.
       std::string name = controlPicks[i].row ? controlPicks[i].name : trc("picker", controlPicks[i].name), key = "key|" + name + "|" + std::to_string(w) + "|" + std::to_string(used && !here);
       auto &layer = rowCache[key];
       if (layer.key.empty()) {
         beginLayer(layer, key, w, h);
-        int size = name.size() > 8 ? 11 : name.size() > 5 ? 12 : name.size() > 2 ? 14 : 17;
-        label(w / 2, (h - size - 4) / 2, name, size, used && !here ? faint : white, 255, false, 0, w - 4);
+        // As big as the key allows: one letter large, long names smaller.
+        int glyphs = 0;
+        for (unsigned char c : name)
+          glyphs += (c & 0xC0) != 0x80;
+        int size = glyphs > 1 ? 18 : 22;
+        while (size > 11 && measure(name, size) > w - 8)
+          --size;
+        label(w / 2, (h - size - 4) / 2, name, size, used && !here ? faint : white, 255, false, 0, w - 6);
         endLayer();
       }
       place(layer.image, x, ky);
     }
-    y = 463;
+    // The keys fill the screen down to the hint bar, so the help sits in
+    // the header, right of the title.
+    if (!notes.empty()) {
+      auto &layer = rowCache["picknote|" + notes[0]];
+      if (layer.key.empty()) {
+        beginLayer(layer, "picknote|" + notes[0], 520, 44);
+        auto lines = wrap(notes[0], 14, 520);
+        for (size_t i = 0; i < lines.size() && i < 2; ++i)
+          label(520, int(i) * 19, lines[i], 14, muted, 255, false, 1);
+        endLayer();
+      }
+      place(layer.image, 944 - 520, 76);
+      notes.clear();
+    }
+    y = hintsY;
   } else if (special == ControlsMap) {
     // The console, each button's mapping in a label beside it with a line to
     // the button, the screen as the touch screen's button, and pills below.
@@ -837,6 +979,19 @@ void View::buildSheet(const UI &u) {
     }
     if (screenHere)
       solidQuad(ruby, sx, sy, sw, sh, 0.18, 2);
+    // The focused shoulder button lights in its own shape.
+    if ((u.setting == 11 || u.setting == 12) && !art.empty()) {
+      int side = u.setting == 12, gx, gy;
+      const Image &g = shoulder(side, gx, gy);
+      if (!g.empty()) {
+        const double f = double(UI::mapArtW) / art.width;
+        Quad q;
+        q.image = &g;
+        q.x = float(UI::mapArtX + gx * f), q.y = float(UI::mapArtY + gy * f);
+        q.w = float(g.width * f), q.h = float(g.height * f), q.alpha = 0.9f;
+        scene.push_back(q);
+      }
+    }
     {
       std::string key = "mapscreen|" + u.controlValue(14) + "|" + languageCode(language());
       auto &l = rowCache[key];
@@ -851,8 +1006,10 @@ void View::buildSheet(const UI &u) {
       place(l.image, sx + 8, sy + sh / 2 - 30);
     }
     (void)k;
-    // Lines first, so the labels sit on top of them.
-    for (int row = 1; row <= 12; ++row) {
+    // Lines first, so the labels sit on top of them. Rows 1-12 are the
+    // buttons, 19 the right stick.
+    static const int mapped[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 19};
+    for (int row : mapped) {
       int x, y, w, h, ax, ay;
       UI::controlsRect(row, x, y, w, h);
       UI::controlsAnchor(row, ax, ay);
@@ -870,14 +1027,14 @@ void View::buildSheet(const UI &u) {
       }
       solidQuad(c, ax - 4, ay - 4, 8, 8, here ? 1 : 0.8, 4);
     }
-    for (int row = 1; row <= 12; ++row) {
+    for (int row : mapped) {
       int x, y, w, h;
       UI::controlsRect(row, x, y, w, h);
       bool here = u.setting == row;
       solidQuad(here ? ruby : Color{24, 24, 28}, x, y, w, h, here ? 1 : 0.92, 8);
       if (!here)
         solidQuad(white, x, y, w, h, 0.06, 8);
-      std::string text = std::string(buttonIcon(row - 1)) + "  " + u.controlValue(row);
+      std::string text = std::string(row == 19 ? "<rs>" : buttonIcon(row - 1)) + "  " + u.controlValue(row);
       std::string key = "mapbutton|" + text + "|" + std::to_string(w);
       auto &l = rowCache[key];
       if (l.key.empty()) {
@@ -892,6 +1049,8 @@ void View::buildSheet(const UI &u) {
       int x, y, w, h;
       UI::controlsRect(row, x, y, w, h);
       bool here = u.setting == row;
+      if (overlay && !here)
+        solidQuad({0, 0, 0}, x, y, w, h, 0.45, 10); // readable over the game
       solidQuad(here ? ruby : white, x, y, w, h, here ? 1 : 0.1, 10);
       static const char *names[] = {"Custom controls", "", "", "", "", "", "", "", "", "", "", "", "",
                                     "Tap to walk", "", "Rear touch pad", "Sticks and pointer", "Test inputs",
@@ -912,11 +1071,12 @@ void View::buildSheet(const UI &u) {
     std::string line = !u.message.empty() ? u.message : u.controlLabel(u.setting) + ":  " + u.controlValue(u.setting);
     auto &l = rowCache["mapline|" + line];
     if (l.key.empty()) {
-      beginLayer(l, "mapline|" + line, 700, 22);
-      label(350, 0, line, 14, muted, 255, false, 0, 696);
+      // Between the label columns, under the drawing.
+      beginLayer(l, "mapline|" + line, 520, 22);
+      label(260, 0, line, 14, muted, 255, false, 0, 516);
       endLayer();
     }
-    place(l.image, 130, 413);
+    place(l.image, 220, 413);
     y = 600; // no notes
   } else if (special == ControlsPad) {
     bool rear = u.controlsPad == 2;
@@ -1080,8 +1240,20 @@ void View::buildSheet(const UI &u) {
     glow(Right, 238, 274, 74, 64);
     glow(Select, 1550, 644, 84, 40);
     glow(Start, 1648, 644, 84, 40);
-    glow(L, 290, 34, 300, 30);
-    glow(R, 1510, 34, 300, 30);
+    // The shoulders light their own shape, cut out of the drawing.
+    for (int side = 0; side < 2; ++side)
+      if (held(side ? R : L)) {
+        int gx, gy;
+        const Image &g = shoulder(side, gx, gy);
+        if (!g.empty()) {
+          const double f = 640.0 / vita.width;
+          Quad q;
+          q.image = &g;
+          q.x = float(ox + gx * f), q.y = float(oy + gy * f), q.w = float(g.width * f), q.h = float(g.height * f);
+          q.alpha = 0.85f;
+          scene.push_back(q);
+        }
+      }
     // Sticks: a dot that follows each stick, ruby once it leaves the centre.
     auto stick = [&](double x, double y, int vx, int vy) {
       auto p = at(x + (vx - 128) / 128.0 * 34, y + (vy - 128) / 128.0 * 34);
@@ -1152,7 +1324,7 @@ void View::buildSheet(const UI &u) {
         paragraphs.clear();
         int h = -gap;
         for (auto &n : notes) {
-          paragraphs.push_back(wrap(n, size, sheetW));
+          paragraphs.push_back(wrap(n, size, G.w));
           h += int(paragraphs.back().size()) * lineH + gap;
         }
         return std::max(1, h);
@@ -1162,7 +1334,7 @@ void View::buildSheet(const UI &u) {
         size = 13, lineH = 17, gap = 6;
         h = layout();
       }
-      beginLayer(notesLayer, key, sheetW, h);
+      beginLayer(notesLayer, key, G.w, h);
       int ly = 0;
       for (auto &p : paragraphs) {
         for (auto &line : p) {
@@ -1175,7 +1347,7 @@ void View::buildSheet(const UI &u) {
     }
     // Notes never run into the hint bar: they move up if they must.
     int top = std::min(y + 2, hintsY - 6 - notesLayer.image.height);
-    place(notesLayer.image, sheetX, std::max(sheetTop, top));
+    place(notesLayer.image, G.x, std::max(G.top, top));
   }
 
   // The bottom band, hints, and messages.

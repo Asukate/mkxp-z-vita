@@ -580,7 +580,7 @@ RB_METHOD(inputVitaControls) {
     rb_ary_push(out,rb_bool_new(p.enabled));
     rb_ary_push(out,INT2FIX(p.front));
     rb_ary_push(out,INT2FIX(p.rear));
-    rb_ary_push(out,rb_bool_new(p.rightPointer || p.rear==2 || p.front==2));
+    rb_ary_push(out,rb_bool_new(p.rightStick==hardrpg::RightStickPointer || p.rear==2 || p.front==2));
     rb_ary_push(out,rb_utf8_str_new_cstr(hardrpg::controlName(p.frontLeft).c_str()));
     rb_ary_push(out,rb_utf8_str_new_cstr(hardrpg::controlName(p.frontRight).c_str()));
     rb_ary_push(out,rb_bool_new(p.tapToWalk));

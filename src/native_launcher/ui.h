@@ -306,6 +306,11 @@ public:
   int controlPickKey = 0;
   // Showing the touch, stick and pointer list instead of the buttons.
   bool controlsAdvanced = false;
+  // The controls row the sticks page goes back to: Sticks and pointer (16)
+  // or the right stick on the drawing (19).
+  int controlsReturnRow = 16;
+  static constexpr int controlsMapRows = 20;
+  std::string rightStickName() const;
   // Showing a touch surface's page (1 front screen, 2 rear pad): its mode
   // and a diagram of the zones that mode reads, each mappable.
   int controlsPad = 0;
@@ -392,7 +397,8 @@ public:
   // the drawing opens the screen's touch zones; the other rows are pills
   // along the bottom. Rows keep their numbers (0 custom controls, 1-12 the
   // buttons in controlSources order, 13 tap to walk, 14 front screen, 15
-  // rear pad, 16 sticks, 17 test, 18 reset); only where they are changes.
+  // rear pad, 16 sticks, 17 test, 18 reset, 19 right stick); only where
+  // they are changes.
   bool controlsMap() const {
     return page == Page::Controls && !controlsAdvanced && !controlsPad && !controlPicking && !controlsTesting;
   }

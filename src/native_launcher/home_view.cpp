@@ -341,6 +341,7 @@ const ButtonToken buttonTokens[] = {
     {"triangle", "btn-triangle-26", nullptr}, {"start", nullptr, "START"},     {"select", nullptr, "SELECT"},
     {"l", nullptr, "L"},                  {"r", nullptr, "R"},                  {"up", nullptr, "\xe2\x86\x91"},
     {"down", nullptr, "\xe2\x86\x93"},   {"left", nullptr, "\xe2\x86\x90"},   {"right", nullptr, "\xe2\x86\x92"},
+    {"rs", nullptr, "RS"},
 };
 // The token starting at s[i], or null; len is its length with the brackets.
 const ButtonToken *buttonToken(const std::string &s, size_t i, size_t &len) {

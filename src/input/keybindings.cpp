@@ -156,6 +156,14 @@ BDescVec genDefaultBindings(const Config &conf)
 	addAxisBinding(d, SDL_CONTROLLER_AXIS_LEFTX, Positive, Input::Right);
 	addAxisBinding(d, SDL_CONTROLLER_AXIS_LEFTY, Negative, Input::Up   );
 	addAxisBinding(d, SDL_CONTROLLER_AXIS_LEFTY, Positive, Input::Down );
+#ifdef __vita__
+	/* The right stick mirrors the left one, as it does in custom controls
+	 * until it is given other mappings. */
+	addAxisBinding(d, SDL_CONTROLLER_AXIS_RIGHTX, Negative, Input::Left );
+	addAxisBinding(d, SDL_CONTROLLER_AXIS_RIGHTX, Positive, Input::Right);
+	addAxisBinding(d, SDL_CONTROLLER_AXIS_RIGHTY, Negative, Input::Up   );
+	addAxisBinding(d, SDL_CONTROLLER_AXIS_RIGHTY, Positive, Input::Down );
+#endif
 
 	return d;
 }

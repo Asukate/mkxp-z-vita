@@ -171,13 +171,16 @@ inline int controlPickIndex(int value) {
       return i;
   return -1;
 }
-// Where an entry sits on the picker, in launcher pixels.
+// Where an entry sits on the picker, in launcher pixels: the whole 16:9
+// width (15 key units of 61 px) and every row from under the title to the
+// hint bar, so keys are big enough to read and to hit with a thumb.
+constexpr int controlPickX = 22, controlPickUnit = 61, controlPickTop = 126, controlPickPitch = 40, controlPickH = 36;
 inline void controlPickRect(int index, int &x, int &y, int &w, int &h) {
   const ControlPick &k = controlPicks[index];
-  x = 194 + int(k.x * 47);
-  y = 146 + k.row * 34 + (k.row ? 8 : 0);
-  w = int(k.w * 47) - 3;
-  h = 31;
+  x = controlPickX + int(k.x * controlPickUnit + 0.5f);
+  y = controlPickTop + k.row * controlPickPitch + (k.row ? 8 : 0);
+  w = int(k.w * controlPickUnit + 0.5f) - 4;
+  h = controlPickH;
 }
 inline std::string controlName(int code) {
   if (controlIsKey(code)) {
@@ -238,8 +241,19 @@ inline unsigned touchZones(bool rear, int mode) {
   return 0;
 }
 static const int frontModes = 7, rearModes = 6;
+// What the right stick does: its four directions as mappings (by default
+// the left stick's moves, so it mirrors it), the mouse pointer, or nothing.
+enum RightStickMode { RightStickMapped = 0, RightStickPointer = 1, RightStickOff = 2 };
+static const int rightStickModes = 3;
 struct ControlProfile {
-  bool enabled = false, toggleRun = false, rightPointer = false;
+  bool enabled = false, toggleRun = false;
+  int rightStick = RightStickMapped;
+  // Right stick up, down, left, right while rightStick is RightStickMapped.
+  std::array<int, 4> rightDirs{{8, 2, 4, 6}};
+  bool rightMirrors() const {
+    return rightStick == RightStickMapped && rightDirs[0] == 8 && rightDirs[1] == 2 && rightDirs[2] == 4 &&
+           rightDirs[3] == 6;
+  }
   // Walk to where the front screen is tapped. Works with or without the
   // custom mappings above; see launcher/vita_tap_to_walk.rb.
   bool tapToWalk = false;
@@ -265,7 +279,13 @@ struct ControlProfile {
     o["enabled"] = enabled;
     o["toggleRun"] = toggleRun;
     o["tapToWalk"] = tapToWalk;
-    o["rightPointer"] = rightPointer;
+    o["rightStick"] = rightStick;
+    // Builds before 0.5.4 read only this.
+    o["rightPointer"] = rightStick == RightStickPointer;
+    J dirs(std::initializer_list<J>{});
+    for (int d : rightDirs)
+      dirs.as_array().push_back(d);
+    o["rightDirs"] = dirs;
     o["deadzone"] = deadzone;
     o["front"] = front;
     o["rear"] = rear;
@@ -308,7 +328,11 @@ struct ControlProfile {
     flag("enabled", p.enabled);
     flag("toggleRun", p.toggleRun);
     flag("tapToWalk", p.tapToWalk);
-    flag("rightPointer", p.rightPointer);
+    bool rightPointer = false;
+    flag("rightPointer", rightPointer);
+    if (rightPointer)
+      p.rightStick = RightStickPointer;
+    number("rightStick", p.rightStick, 0, rightStickModes - 1);
     number("deadzone", p.deadzone, 8, 80);
     number("front", p.front, 0, frontModes - 1);
     number("rear", p.rear, 0, rearModes - 1);
@@ -321,6 +345,19 @@ struct ControlProfile {
     number("rearBottomRight", p.rearBottomRight, 0, controlKeyBase + 255);
     number("frontBottomLeft", p.frontBottomLeft, 0, controlKeyBase + 255);
     number("frontBottomRight", p.frontBottomRight, 0, controlKeyBase + 255);
+    auto d = o.find("rightDirs");
+    if (d != o.end()) {
+      auto &a = d->second.as_array();
+      if (a.size() != 4)
+        throw std::runtime_error("Expected 4 right stick mappings");
+      for (size_t n = 0; n < 4; ++n) {
+        auto code = a[n].as_integer();
+        if (code < 0 || code > controlKeyBase + 255)
+          throw std::runtime_error("Invalid control action");
+        p.rightDirs[n] = int(code);
+        action(p.rightDirs[n]);
+      }
+    }
     auto i = o.find("buttons");
     if (i != o.end()) {
       auto &a = i->second.as_array();
@@ -455,7 +492,7 @@ public:
         }
     bool neutral = !s.buttons && !touchActive && !axis(s.lx, p.deadzone) &&
                    !axis(s.ly, p.deadzone) &&
-                   (!p.rightPointer ||
+                   (p.rightStick == RightStickOff ||
                     (!axis(s.rx, p.deadzone) && !axis(s.ry, p.deadzone)));
     if (!armed) {
       rearKnown.clear();
@@ -466,7 +503,7 @@ public:
       previous = s.buttons;
       return finish();
     }
-    out.pointer = p.front == 2 || p.rear == 2 || p.rightPointer;
+    out.pointer = p.front == 2 || p.rear == 2 || p.rightStick == RightStickPointer;
     auto press = [&](int action) {
       if (action > 0 && action < 44)
         out.actions[action] = true;
@@ -491,6 +528,17 @@ public:
       press(8);
     if (ly > 0)
       press(2);
+    if (p.rightStick == RightStickMapped) {
+      float rx = axis(s.rx, p.deadzone), ry = axis(s.ry, p.deadzone);
+      if (ry < 0)
+        press(p.rightDirs[0]);
+      if (ry > 0)
+        press(p.rightDirs[1]);
+      if (rx < 0)
+        press(p.rightDirs[2]);
+      if (rx > 0)
+        press(p.rightDirs[3]);
+    }
     // The standard run key exposes both RGSS A and SHIFT.
     if (out.actions[11])
       press(21);
@@ -587,7 +635,7 @@ public:
         rearId = -1;
       out.pointer = true;
     }
-    if (p.rightPointer) {
+    if (p.rightStick == RightStickPointer) {
       px += axis(s.rx, p.deadzone) * dt * p.speed * 0.2f;
       py += axis(s.ry, p.deadzone) * dt * p.speed * 0.2f;
       out.pointer = true;

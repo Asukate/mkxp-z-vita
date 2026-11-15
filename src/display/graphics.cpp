@@ -2079,6 +2079,9 @@ struct GraphicsPrivate {
         if (gameKeyboard.visible() && !gameMenu.isOpen())
             gameMenuLayer.prepareGlass(screen.getPP().frontBuffer().tex.gl,
                                        IntRect(scOffset.x, scOffset.y, scSize.x, scSize.y));
+        else if (gameMenu.isOpen() && gameMenuView)
+            gameMenuLayer.prepareMenuGlass(screen.getPP().frontBuffer().tex.gl,
+                                           IntRect(scOffset.x, scOffset.y, scSize.x, scSize.y));
 #endif
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("REDRAW_SCREEN_COMPOSITE_RETURN");

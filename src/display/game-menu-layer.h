@@ -48,6 +48,10 @@ class GameMenuLayer {
     GLint glassRect = -1, glassUv = -1, glassShape = -1, glassImage = -1;
     bool glassFailed = false, glassFresh = false;
     TEXFBO glassHalf, glassQuarter;
+    // The same blur behind the menu, over the whole screen: the paused game
+    // stays recognisable but its own text no longer fights the menu's.
+    TEXFBO menuHalf, menuQuarter;
+    bool menuGlassMade = false, menuGlassFailed = false, menuGlassFresh = false;
     hardrpg::Image buttons;
     int buttonsFor = -1;
     bool buttonsKeyboard = false, buttonsMenu = false;
@@ -243,7 +247,18 @@ public:
     void draw(const hardrpg::View &view, int winW, int winH) {
         if (!begin(winW, winH))
             return;
-        quad(0, 0, 960, 544, 0.03f, 0.03f, 0.04f, 0.64f, 0, nullptr);
+        if (menuGlassFresh && glassProgram) {
+            // The blurred game replaces the sharp one, then a lighter dim:
+            // blur already keeps it from competing with the menu.
+            glState.program.set(glassProgram);
+            glUniform1i(glassImage, 0);
+            glBindTexture(GL_TEXTURE_2D, menuQuarter.tex.gl);
+            glassQuad(0, 0, 960, 544, 0, 0, 1, 1, 0);
+            glState.program.set(program);
+            quad(0, 0, 960, 544, 0.03f, 0.03f, 0.04f, 0.5f, 0, nullptr);
+        } else
+            quad(0, 0, 960, 544, 0.03f, 0.03f, 0.04f, 0.64f, 0, nullptr);
+        menuGlassFresh = false;
         bool clipping = false;
         for (auto &q : view.scene) {
             if (q.w <= 0 || q.h <= 0 || q.alpha <= 0.002f || (q.image && q.image->empty()))
@@ -362,6 +377,62 @@ public:
         glState.scissorTest.pop();
         FBO::bind(FBO::ID(0));
         glassFresh = true;
+    }
+
+    // Before the game is drawn to the screen while the menu is open: the
+    // whole frame at a quarter size, stretched back when the menu is drawn.
+    void prepareMenuGlass(GLuint game, const IntRect &gameRect) {
+        if (!ready() || !glassReady() || menuGlassFailed)
+            return;
+        if (!menuGlassMade) {
+            try {
+                for (TEXFBO *t : {&menuHalf, &menuQuarter}) {
+                    const int div = t == &menuHalf ? 2 : 4;
+                    TEXFBO::init(*t);
+                    TEXFBO::allocEmpty(*t, 960 / div, 544 / div);
+                    TEXFBO::linkFBO(*t);
+                    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                }
+            } catch (const Exception &) {
+                menuGlassFailed = true;
+                FBO::bind(FBO::ID(0));
+                return;
+            }
+            menuGlassMade = true;
+        }
+        glState.scissorTest.pushSet(false);
+        glState.blend.pushSet(false);
+        glState.program.set(glassProgram);
+        glUniform1i(glassImage, 0);
+        gl.ActiveTexture(GL_TEXTURE0);
+        glBindBuffer(GL_ARRAY_BUFFER, unitSquare);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(GLfloat), nullptr);
+        // As prepareGlass, with the whole screen as the area.
+        FBO::bind(menuHalf.fbo);
+        glState.viewport.pushSet(IntRect(0, 0, menuHalf.width, menuHalf.height));
+        glState.clearColor.pushSet(Vec4(0, 0, 0, 1));
+        FBO::clear();
+        glState.clearColor.pop();
+        glBindTexture(GL_TEXTURE_2D, game);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glassQuad(gameRect.x, 544 - gameRect.y - gameRect.h, gameRect.w, gameRect.h, 0, 1, 1, 0, 0);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glState.viewport.pop();
+        FBO::bind(menuQuarter.fbo);
+        glState.viewport.pushSet(IntRect(0, 0, menuQuarter.width, menuQuarter.height));
+        glBindTexture(GL_TEXTURE_2D, menuHalf.tex.gl);
+        glassQuad(0, 0, 960, 544, 0, 1, 1, 0, 0);
+        glState.viewport.pop();
+        glDisableVertexAttribArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glState.blend.pop();
+        glState.scissorTest.pop();
+        FBO::bind(FBO::ID(0));
+        menuGlassFresh = true;
     }
 
     // The keyboard over the game: glass, keys, the held key lit (fading

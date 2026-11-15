@@ -452,10 +452,13 @@ void UI::sheetTouch(int x, int y) {
     return;
   }
   // The row under the finger, or -1.
+  const auto G = sheetGeom(inGame);
   auto rowAt = [&](int rowH, int visible) {
-    if (x < sheetX || x >= sheetX + sheetW || y < sheetTop)
+    if (x < G.x || x >= G.x + G.w || y < G.top)
       return -1;
-    int r = (y - sheetTop) / rowH;
+    if (rowH == sheetRowH)
+      rowH = G.rowH;
+    int r = (y - G.top) / rowH;
     return r < visible ? r : -1;
   };
   // A first tap moves the focus to a row; tapping the focused row opens it.
@@ -468,7 +471,7 @@ void UI::sheetTouch(int x, int y) {
       action(Button::Cross);
   };
   if (controlsMap()) {
-    for (int row = 0; row <= 18; ++row) {
+    for (int row = 0; row < controlsMapRows; ++row) {
       int rx, ry, rw, rh;
       if (controlsRect(row, rx, ry, rw, rh) && inside(x, y, rx, ry, rw, rh)) {
         bool again = setting == row;
@@ -511,6 +514,17 @@ void UI::sheetTouch(int x, int y) {
   }
   if (!errorReport.empty() || !releaseReport.empty() || focus == Focus::About)
     return;
+  if (gameOptions && inGame && page == Page::Game) {
+    // The menu over a game: its taller rows.
+    for (int i = 0; i < optionRows(); ++i) {
+      int tx = G.x, ty = G.top + i * inGameMenuRowH, tw = G.w, th = inGameMenuRowH - 6;
+      if (inside(x, y, tx, ty, tw, th)) {
+        pickRow(setting, i, optionRows());
+        return;
+      }
+    }
+    return;
+  }
   bool rtp = page == Page::Rtp;
   int r = rowAt(rtp ? rtpRowH : sheetRowH, rtp ? rtpPackCount : sheetRows);
   if (r < 0)
@@ -728,7 +742,7 @@ void UI::gameAction(Button b) {
     return;
   }
   if (page == Page::Controls && (controlsAdvanced || controlsPad) && b == Button::Circle) {
-    setting = controlsPad ? 13 + controlsPad : 16;
+    setting = controlsPad ? 13 + controlsPad : controlsReturnRow;
     controlsAdvanced = false;
     controlsPad = 0;
     settingFirst = std::max(0, setting - 6);
@@ -846,6 +860,14 @@ void UI::gameAction(Button b) {
     answerRescue();
     return;
   }
+  if (page == Page::Controls && controlsAdvanced && b == Button::Square && setting <= 4) {
+    controls.rightStick = RightStickMapped;
+    controls.rightDirs = ControlProfile().rightDirs;
+    model.saveControls(controlsEntry, controls);
+    inGameChanged = true;
+    message = tr("The right stick mirrors the left stick again.");
+    return;
+  }
   if (page == Page::Controls && b == Button::Cross && controlTarget(setting)) {
     openControlPicker();
     return;
@@ -886,11 +908,15 @@ namespace {
 // Buttons on the drawing (Tokyoship's illustration, 1800 px wide), in
 // controlSources order: Cross, Circle, Square, Triangle, Select, Start, Up,
 // Down, Left, Right, L, R.
+// L and R point at the middle of the shoulder buttons' grey wedges.
 const int mapButtons[12][2] = {{1627, 350}, {1707, 273}, {1547, 273}, {1627, 197}, {1550, 644}, {1648, 644},
-                               {171, 208},  {171, 342},  {104, 274},  {238, 274},  {440, 34},   {1660, 34}};
-// Label columns, top to bottom, as button indexes.
+                               {171, 208},  {171, 342},  {104, 274},  {238, 274},  {230, 51},   {1567, 51}};
+// The right stick (row 19).
+const int mapRightStick[2] = {1580, 487};
+// Label columns, top to bottom, as button indexes (12: the right stick),
+// in the order the buttons sit on the console.
 const int mapLeft[] = {10, 6, 8, 9, 7};
-const int mapRight[] = {11, 3, 1, 2, 0, 4, 5};
+const int mapRight[] = {11, 3, 1, 2, 0, 12, 4, 5};
 const int mapPills[] = {0, 13, 15, 16, 17, 18};
 } // namespace
 bool UI::controlsRect(int row, int &x, int &y, int &w, int &h) {
@@ -905,27 +931,28 @@ bool UI::controlsRect(int row, int &x, int &y, int &w, int &h) {
       x = 16 + i * 156, y = 440, w = 150, h = 46;
       return true;
     }
-  if (row < 1 || row > 12)
+  if ((row < 1 || row > 12) && row != 19)
     return false;
-  int button = row - 1;
+  int button = row == 19 ? 12 : row - 1;
   for (int i = 0; i < 5; ++i)
     if (mapLeft[i] == button) {
-      x = 16, y = 150 + i * 52, w = 190, h = 36;
+      x = 16, y = 130 + i * 52, w = 190, h = 36;
       return true;
     }
-  for (int i = 0; i < 7; ++i)
+  for (int i = 0; i < 8; ++i)
     if (mapRight[i] == button) {
-      x = 754, y = 150 + i * 41, w = 190, h = 36;
+      x = 754, y = 128 + i * 39, w = 190, h = 36;
       return true;
     }
   return false;
 }
 bool UI::controlsAnchor(int row, int &x, int &y) {
-  if (row < 1 || row > 12)
+  if ((row < 1 || row > 12) && row != 19)
     return false;
   const double k = mapArtW / 1800.0;
-  x = mapArtX + int(mapButtons[row - 1][0] * k + .5);
-  y = mapArtY + int(mapButtons[row - 1][1] * k + .5);
+  const int *at = row == 19 ? mapRightStick : mapButtons[row - 1];
+  x = mapArtX + int(at[0] * k + .5);
+  y = mapArtY + int(at[1] * k + .5);
   return true;
 }
 int UI::controlsNeighbor(int row, Button b) {
@@ -936,7 +963,7 @@ int UI::controlsNeighbor(int row, Button b) {
   bool vertical = b == Button::Up || b == Button::Down;
   int best = row;
   double bestScore = 1e18;
-  for (int other = 0; other <= 18; ++other) {
+  for (int other = 0; other < controlsMapRows; ++other) {
     int ox, oy, ow, oh;
     if (other == row || !controlsRect(other, ox, oy, ow, oh))
       continue;
@@ -968,7 +995,7 @@ int UI::controlsCount() const {
       rows += mask & 1;
     return rows;
   }
-  return controlsAdvanced ? 4 : 19;
+  return controlsAdvanced ? 8 : controlsMapRows;
 }
 int *UI::controlTarget(int row) {
   if (controlsPad) {
@@ -977,7 +1004,7 @@ int *UI::controlTarget(int row) {
   }
   if (!controlsAdvanced)
     return row >= 1 && row <= 12 ? &controls.buttons[row - 1] : nullptr;
-  return nullptr;
+  return row >= 1 && row <= 4 ? &controls.rightDirs[row - 1] : nullptr;
 }
 // The picker offers the RPG Maker actions and a keyboard, starting on what
 // the input does now.
@@ -992,6 +1019,8 @@ void UI::assignControl(int value) {
     *target = value;
     // Choosing a mapping is asking for custom controls.
     controls.enabled = true;
+    if (controlsAdvanced)
+      controls.rightStick = RightStickMapped;
     model.saveControls(controlsEntry, controls);
     inGameChanged = true;
     message = trf(inGame ? "{} now does {}. Custom controls are on and apply now."
@@ -1050,6 +1079,12 @@ std::string UI::zoneName(int row) const {
             : controlsPad == 1 && controls.front == 3 ? "Button"
             : controlsPad == 2 ? "Whole pad" : "Whole screen");
 }
+std::string UI::rightStickName() const {
+  return tr(controls.rightStick == RightStickPointer ? "Mouse pointer"
+            : controls.rightStick == RightStickOff   ? "Off"
+            : controls.rightMirrors()                ? "Same as left stick"
+                                                     : "Mapped directions");
+}
 std::string UI::controlLabel(int row) const {
   if (controlsPad) {
     if (row == 0)
@@ -1063,11 +1098,12 @@ std::string UI::controlLabel(int row) const {
               : row == 14 ? "Front touch screen"
               : row == 15 ? "Rear touch pad"
               : row == 16 ? "Sticks and pointer"
-              : row == 17 ? "Test inputs" : "Reset everything");
+              : row == 17 ? "Test inputs" : row == 19 ? "<rs> Right stick" : "Reset everything");
   }
-  const char *labels[] = {"Stick deadzone", "Right stick moves pointer",
-                          "Pointer speed", "<square> Square toggles its action"};
-  return row >= 0 && row < 4 ? tr(labels[row]) : "";
+  const char *labels[] = {"Right stick",    "Right stick up", "Right stick down",
+                          "Right stick left", "Right stick right", "Stick deadzone",
+                          "Pointer speed",  "<square> Square toggles its action"};
+  return row >= 0 && row < 8 ? tr(labels[row]) : "";
 }
 std::string UI::controlValue(int row) const {
   if (controlsPad) {
@@ -1083,14 +1119,19 @@ std::string UI::controlValue(int row) const {
               : row == 13 ? (controls.tapToWalk ? "On (tap the map to walk there)" : "Off")
               : row == 14 ? frontModeNames[controls.front]
               : row == 15 ? rearModeNames[controls.rear]
-              : row == 16 || row == 17 ? "Open" : "Back to defaults, off");
+              : row == 16 || row == 17 ? "Open" : row == 19 ? rightStickName() : "Back to defaults, off");
   }
   switch (row) {
   case 0:
-    return std::to_string(controls.deadzone);
+    return rightStickName();
   case 1:
-    return tr(controls.rightPointer ? "On" : "Off");
   case 2:
+  case 3:
+  case 4:
+    return controls.rightStick == RightStickMapped ? controlText(controls.rightDirs[row - 1]) : tr("Not used");
+  case 5:
+    return std::to_string(controls.deadzone);
+  case 6:
     return std::to_string(controls.speed);
   default:
     return tr(controls.toggleRun ? "On" : "Off");
@@ -1113,11 +1154,18 @@ void UI::changeControl(int step) {
       message = tr("Tap to walk turned off: the screen is touch zones now.");
     }
   } else if (!controlsAdvanced) {
-    if (setting >= 14 && setting <= 16) {
-      if (setting == 16)
+    if ((setting >= 14 && setting <= 16) || setting == 19) {
+      if (setting == 16 || setting == 19) {
         controlsAdvanced = true;
-      else
-        controlsPad = setting - 13;
+        controlsReturnRow = setting;
+        // The sticks page opens on the right stick, or on the stick
+        // tuning when it came from Sticks and pointer.
+        setting = setting == 19 ? 0 : 5;
+        settingFirst = std::max(0, setting - 6);
+        message.clear();
+        return;
+      }
+      controlsPad = setting - 13;
       setting = settingFirst = 0;
       return;
     }
@@ -1139,12 +1187,15 @@ void UI::changeControl(int step) {
   } else {
     switch (setting) {
     case 0:
+      controls.rightStick = (controls.rightStick + step + rightStickModes) % rightStickModes;
+      // A stick that does something is asking for custom controls.
+      if (controls.rightStick != RightStickOff)
+        controls.enabled = true;
+      break;
+    case 5:
       controls.deadzone = std::max(8, std::min(80, controls.deadzone + step * 4));
       break;
-    case 1:
-      controls.rightPointer = !controls.rightPointer;
-      break;
-    case 2:
+    case 6:
       controls.speed = std::max(1, std::min(10, controls.speed + step));
       break;
     default:

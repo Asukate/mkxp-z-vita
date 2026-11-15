@@ -117,6 +117,12 @@ private:
   std::map<uint64_t, bool> opaqueHeroes; // by Image::id
   bool opaque(const Image *img);
   Image vitaBack; // the console's outline, for the rear pad page
+  // The shoulder buttons of the console drawing (vita-640), cut out of it in
+  // ruby: drawn over L or R, they light the button's own shape. x, y place
+  // each in the drawing's pixels.
+  Image shoulderGlow[2];
+  int shoulderX[2] = {0, 0}, shoulderY[2] = {0, 0};
+  const Image &shoulder(int side, int &x, int &y);
   Layer statsLayer, previewLayer;
   std::list<std::pair<std::string, Image>> keyboardImages; // newest first
   void centredLabel(float cx, float cy, const std::string &text, int size);
