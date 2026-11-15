@@ -213,6 +213,11 @@ void nativeEventsInit(int rgssVersion);
 void essentialsNativesInit(int rgssVersion);
 void hardrpgProfInit();
 void spriteScriptsInit();
+
+/* deps Ruby patch (vm_insnhelper.c): when set, `class A < B` on an existing
+ * A with another superclass makes a new class, as Ruby 1.8.1 did in RPG
+ * Maker XP/VX. Weak so a Ruby without the patch still links. */
+extern "C" int rb_mkxp_rgss18_class_override __attribute__((weak));
 void nativeEventsSectionLoaded(VALUE fname, VALUE source);
 
 RB_METHOD(mkxpDelta);
@@ -326,6 +331,11 @@ static void mriBindingInit() {
         _rb_define_module_function(rb_mKernel, "caller", _kernelCaller);
     }
     
+    /* XP/VX scripts may redefine a stock class with another superclass
+     * (Orc Strike: Window_PartyCommand < Window_SpinCommand, issue 29). */
+    if (&rb_mkxp_rgss18_class_override)
+        rb_mkxp_rgss18_class_override = (rgssVer <= 2);
+
     if (rgssVer == 1)
         rb_eval_string(module_rpg1);
     else if (rgssVer == 2)

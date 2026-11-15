@@ -1117,3 +1117,35 @@ diff --git a/time.c b/time.c
              zone = rb_fstring(zone);
              rb_gc_register_mark_object(zone);
              now_zone = zone;
+diff --git a/vm_insnhelper.c b/vm_insnhelper.c
+--- a/vm_insnhelper.c
++++ b/vm_insnhelper.c
+@@ -4470,6 +4470,14 @@
+     }
+ }
+ 
++/* mkxp-z keeps reopening a class whose superclass does not match (the
++ * check below is off). RPG Maker XP and VX ran Ruby 1.8.1, which instead
++ * made a new class with the new superclass and put it under the old name,
++ * dropping the old one. Some XP/VX scripts depend on that, for example
++ * Window_PartyCommand < Window_SpinCommand replacing the stock
++ * Window_PartyCommand < Window_Command. mkxp-z sets this for RGSS1/2. */
++int rb_mkxp_rgss18_class_override = 0;
++
+ static VALUE
+ vm_check_if_class(ID id, rb_num_t flags, VALUE super, VALUE klass)
+ {
+@@ -4564,6 +4572,13 @@
+     if ((klass = vm_const_get_under(id, flags, cbase)) != 0) {
+         if (!vm_check_if_class(id, flags, super, klass))
+             unmatched_redefinition("class", cbase, id, klass);
++        if (rb_mkxp_rgss18_class_override &&
++            VM_DEFINECLASS_HAS_SUPERCLASS_P(flags) &&
++            rb_class_real(RCLASS_SUPER(klass)) != super) {
++            if (rb_const_defined_at(cbase, id))
++                rb_const_remove(cbase, id);
++            return vm_declare_class(id, flags, cbase, super);
++        }
+         return klass;
+     }
+     else {
