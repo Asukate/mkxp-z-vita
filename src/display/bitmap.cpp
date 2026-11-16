@@ -3349,6 +3349,27 @@ void Bitmap::stretchBlt(IntRect destRect,
         }
     }
 
+#ifdef __vita__
+    /* A large blit from a dithered 16-bit image with no pixels in memory:
+     * reading them (decoding the file again, or reading texture memory) costs
+     * ~70 ms for a 768x496 sheet, a GPU draw almost nothing. The bitmap moves
+     * to the GPU, where it goes anyway once a sprite shows it. LonaRPG builds
+     * each character sheet from several such parts: 21 s before its title. */
+    if (p->cpu && source.p != p && source.p->gl.fmt16 && !source.p->cpu && !source.p->surface &&
+        !source.megaSurface() && !source.isAnimated() && !source.hasHires() &&
+        (int64_t)sourceRect.w * sourceRect.h >= 256 * 256)
+    {
+        try
+        {
+            cpuPromote(p);
+        }
+        catch (const Exception &)
+        {
+            /* No texture for it now: the CPU blit below. */
+        }
+    }
+#endif
+
     if (p->cpu)
     {
         SDL_Surface *pixels = 0;
