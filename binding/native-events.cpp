@@ -188,7 +188,8 @@ enum SlotId {
     S_H_GM_ue_galv, S_H_SM_uc_galv, S_H_GCB_sz_dmo, S_IN_update_hime, S_IN_update_zale,
     /* LonaRPG: CHS events, its keyboard Input.update; Game_Interpreter#running?; RPG page attributes */
     S_GE_cpc, S_GE_use_chs, S_GE_sex_mode, S_GE_character_index_lona, S_IN_update_lona, S_GI_running,
-    S_PAGE_graphic, S_GRAPHIC_character_name, S_STR_include,
+    S_PAGE_graphic, S_GRAPHIC_character_name, S_STR_include, S_SC_need_update, S_SC_update_tone, S_GE_deleted,
+    S_GCB_screen_y_common, S_GCB_screen_y_sample, S_TONE_eq,
     /* Victor Engine Character Control: its attributes, resting_pose (checked) and wrapper aliases */
     S_GCB_pose_sufix, S_GCB_idle_stance, S_GCB_resting_pose, S_H_GCB_uac_vic, S_H_GCB_uap_vic,
     S_H_GCB_us_vic, S_H_SC_gc_vic,
@@ -582,7 +583,10 @@ static ID id_update_symbol_reaction, id_update_symbol_movement, id_zero, id_trun
     id_th_update, id_Keys, id_AKEY, id_zale_update, iv_r_events, iv_region_sprites, iv_dmo_screen_z,
     iv_state, iv_any_key_pressed, iv_pressed, iv_triggers, iv_released, iv_timer, iv_pose_speed,
     iv_playing_pose, iv_pose_loop, iv_pose_sufix, id_change_pose, iv_page, iv_chs_configuration, iv_fiber,
-    iv_triggered, iv_repeated, id_include;
+    iv_triggered, iv_repeated, id_include, iv_sx, iv_sy, iv_last_tone, iv_deleted, id_tone, id_chs_need_update,
+    id_get_chs_sex_pose, id_chs_type, id_forced_x, id_forced_y, id_sex_cell_y_adjust, id_cell_y_adjust,
+    gv_chs_data;
+static VALUE g_toneClass = Qnil;
 static VALUE g_str_sex_pos = Qnil, g_str_char = Qnil;
 static ID gv_game_map, gv_data_animations, gv_game_variables, gv_game_system, gv_game_temp,
     gv_data_common_events, gv_game_switches;
@@ -818,13 +822,15 @@ static bool adjustPure(bool horiz) {
     Slot &d = g_slots[horiz ? S_GM_display_x : S_GM_display_y];
     return slotOk(d, mk) && d.kind == SK_NATIVE && d.native == (horiz ? gm_display_x_jitter : gm_display_y_jitter);
 }
+static VALUE gcb_screen_x(VALUE self, int, const VALUE *, bool);
+static VALUE gcb_screen_y(VALUE self, int, const VALUE *, bool);
 /* c.screen_x / c.screen_y as a VALUE-free number when they are the defaults. */
 static bool screenCall(VALUE c, bool horiz, Num &out, VALUE &boxed, bool *pure = nullptr) {
     Slot &s = g_slots[horiz ? S_GCB_screen_x : S_GCB_screen_y];
     boxed = Qundef;
     if (pure)
         *pure = false;
-    if (slotOk(s, rb_class_of(c)) && s.kind == SK_NATIVE) {
+    if (slotOk(s, rb_class_of(c)) && s.kind == SK_NATIVE && s.native == (horiz ? gcb_screen_x : gcb_screen_y)) {
         s.direct++;
         if (horiz ? screenXCore(c, out) : screenYCore(c, out)) {
             /* Only default code ran (adjust, shift_y and jump_height read state, change none). */
@@ -1957,6 +1963,105 @@ static VALUE gi_running(VALUE self, int, const VALUE *, bool) {
     return rb_funcall(f, id_neq, 1, Qnil);
 }
 
+/* Comparable#between? for plain numbers (no NaN); anything else through Ruby. */
+static bool nBetween(VALUE x, VALUE lo, VALUE hi) {
+    if (plain(x) && plain(lo) && plain(hi) && !nanv(x) && !nanv(lo) && !nanv(hi))
+        return !nLt(x, lo) && !nGt(x, hi);
+    return RTEST(rb_funcall(x, id_between, 2, lo, hi));
+}
+/* LonaRPG Sprite_Character#need_update? (its anti-lag check; @sx/@sy set by its update):
+ *   return true if graphic_changed?
+ *   return true if @character.animation_id > 0
+ *   return true if @balloon_sprite
+ *   return true if @character.balloon_id != 0
+ *   w = Graphics.width; h = Graphics.height
+ *   cw = @cw || 32; ch = @ch || 32
+ *   @sx.between?(-cw,w+cw) && @sy.between?(0,h+ch) */
+static VALUE sc_need_update_lona(VALUE self, int, const VALUE *, bool) {
+    if (RTEST(call0(self, S_SC_graphic_changed)))
+        return Qtrue;
+    VALUE c = IV(self, character);
+    if (nGt(call0(c, S_GCB_animation_id), INT2FIX(0)))
+        return Qtrue;
+    if (RTEST(IV(self, balloon_sprite)))
+        return Qtrue;
+    if (nNe(call0(c, S_GCB_balloon_id), INT2FIX(0)))
+        return Qtrue;
+    VALUE w = call0(g_graphics, S_GFX_width), h = call0(g_graphics, S_GFX_height);
+    VALUE cw = IV(self, cw), ch = IV(self, ch);
+    if (!RTEST(cw))
+        cw = INT2FIX(32);
+    if (!RTEST(ch))
+        ch = INT2FIX(32);
+    return rbool(nBetween(IV(self, sx), nNeg(cw), nAdd(w, cw)) && nBetween(IV(self, sy), INT2FIX(0), nAdd(h, ch)));
+}
+/* LonaRPG Sprite_Character#graphic_changed?: the default three checks || @character.chs_need_update */
+static VALUE sc_graphic_changed_lona(VALUE self, int, const VALUE *, bool) {
+    VALUE c = IV(self, character);
+    if (nNe(IV(self, tile_id), call0(c, S_GCB_tile_id)) ||
+        nNe(IV(self, character_name), call0(c, S_GCB_character_name)) ||
+        nNe(IV(self, character_index), call0(c, S_GCB_character_index)))
+        return Qtrue;
+    return rb_funcall(c, id_chs_need_update, 0);
+}
+/* LonaRPG Sprite_Character#update_tone:
+ *   target_tone = @character.tone || Tone.new(0, 0, 0, 0)
+ *   return if @last_tone && @last_tone == target_tone
+ *   self.tone.set(...); @last_tone = target_tone.clone
+ * The usual case (no change) without a new Tone each frame; a change runs the script. */
+static VALUE sc_update_tone_lona(VALUE self, int, const VALUE *, bool) {
+    VALUE t = rb_funcall(IV(self, character), id_tone, 0);
+    VALUE lt = rb_ivar_get(self, iv_last_tone);
+    if (!NIL_P(lt) && rb_class_of(lt) == g_toneClass && slotOk(g_slots[S_TONE_eq], g_toneClass)) {
+        Tone *l = getPrivateDataNoRaise<Tone>(lt);
+        if (l) {
+            if (!RTEST(t)) {
+                if (*l == Tone())
+                    return Qnil;
+            } else if (rb_class_of(t) == g_toneClass) {
+                Tone *n = getPrivateDataNoRaise<Tone>(t);
+                if (n && *l == *n)
+                    return Qnil;
+            }
+        }
+    }
+    return callOrig(self, S_SC_update_tone, 0, nullptr);
+}
+/* LonaRPG Game_Event#deleted?:  @deleted */
+static VALUE ge_deleted_lona(VALUE self, int, const VALUE *, bool) { return rb_ivar_get(self, iv_deleted); }
+/* LonaRPG Game_CharacterBase#screen_x:  $game_map.adjust_x(@real_x) * 32 + 16 + forced_x */
+static VALUE gcb_screen_x_lona(VALUE self, int, const VALUE *, bool) {
+    VALUE ax = call1(gameMap(), S_GM_adjust_x, IV(self, real_x));
+    VALUE v = nAdd(nAdd(nMul(ax, INT2FIX(32)), INT2FIX(16)), rb_funcall(self, id_forced_x, 0));
+    return v;
+}
+/* screen_y_sample:  $game_map.adjust_y(@real_y) * 32 + 32 */
+static VALUE gcb_screen_y_sample_lona(VALUE self, int, const VALUE *, bool) {
+    VALUE ay = call1(gameMap(), S_GM_adjust_y, IV(self, real_y));
+    return nAdd(nMul(ay, INT2FIX(32)), INT2FIX(32));
+}
+/* screen_y_common:  screen_y_sample + forced_y - shift_y - jump_height */
+static VALUE gcb_screen_y_common_lona(VALUE self, int, const VALUE *, bool) {
+    VALUE v = nAdd(call0(self, S_GCB_screen_y_sample), rb_funcall(self, id_forced_y, 0));
+    v = nSub(v, call0(self, S_GCB_shift_y));
+    return nSub(v, call0(self, S_GCB_jump_height));
+}
+/* screen_y:
+ *   return screen_y_common if !use_chs?
+ *   return $chs_data[chs_type].sex_cell_y_adjust[self.get_chs_sex_pose] + screen_y_sample if sex_mode?
+ *   return $chs_data[chs_type].cell_y_adjust + screen_y_common */
+static VALUE gcb_screen_y_lona(VALUE self, int, const VALUE *, bool) {
+    if (!RTEST(call0(self, S_GE_use_chs)))
+        return call0(self, S_GCB_screen_y_common);
+    if (RTEST(call0(self, S_GE_sex_mode))) {
+        VALUE d = rb_funcall(rb_gv_get("$chs_data"), id_aref, 1, rb_funcall(self, id_chs_type, 0));
+        VALUE a = rb_funcall(rb_funcall(d, id_sex_cell_y_adjust, 0), id_aref, 1, rb_funcall(self, id_get_chs_sex_pose, 0));
+        return nAdd(a, call0(self, S_GCB_screen_y_sample));
+    }
+    VALUE d = rb_funcall(rb_gv_get("$chs_data"), id_aref, 1, rb_funcall(self, id_chs_type, 0));
+    return nAdd(rb_funcall(d, id_cell_y_adjust, 0), call0(self, S_GCB_screen_y_common));
+}
+
 /* Zale's Keyboard Manager, Input.update (class << self):
  *   zale_keyman_input_update_CIO223cjcivoa
  *   Keys.each_value{ |key|
@@ -3051,6 +3156,14 @@ static const NativeDef g_natives[] = {
     ND(S_GE_sex_mode, "lona", ge_sex_mode_lona, -1),
     ND(S_GE_character_index_lona, "lona", ge_character_index_lona, -1),
     ND(S_GI_running, "", gi_running, -1),
+    ND(S_SC_need_update, "lona", sc_need_update_lona, -1),
+    ND(S_SC_update_tone, "lona", sc_update_tone_lona, -1),
+    ND(S_SC_graphic_changed, "lona", sc_graphic_changed_lona, -1),
+    ND(S_GE_deleted, "lona", ge_deleted_lona, -1),
+    ND(S_GCB_screen_x, "lona", gcb_screen_x_lona, -1),
+    ND(S_GCB_screen_y, "lona", gcb_screen_y_lona, -1),
+    ND(S_GCB_screen_y_common, "lona", gcb_screen_y_common_lona, -1),
+    ND(S_GCB_screen_y_sample, "lona", gcb_screen_y_sample_lona, -1),
     ND(S_SB_update, "", sb_update, S_SPR_update),
     ND(S_SB_animation, "", sb_animation, -1),
     ND(S_SB_update_animation, "", sb_update_animation, -1),
@@ -3464,6 +3577,10 @@ void nativeEventsInit(int rgssVersion) {
     I(id_zale_update, "zale_keyman_input_update_CIO223cjcivoa"); I(iv_r_events, "@r_events");
     I(iv_region_sprites, "@region_sprites"); I(iv_dmo_screen_z, "@dmo_screen_z"); I(iv_state, "@state"); I(iv_page, "@page"); I(iv_chs_configuration, "@chs_configuration");
     I(iv_fiber, "@fiber"); I(iv_triggered, "@triggered"); I(iv_repeated, "@repeated"); I(id_include, "include?");
+    I(iv_sx, "@sx"); I(iv_sy, "@sy"); I(iv_last_tone, "@last_tone"); I(iv_deleted, "@deleted");
+    I(id_tone, "tone"); I(id_chs_need_update, "chs_need_update"); I(id_get_chs_sex_pose, "get_chs_sex_pose");
+    I(id_chs_type, "chs_type"); I(id_forced_x, "forced_x"); I(id_forced_y, "forced_y");
+    I(id_sex_cell_y_adjust, "sex_cell_y_adjust"); I(id_cell_y_adjust, "cell_y_adjust"); I(gv_chs_data, "$chs_data");
     I(iv_any_key_pressed, "@any_key_pressed"); I(iv_pressed, "@pressed"); I(iv_triggers, "@triggers");
     I(iv_released, "@released"); I(iv_timer, "@timer");
     I(iv_pose_speed, "@pose_speed"); I(iv_playing_pose, "@playing_pose"); I(iv_pose_loop, "@pose_loop");
@@ -3636,6 +3753,12 @@ void nativeEventsInit(int rgssVersion) {
     slotDef(S_PAGE_graphic, "RPG::Event::Page", "graphic");
     slotDef(S_GRAPHIC_character_name, "RPG::Event::Page::Graphic", "character_name");
     slotDef(S_STR_include, "String", "include?");
+    slotDef(S_SC_need_update, "Sprite_Character", "need_update?");
+    slotDef(S_SC_update_tone, "Sprite_Character", "update_tone");
+    slotDef(S_GE_deleted, "Game_Event", "deleted?");
+    slotDef(S_GCB_screen_y_common, "Game_CharacterBase", "screen_y_common");
+    slotDef(S_GCB_screen_y_sample, "Game_CharacterBase", "screen_y_sample");
+    slotDef(S_TONE_eq, "Tone", "==");
     slotDef(S_FFI_call, "MiniFFI", "call");
     slotDef(S_DL_aref, "DL::CPtr", "[]");
     slotDef(S_DL_to_i, "DL::CPtr", "to_i");
@@ -3873,6 +3996,7 @@ static VALUE initRuby(VALUE) {
         engineSlot(id, sprite);
     engineSlot(S_RECT_set, rb_path2class("Rect"));
     g_graphics = rb_path2class("Graphics");
+    g_toneClass = rb_path2class("Tone");
     engineSlot(S_GFX_width, rb_singleton_class(g_graphics));
     engineSlot(S_GFX_height, rb_singleton_class(g_graphics));
     g_slots[S_GFX_width].owner_name = g_slots[S_GFX_height].owner_name = "Graphics.";
@@ -3885,7 +4009,7 @@ static VALUE initRuby(VALUE) {
         {S_ARY_delete_if, rb_cArray}, {S_ARY_each_with_index, rb_cArray}, {S_ENUM_find, rb_cArray},
         {S_HSH_aref, rb_cHash}, {S_HSH_aset, rb_cHash}, {S_HSH_each_value, rb_cHash}, {S_ARY_any, rb_cArray},
         {S_HSH_values, rb_cHash}, {S_ARY_select, rb_cArray}, {S_ARY_collect, rb_cArray}, {S_ARY_plus, rb_cArray},
-        {S_SYM_eqq, rb_cSymbol}, {S_STR_include, rb_cString}};
+        {S_SYM_eqq, rb_cSymbol}, {S_STR_include, rb_cString}, {S_TONE_eq, g_toneClass}};
     for (auto &b : builtins) {
         Slot &s = g_slots[b.id];
         /* The method that class has now (String#!= is BasicObject#!=, which calls ==;
