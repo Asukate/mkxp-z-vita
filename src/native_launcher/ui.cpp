@@ -365,7 +365,7 @@ void UI::scroll(int rows) {
                 : page == Page::Home    ? settingsRows()
                : page == Page::Keys    ? keysRows
                 : page == Page::Sound   ? soundRows
-                : page == Page::Metrics ? 3
+                : page == Page::Metrics ? metricsRows()
                 : page == Page::Display ? 4
                                         : 3;
     setting = std::max(0, std::min(setting + rows, std::max(0, count - 1)));
@@ -541,7 +541,7 @@ void UI::sheetTouch(int x, int y) {
                 : page == Page::Sound   ? soundRows
                 : page == Page::Updates ? 3
                 : page == Page::Display ? 4
-                : page == Page::Metrics ? 3
+                : page == Page::Metrics ? metricsRows()
                 : page == Page::Rtp     ? rtpPackCount
                 : page == Page::Folders ? 1 + int(gameFolders.size())
                                         : int(errors.size());
@@ -766,7 +766,7 @@ void UI::openInGame(const Entry &entry) {
 }
 int UI::optionRows() const {
   return page == Page::Game       ? gameOptionsCount()
-         : page == Page::Metrics  ? 3
+         : page == Page::Metrics  ? metricsRows()
          : page == Page::Rtp      ? rtpPackCount
          : page == Page::GameInfo ? 0
          : page == Page::Remove   ? 2
@@ -1860,14 +1860,25 @@ void UI::answerRescue() {
     model.recordLaunch(entryKey(gameMenuSource));
   startGame(chosen);
 }
+void UI::setLaunchExecutable(const Json &request) {
+  std::string backend;
+  if (request.is_object()) {
+    auto i = request.as_object().find("backend");
+    if (i != request.as_object().end() && i->second.is_string())
+      backend = i->second.as_string();
+  }
+  const char *program = hardrpg::launchExecutable(launchFormat, backend);
+  launchExecutable = program ? program : "";
+}
 void UI::startGame(const Entry &chosen) {
   launchingName = chosen.name;
   if (beginLaunch)
     beginLaunch();
-  model.launch(chosen, [this](uint64_t done, uint64_t total) {
+  auto request = model.launch(chosen, [this](uint64_t done, uint64_t total) {
     progress(done, total);
   }, [this](const std::string &label) { preparation(label); });
   launchFormat = chosen.version;
+  setLaunchExecutable(request);
   launchRequested = true;
 }
 void UI::play(size_t index) {
@@ -1885,11 +1896,12 @@ void UI::play(size_t index) {
     beginLaunch();
   if (e.kind != Kind::Folder) preparation(tr(e.kind == Kind::Zip ? "Reading game archive" : "Reading game folder"));
   if (model.enter(e, chosen)) {
-    model.launch(chosen, [this](uint64_t done, uint64_t total) {
+    auto request = model.launch(chosen, [this](uint64_t done, uint64_t total) {
       progress(done, total);
     }, [this](const std::string &label) { preparation(label); });
     model.recordLaunch(entryKey(e));
     launchFormat = chosen.version;
+    setLaunchExecutable(request);
     launchRequested = true;
   } else {
     // A collection opened: its games start from the first.
@@ -1977,7 +1989,7 @@ void UI::action(Button b) {
              : page == Page::Home    ? settingsRows()
                : page == Page::Keys    ? keysRows
              : page == Page::Sound   ? soundRows
-             : page == Page::Metrics ? 3
+             : page == Page::Metrics ? metricsRows()
              : page == Page::Display ? 4
                                      : 3,
              7, step);

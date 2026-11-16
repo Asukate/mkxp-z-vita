@@ -24,7 +24,9 @@ public:
   // configPath is the game's settings file the engine was started with,
   // ux0:/data/hardrpg/config/<key>.json. False when that game is not the
   // one the launcher started last (then there is nothing to edit).
-  bool open(const std::string &configPath);
+  // gpu false: frame() composes the menu into the view's pixels (960x544,
+  // premultiplied RGBA) for a runtime that does not draw the quads itself.
+  bool open(const std::string &configPath, bool gpu = true);
   // The engine's cheats (see UI::cheat), set before open; empty: no Cheats row.
   std::function<bool(const char *cmd, int row, std::string &reply)> cheat;
   bool isOpen() const;

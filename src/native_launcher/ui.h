@@ -289,6 +289,8 @@ public:
   std::string cheatTitle, cheatSubtitle;
   void openCheats();
   void cheatRequest(const char *cmd, int row);
+  // PC-98 games have no crash rescue (their runtimes keep no quick save).
+  int metricsRows() const { return gameOptions && gameEntry.version == formatPC98 ? 2 : 3; }
   // The menu opened over a running game (L+R+Start or the corner icon): the
   // game's page with Resume, Controls, Display, Audio, Performance and speed
   // and Back to library. Its changes apply at once (see inGameChanged).
@@ -320,6 +322,7 @@ public:
   bool offerRescue(const Entry &chosen, const Entry &source, bool fromHome);
   void answerRescue();
   void startGame(const Entry &chosen);
+  void setLaunchExecutable(const Json &request);
   // Rows on the current page of the game settings.
   int optionRows() const;
   ControlProfile controls;
@@ -456,6 +459,7 @@ public:
   std::vector<std::string> gameFolders;
   std::vector<std::string> rtpStatuses;
   int launchFormat = 0;
+  std::string launchExecutable; // the program LoadExec starts
   bool launchRequested = false, exitRequested = false;
   std::function<void()> progressPump;
   // Returning false cancels without changing the persistent display name.

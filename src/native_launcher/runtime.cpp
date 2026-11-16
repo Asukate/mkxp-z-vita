@@ -1219,15 +1219,15 @@ int runNativeLauncher(bool returning) {
       SDL_Quit();
       char play[] = "--hardrpg-play";
       char *args[] = {play, nullptr};
-      const auto *engine = engineFor(ui.launchFormat);
-      int rc = sceAppMgrLoadExec(engine->executable, args, nullptr);
-      std::fprintf(stderr, "LoadExec failed: %s (%d, 0x%08x)\n",
-                   engine->executable, rc, unsigned(rc));
+      // The request names its program (a PC-98 game may run on OpenDT or NP2kai).
+      const char *program = ui.launchExecutable.c_str();
+      int rc = sceAppMgrLoadExec(program, args, nullptr);
+      std::fprintf(stderr, "LoadExec failed: %s (%d, 0x%08x)\n", program, rc, unsigned(rc));
       std::remove("ux0:/data/hardrpg/selection.json");
       if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_TIMER |
                    SDL_INIT_EVENTS) < 0)
         return 1;
-      ui.launchFailed(rc, engine->executable);
+      ui.launchFailed(rc, program);
 #else
       return 0;
 #endif

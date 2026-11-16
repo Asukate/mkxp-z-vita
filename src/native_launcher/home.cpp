@@ -322,7 +322,7 @@ bool UI::homeActive() const {
 
 std::vector<int> UI::engineTabs() const {
   std::vector<int> tabs{0};
-  for (int f = 1; f <= engineCount; ++f) {
+  for (int f : runnableFormats) {
     if (home.hiddenEngines & (1u << f))
       continue;
     for (auto &e : model.list)

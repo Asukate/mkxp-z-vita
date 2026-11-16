@@ -149,6 +149,8 @@ public:
   // Deletes an unpacked ZIP game's ZIP; the game stays, played from its copy.
   void deleteZip(const Entry &);
   Json launch(const Entry &, Progress = {}, PreparationStatus = {});
+  // Records the started game and writes selection.json for the engine.
+  Json writeSelection(const Entry &, const Json &selection);
   // The game started last (active-game.json), when its settings key is
   // config: the 16 hex digits the engine was given.
   bool activeGame(Entry &, const std::string &config) const;

@@ -153,6 +153,29 @@ def main() -> int:
                 if pathlib.Path(name).name != name:
                     raise ValueError('invalid EasyRPG license path')
                 expected['licenses/easyrpg/'+name] = digest
+        if 'np2kai.self' in names or 'runtime/np2kai-manifest.json' in names:
+            backend = json.loads(vpk.read('runtime/np2kai-manifest.json'))
+            binary = vpk.read('np2kai.self')
+            image = self_payload(binary) if binary else b''
+            if not image or b'HardRPG NP2kai backend' not in image:
+                raise ValueError('PC-98 runtime needs the HardRPG entry point')
+            if hashlib.sha256(binary).hexdigest() != backend.get('sha256'):
+                raise ValueError('PC-98 runtime hash differs')
+            if developer_home_paths(image):
+                raise ValueError('PC-98 runtime contains a developer home path')
+            picker_names |= {'np2kai.self', 'runtime/np2kai-manifest.json', 'licenses/np2kai/NP2kai.txt'}
+        if 'opendt.self' in names or 'runtime/opendt-manifest.json' in names:
+            backend = json.loads(vpk.read('runtime/opendt-manifest.json'))
+            binary = vpk.read('opendt.self')
+            image = self_payload(binary) if binary else b''
+            if not image or b'HardRPG OpenDT backend' not in image:
+                raise ValueError('Dante 98 runtime needs the HardRPG entry point')
+            if hashlib.sha256(binary).hexdigest() != backend.get('sha256'):
+                raise ValueError('Dante 98 runtime hash differs')
+            if developer_home_paths(image):
+                raise ValueError('Dante 98 runtime contains a developer home path')
+            picker_names |= {'opendt.self', 'runtime/opendt-manifest.json',
+                             'licenses/opendt/OpenDT.txt', 'licenses/opendt/ymfm.txt'}
         if metadata.get('ATTRIBUTE2', 0) & 12 != 12:
             raise ValueError('the engine requires ATTRIBUTE2=12 extended memory flags')
         wanted = set(expected) | {"eboot.bin", "sce_sys/param.sfo"} | picker_names

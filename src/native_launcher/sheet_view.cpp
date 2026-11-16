@@ -26,8 +26,8 @@ std::string tail(const std::string &s, size_t limit) {
 }
 const char *engineLong(int version) {
   static const char *names[] = {"Unknown engine", "RPG Maker XP", "RPG Maker VX", "RPG Maker VX Ace", "RPG Maker 2000 / 2003",
-                                "RPG Maker MV", "RPG Maker MZ"};
-  return tr(version >= 0 && version <= formatMZ ? names[version] : names[0]);
+                                "RPG Maker MV", "RPG Maker MZ", "RPG Maker Dante 98"};
+  return tr(version >= 0 && version <= formatLast ? names[version] : names[0]);
 }
 // Upper case, including the accented letters of Latin-1 (á -> Á, ç -> Ç).
 std::string upper(std::string s) {
@@ -306,7 +306,8 @@ void View::buildSheet(const UI &u) {
     const char *modes[] = {"Off", "FPS", "FPS and frame timing", "Full stats"};
     row(Row::Choice, "Overlay in game", modes[mode]);
     row(Row::Toggle, "Fast forward with <l>+<r>", "", boolean("fastForward", true));
-    row(Row::Toggle, "Crash rescue", "", boolean("crashRescue", true));
+    if (u.metricsRows() > 2)
+      row(Row::Toggle, "Crash rescue", "", boolean("crashRescue", true));
     focusRow = u.setting;
     if (u.setting == 2)
       notes = {tr("Keeps a quick copy of the game at map changes and battle starts, where crashes usually happen. "

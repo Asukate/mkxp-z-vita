@@ -129,7 +129,7 @@ void useLauncherLanguage() {
 GameMenu::GameMenu() : impl(new Impl) {}
 GameMenu::~GameMenu() { close(); }
 
-bool GameMenu::open(const std::string &configPath) {
+bool GameMenu::open(const std::string &configPath, bool gpu) {
   close();
   // config/<16 hex digits>.json
   auto slash = configPath.find_last_of('/');
@@ -149,7 +149,7 @@ bool GameMenu::open(const std::string &configPath) {
     ui->openInGame(playing);
     std::unique_ptr<View> view(new View("app0:/font.ttf"));
     view->overlay = true;
-    view->gpu = true; // quads only; the engine draws them
+    view->gpu = gpu; // true: quads only, the engine draws them
     impl->ui = std::move(ui);
     impl->view = std::move(view);
   } catch (const std::exception &e) {

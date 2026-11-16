@@ -71,12 +71,12 @@ std::string lastPlayed(int64_t when) {
 }
 // Short names for the engine tabs, so more engines fit in the toolbar.
 const char *engineTab(int version) {
-  static const char *names[] = {"All", "XP", "VX", "Ace", "2k/2k3", "MV", "MZ"};
-  return version >= 0 && version <= formatMZ ? tr(names[version]) : "?";
+  static const char *names[] = {"All", "XP", "VX", "Ace", "2k/2k3", "MV", "MZ", "Dante 98"};
+  return version >= 0 && version <= formatLast ? tr(names[version]) : "?";
 }
 const char *engineName(int version) {
-  static const char *names[] = {"Collection", "XP", "VX", "VX Ace", "2000/2003", "MV", "MZ"};
-  return tr(version >= 0 && version <= formatMZ ? names[version] : "Game");
+  static const char *names[] = {"Collection", "XP", "VX", "VX Ace", "2000/2003", "MV", "MZ", "Dante 98"};
+  return tr(version >= 0 && version <= formatLast ? names[version] : "Game");
 }
 inline void over(uint8_t *d, int r, int g, int b, int a) {
   // Premultiplied source over a premultiplied destination (opaque or not).
@@ -780,7 +780,8 @@ void View::buildHome(const UI &u) {
         y += 52;
       }
       // Engine, year and studio on one line, then genres.
-      std::string line = std::string("RPG Maker ") + engineName(current->version);
+      std::string line = current->version == formatPC98 ? std::string(engineName(current->version))
+                                                         : std::string("RPG Maker ") + engineName(current->version);
       for (auto *part : {&released, &developer})
         if (!part->empty())
           line += "  \xc2\xb7  " + *part;
@@ -1092,7 +1093,7 @@ void View::buildList(const UI &u, const std::vector<size_t> &list, int target) {
     auto id = u.entryKey(e);
     bool fav = u.favourites.count(id);
     // The engine, small and right-aligned, from five shared layers.
-    int v = e.version >= 0 && e.version <= formatMZ ? e.version : 0;
+    int v = e.version >= 0 && e.version <= formatLast ? e.version : 0;
     Layer &tag = listTagLayers[v];
     // MV and MZ games say they cannot run yet.
     std::string tagText = !v ? std::string(tr("Collection"))

@@ -30,6 +30,8 @@ in source. The source paths below refer to the matching source distribution.
 | EasyRPG Player backend | Optional native-launcher backend, Player 0.8.1.1 (`78328fa29f465315291e161130e6682f69410370`), GPL-3.0-or-later. HardRPG entry point and dated patch: `backends/easyrpg/`, `deps/patches/easyrpg/`. Source: https://github.com/EasyRPG/Player. |
 | liblcf | 0.8.1 (`92c4450a1bc1acb58bd02bbb99b57e5036919cdf`), MIT. Source: https://github.com/EasyRPG/liblcf. |
 | EasyRPG embedded fonts and decoders | ttyp0 (ttyp0 license), Shinonome (public domain), Baekmuk (Baekmuk license), WenQuanYi (GPL-2.0-or-later with font exception), FmMidi (BSD-3-Clause), dr_wav (public domain / MIT-0). Exact notices are retained in matching Player sources and packaged under `licenses/easyrpg/`. |
+| NP2kai (PC-98 backend) | Optional native-launcher backend, libretro NP2kai (`1ea561cd7fd62b33f4e7b3f1c2e30fc3e6089f28`), MIT. HardRPG frontend: `backends/np2kai/`; build and core patch: `scripts/build-np2kai-vita.sh`. Source: https://github.com/libretro/NP2kai. Notice packaged as `licenses/np2kai/NP2kai.txt`. |
+| OpenDT (Dante 98 backend) | Optional native-launcher backend, OpenDT (`48e86578903eb7d0d2b0c2d28cc215a7933bfea3`), MIT, with its bundled ymfm (BSD-3-Clause). HardRPG entry point and patch: `backends/opendt/`; build: `scripts/build-opendt-vita.sh`. Source: https://github.com/MaxSignal/OpenDT. Notices packaged under `licenses/opendt/`. |
 
 The dependency lock is executable input to the bootstrap, not a list of
 suggested versions: [deps/versions.lock](deps/versions.lock). Additional

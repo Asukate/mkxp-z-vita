@@ -13,7 +13,8 @@ Games change between versions and editions, so your copy may behave differently.
 **Frame rates:** each RPG Maker version has its own speed limit. XP games run
 at up to **40 fps**, so 40 fps is full speed for an XP game; a few set their
 own limit (Pokémon Uranium runs at up to 50). VX and VX Ace games run at up to
-**60 fps**. RPG Maker 2000 and 2003 games run at 60 fps.
+**60 fps**. RPG Maker 2000 and 2003 games run at 60 fps. Dante 98 games run at
+the PC-98's 56 fps.
 
 ## RPG Maker XP, VX and VX Ace
 
@@ -60,6 +61,18 @@ These run through the bundled EasyRPG Player.
 | Ib | 2000/2003 | ✅ Runs | |
 | Yume Nikki | 2000/2003 | ✅ Runs | |
 | Flow | 2000/2003 | ✅ Runs | |
+
+## RPG Maker Dante 98 and Dante 98 II
+
+Dante 98 games (PC-98) run natively on HardRPG's port of
+[OpenDT](https://github.com/MaxSignal/OpenDT), straight from their disk image
+(`.hdi`, `.fdi`, `.d88` and similar) or from the game's own files, with the
+same in-game menu, controls, screen filters and fast forward as other games.
+
+| Game | Engine | Status | Notes |
+| --- | --- | --- | --- |
+| Peret em Heru: For the Prisoners | Dante 98 | ✅ Runs | Played on the Vita from its disk image. |
+| Corpse Party (1996) | Dante 98 | 🟡 Partial | The PC-98 original by Kenix Soft, from its `.hdi` disk image. Title and opening at full speed; later parts untested. |
 
 ## Pokémon Essentials
 

@@ -1,0 +1,630 @@
+diff --git a/src/core/screen.cpp b/src/core/screen.cpp
+index 6d2a7c8..171d0c6 100644
+--- a/src/core/screen.cpp
++++ b/src/core/screen.cpp
+@@ -179,6 +179,52 @@ void Screen::unmaskTextRect(int c0, int r0, int c1, int r1) {
+     }
+ }
+ 
++void Screen::composeIndexed(uint8_t* out, int stride) const {
++  const int L = (scrollLine >= 1 && scrollLine <= 383) ? scrollLine : 0;
++  const long total = long(kScreenW) * kScreenH;
++  for (int y = 0; y < kScreenH; ++y) {
++    uint8_t* o = out + size_t(y) * stride;
++    if (!graphicsOn || (frameBorder && (y < 16 || y >= 368))) {
++      std::memset(o, kIndexBlack, kScreenW);
++      continue;
++    }
++    int sy = y;
++    if (y < 384 && L) sy = (y < 384 - L) ? y + L : y - (384 - L);
++    long p = (long(sy) * kScreenW + long(hOffset) * 16) % total;
++    if (p < 0) p += total;
++    const long first = std::min<long>(kScreenW, total - p);
++    std::memcpy(o, pix + p, size_t(first));
++    if (first < kScreenW) std::memcpy(o + first, pix, size_t(kScreenW - first));
++    for (int x = 0; x < kScreenW; ++x) o[x] &= 15;
++    if (frameBorder) {
++      std::memset(o, kIndexBlack, 16);
++      std::memset(o + 624, kIndexBlack, 16);
++    }
++  }
++  if (!textEnabled) return;
++  for (int r = 0; r < 25; ++r)
++    for (int c = 0; c < 80; ++c) {
++      const uint8_t a = textAttr[r][c];
++      if (!(a & 1)) continue;
++      const bool rev = (a & 4) != 0;
++      const uint8_t color = uint8_t(kIndexText + ((a & 0x40) ? 1 : 0) + ((a & 0x80) ? 2 : 0) + ((a & 0x20) ? 4 : 0));
++      for (int yy = 0; yy < 16; ++yy) {
++        const uint8_t g = textGlyph[r][c][yy];
++        uint8_t* o = out + size_t(r * 16 + yy) * stride + c * 8;
++        for (int k = 0; k < 8; ++k)
++          if (((g >> (7 - k)) & 1) != rev) o[k] = color;
++      }
++    }
++}
++
++void Screen::paletteAbgr(uint32_t out[25]) const {
++  for (int i = 0; i < 16; ++i)
++    out[i] = 0xFF000000u | uint32_t(pal[i][2] * 17) << 16 | uint32_t(pal[i][1] * 17) << 8 | uint32_t(pal[i][0] * 17);
++  out[kIndexBlack] = 0xFF000000u;
++  for (int k = 0; k < 8; ++k)
++    out[kIndexText + k] = 0xFF000000u | ((k & 4) ? 0xFF0000u : 0) | ((k & 2) ? 0xFF00u : 0) | ((k & 1) ? 0xFFu : 0);
++}
++
+ void Screen::compose(uint8_t* rgb) const {
+   uint8_t table[16][3];
+   for (int i = 0; i < 16; ++i)
+diff --git a/src/core/screen.h b/src/core/screen.h
+index 1e71655..b64c6f3 100644
+--- a/src/core/screen.h
++++ b/src/core/screen.h
+@@ -84,6 +84,12 @@ class Screen {
+ 
+   // ---- compose (spec 01 §1.10) ----
+   void compose(uint8_t* rgb) const;  // 640*400*3
++  // Same picture as color indices, for a paletted display (HardRPG addition): graphics use
++  // 0..15, black (graphics off, D1 border) kIndexBlack, text kIndexText + (R | G<<1 | B<<2).
++  static constexpr uint8_t kIndexBlack = 16, kIndexText = 17;
++  void composeIndexed(uint8_t* out, int stride) const;
++  // Palette for composeIndexed: 25 entries, 0xAABBGGRR.
++  void paletteAbgr(uint32_t out[25]) const;
+ };
+ 
+ }  // namespace core
+diff --git a/src/core/util.cpp b/src/core/util.cpp
+index d989e2b..dd51202 100644
+--- a/src/core/util.cpp
++++ b/src/core/util.cpp
+@@ -172,6 +172,15 @@ std::vector<uint8_t> readFile(const std::string& root, const std::string& rel) {
+   return out;
+ }
+ 
++static std::string& saveDirSetting() {
++  static std::string dir;
++  return dir;
++}
++void setSaveDir(const std::string& dir) { saveDirSetting() = dir; }
++std::string saveDir(const std::string& gameRoot) {
++  return saveDirSetting().empty() ? gameRoot : saveDirSetting();
++}
++
+ bool writeFileAbs(const std::string& path, const std::vector<uint8_t>& data) {
+   FILE* f = openFile(path, "wb");
+   if (!f) return false;
+diff --git a/src/core/util.h b/src/core/util.h
+index 671d08a..1e61bae 100644
+--- a/src/core/util.h
++++ b/src/core/util.h
+@@ -33,6 +33,10 @@ bool isRegularFile(const std::string& path);
+ std::vector<uint8_t> readFile(const std::string& root, const std::string& rel);
+ bool tryReadFile(const std::string& root, const std::string& rel, std::vector<uint8_t>& out);
+ bool writeFileAbs(const std::string& path, const std::vector<uint8_t>& data);
++// Folder that holds the save files. Empty (the default) means the game folder;
++// a frontend can keep saves elsewhere (HardRPG keeps them in its save folder).
++void setSaveDir(const std::string& dir);
++std::string saveDir(const std::string& gameRoot);
+ std::vector<std::string> listDir(const std::string& path);  // names only, excluding . and ..
+ 
+ // Portable host file helpers. All paths are UTF-8 strings on every platform.
+diff --git a/src/d1/d1_ui.cpp b/src/d1/d1_ui.cpp
+index 5e80799..d22661d 100644
+--- a/src/d1/d1_ui.cpp
++++ b/src/d1/d1_ui.cpp
+@@ -607,12 +607,12 @@ static std::string slotName(int slot) { return "SAVEDATA." + std::to_string(slot
+ 
+ bool Game::loadSlot(int slot) {
+   std::vector<uint8_t> d;
+-  if (!core::tryReadFile(db.root, slotName(slot), d)) return false;
++  if (!core::tryReadFile(core::saveDir(db.root), slotName(slot), d)) return false;
+   return applySave(d);
+ }
+ 
+ bool Game::saveSlot(int slot) {
+-  std::string path = core::resolvePath(db.root, slotName(slot));
++  std::string path = core::resolvePath(core::saveDir(db.root), slotName(slot));
+   return core::writeFileAbs(path, buildSave());
+ }
+ 
+diff --git a/src/d2/battle.cpp b/src/d2/battle.cpp
+index 11c4aea..e394752 100644
+--- a/src/d2/battle.cpp
++++ b/src/d2/battle.cpp
+@@ -4,6 +4,7 @@
+ #include <cstring>
+ 
+ #include "core/text.h"
++#include "d2/exe_text.h"
+ #include "d2/battle.h"
+ #include "d2/game.h"
+ #include "d2/menus.h"
+@@ -13,7 +14,7 @@ namespace {
+ 
+ using namespace bt;
+ 
+-std::string U(const char* utf8) { return core::utf8ToSjis(utf8); }
++std::string U(const char* utf8) { return exeWord(utf8); }
+ std::string num(int64_t v) { return std::to_string(v); }
+ 
+ enum RoundResult { kContinue, kVictory, kDefeat };
+@@ -523,7 +524,7 @@ void Battle::victory() {
+   bool up[5] = {};
+   if (exp > 0) {
+     units(2);
+-    msgLine(line++, U("それぞれ") + num(exp) + U("の経験値を獲得！"));
++    msgLine(line++, exeMessage("それぞれ%luの経験値を獲得！", {(long long)exp}, U("それぞれ") + num(exp) + U("の経験値を獲得！")));
+     for (int i = 0; i < partyN; ++i) {
+       if (s[i].member < 0) continue;
+       Member& m = g.members[s[i].member];
+@@ -534,13 +535,16 @@ void Battle::victory() {
+   }
+   if (gold > 0) {
+     units(2);
+-    msgLine(line++, U("お金を") + num(gold) + word(0x6F) + U("手に入れた！"));
++    msgLine(line++, exeMessage("お金を%lu%s手に入れた！", {(long long)gold, word(0x6F)}, U("お金を") + num(gold) + word(0x6F) + U("手に入れた！")));
+     g.addGold(long(std::min<int64_t>(gold, 9999999)));
+     units(2);
+   }
+   if (drop >= 0) {
+     units(2);
+-    msgLine(line++, core::rawName(reinterpret_cast<const uint8_t*>(g.db.items[drop].name), 16) + U("を手に入れた！"));
++    {
++      const std::string it = core::rawName(reinterpret_cast<const uint8_t*>(g.db.items[drop].name), 16);
++      msgLine(line++, exeMessage("%sを手に入れた！", {it}, it + U("を手に入れた！")));
++    }
+     g.addItem(drop);
+     units(2);
+   }
+@@ -548,7 +552,7 @@ void Battle::victory() {
+     if (!up[i]) continue;
+     keyWaitB();
+     clearMsg();
+-    msgLine(0, s[i].name + U("はレベル") + num(g.members[s[i].member].level) + U("になった！"));
++    msgLine(0, exeMessage("%sはレベル%dになった！", {s[i].name, (long long)g.members[s[i].member].level}, s[i].name + U("はレベル") + num(g.members[s[i].member].level) + U("になった！")));
+   }
+   keyWaitB();
+ }
+@@ -1242,10 +1246,11 @@ void Battle::applyHp(Battler& c, Battler& t, int64_t dmg, DmgMode mode, int fail
+   std::string m;
+   if (mode == kAbsorb) {
+     if (dmg > t.hp) dmg = t.hp;
+-    m = t.enemy ? t.name + U("のＨＰを") + num(dmg) + U("奪った！") : t.name + U("はＨＰを") + num(dmg) + U("奪われた！");
++    m = t.enemy ? exeMessage("%sの%sを%d奪った！", {t.name, U("ＨＰ"), (long long)dmg}, t.name + U("のＨＰを") + num(dmg) + U("奪った！"))
++                : exeMessage("%sは%sを%d奪われた！", {t.name, U("ＨＰ"), (long long)dmg}, t.name + U("はＨＰを") + num(dmg) + U("奪われた！"));
+     c.hp = std::min(c.hp + dmg, c.maxHp);
+   } else {
+-    m = t.name + U("に") + num(dmg) + U("のダメージ！");
++    m = exeMessage("%sに%dのダメージ！", {t.name, (long long)dmg}, t.name + U("に") + num(dmg) + U("のダメージ！"));
+     g.sfx(6);
+   }
+   msgLine(1, m);
+@@ -1309,10 +1314,11 @@ void Battle::mpDamage(Battler& c, Battler& t, int64_t v, bool absorb) {
+   effect = true;
+   std::string m;
+   if (absorb) {
+-    m = t.enemy ? t.name + U("のＭＰを") + num(v) + U("奪った！") : t.name + U("はＭＰを") + num(v) + U("奪われた！");
++    m = t.enemy ? exeMessage("%sの%sを%d奪った！", {t.name, U("ＭＰ"), (long long)v}, t.name + U("のＭＰを") + num(v) + U("奪った！"))
++                : exeMessage("%sは%sを%d奪われた！", {t.name, U("ＭＰ"), (long long)v}, t.name + U("はＭＰを") + num(v) + U("奪われた！"));
+     c.mp = std::min(c.mp + v, c.maxMp);
+   } else {
+-    m = t.name + U("のＭＰが") + num(v) + U("減った！");
++    m = exeMessage("%sの%sが%d減った！", {t.name, U("ＭＰ"), (long long)v}, t.name + U("のＭＰが") + num(v) + U("減った！"));
+   }
+   msgLine(1, m);
+   if (t.enemy) {
+@@ -1330,7 +1336,8 @@ void Battle::healHp(Battler& t, int64_t v) {
+   if (v == 0) return;
+   if (v > 9999) v = 9999;
+   effect = true;
+-  msgLine(1, v == 9999 ? t.name + U("のＨＰが全回復した！") : t.name + U("のＨＰが") + num(v) + U("回復した！"));
++  msgLine(1, v == 9999 ? exeMessage("%sの%sが全回復した！", {t.name, U("ＨＰ")}, t.name + U("のＨＰが全回復した！"))
++                       : exeMessage("%sの%sが%d回復した！", {t.name, U("ＨＰ"), (long long)v}, t.name + U("のＨＰが") + num(v) + U("回復した！")));
+   units(4);
+   t.hp = std::min(t.hp + v, t.maxHp);
+   updateRow(slotOf(t));
+@@ -1340,7 +1347,8 @@ void Battle::healMp(Battler& t, int64_t v) {
+   if (v == 0) return;
+   if (v > 999) v = 999;
+   effect = true;
+-  msgLine(1, v == 999 ? t.name + U("のＭＰが全回復した！") : t.name + U("のＭＰが") + num(v) + U("回復した！"));
++  msgLine(1, v == 999 ? exeMessage("%sの%sが全回復した！", {t.name, U("ＭＰ")}, t.name + U("のＭＰが全回復した！"))
++                      : exeMessage("%sの%sが%d回復した！", {t.name, U("ＭＰ"), (long long)v}, t.name + U("のＭＰが") + num(v) + U("回復した！")));
+   units(4);
+   t.mp = std::min(t.mp + v, t.maxMp);
+   updateRow(slotOf(t));
+@@ -1399,7 +1407,7 @@ void Battle::lower(Battler& t, int64_t v, int k) {
+   const int64_t d = old - nv;
+   if (d > 0) {
+     effect = true;
+-    msgLine(1, t.name + U("の") + word(0x16 + 11 * k) + U("が") + num(d) + U("下がった！"));
++    msgLine(1, exeMessage("%sの%sが%d下がった！", {t.name, word(0x16 + 11 * k), (long long)d}, t.name + U("の") + word(0x16 + 11 * k) + U("が") + num(d) + U("下がった！")));
+     units(4);
+   }
+ }
+@@ -1413,7 +1421,7 @@ void Battle::raise(Battler& t, int64_t v, int k) {
+   const int64_t d = nv - old;
+   if (d > 0) {
+     effect = true;
+-    msgLine(1, t.name + U("の") + word(0x16 + 11 * k) + U("が") + num(d) + U("上がった！"));
++    msgLine(1, exeMessage("%sの%sが%d上がった！", {t.name, word(0x16 + 11 * k), (long long)d}, t.name + U("の") + word(0x16 + 11 * k) + U("が") + num(d) + U("上がった！")));
+     units(4);
+   }
+ }
+@@ -1570,13 +1578,13 @@ void Battle::cast(Battler& c, int magicNo, int target) {
+   magicEffect(mg);
+   if (c.mp < mg.mpCost) {
+     units(1);
+-    msgLine(1, word(0x0B) + U("が足りない！"));
++    msgLine(1, exeMessage("%sが足りない！", {word(0x0B)}, word(0x0B) + U("が足りない！")));
+     units(5);
+     return;
+   }
+   if (mg.spiCoef != 0 && c.status[2]) {
+     units(1);
+-    msgLine(1, U("しかし") + c.name + statusMsg(2, 2));
++    msgLine(1, exeMessage("しかし%s%s", {c.name, statusMsg(2, 2)}, U("しかし") + c.name + statusMsg(2, 2)));
+     units(5);
+     return;
+   }
+@@ -1664,7 +1672,10 @@ void Battle::useItem(Battler& u, int a, int target) {
+   }
+   effect = false;
+   clearMsg();
+-  msgLine(0, u.name + U("は") + core::rawName(reinterpret_cast<const uint8_t*>(it.name), 16) + U("を使った！"));
++  {
++    const std::string itn = core::rawName(reinterpret_cast<const uint8_t*>(it.name), 16);
++    msgLine(0, exeMessage("%sは%sを使った！", {u.name, itn}, u.name + U("は") + itn + U("を使った！")));
++  }
+   const Magic& mg = g.db.magics[it.magicNo()];
+   if (kind == 8)
+     magicEffect(mg);
+diff --git a/src/d2/events.cpp b/src/d2/events.cpp
+index 712a804..0912a18 100644
+--- a/src/d2/events.cpp
++++ b/src/d2/events.cpp
+@@ -1,4 +1,5 @@
+ // D2 event interpreter (spec 22): execution loop, branching, labels and every event command.
++#include "d2/exe_text.h"
+ #include "d2/events.h"
+ 
+ #include <algorithm>
+@@ -11,7 +12,7 @@ namespace d2 {
+ 
+ namespace {
+ 
+-std::string sj(const char* utf8) { return core::utf8ToSjis(utf8); }
++std::string sj(const char* utf8) { return exeWord(utf8); }
+ 
+ constexpr size_t kPad = 64;     // zero bytes appended to the work area (spec 22 §2.4)
+ constexpr size_t kSlack = 600;  // extra physical zeros so argument reads never leave the buffer
+diff --git a/src/d2/exe_text.cpp b/src/d2/exe_text.cpp
+new file mode 100644
+index 0000000..a521c16
+--- /dev/null
++++ b/src/d2/exe_text.cpp
+@@ -0,0 +1,151 @@
++#include "d2/exe_text.h"
++
++#include <cstdio>
++#include <map>
++
++#include "core/text.h"
++#include "core/util.h"
++
++namespace d2 {
++namespace {
++
++// Where the stock messages sit in RPG.EXE builds, and what they say there. `key` is the
++// text the player asks for when it differs from the EXE's (a wider number format).
++struct Spot {
++  unsigned offset;
++  const char* stock;
++  const char* key = nullptr;
++};
++
++// 1996-06 build (110607 bytes).
++const Spot k9606[] = {
++    {0x19e9e, "ニューゲーム"}, {0x19eab, "コンティニュー"}, {0x19eba, "ゲーム終了"},
++    {0x19f18, "%sの%sが全回復した！"}, {0x19f2d, "%sの%sが%d回復した！"},
++    {0x19f47, "%sが足りない！"}, {0x19f56, "すでに覚えている。"}, {0x19f69, "%sは%sを覚えた！"},
++    {0x19f7a, "%sは%sを使えない。"}, {0x19f8d, "%sを使った！"},
++    {0x19f9a, "しかし何も起こらなかった！"},
++    {0x1a001, "装備"}, {0x1a006, "システム"}, {0x1a00f, "並び替え"},
++    {0x1a027, "Ｌ%2d"}, {0x1a02d, "レベル%3d"},
++    {0x1a052, "経験値%20ld", "経験値%20lld"}, {0x1a05e, "次のレベルまで%12ld", "次のレベルまで%12lld"},
++    {0x1a098, "セーブ"}, {0x1a09f, "ロード"}, {0x1a0a6, "デバッグ"}, {0x1a0af, "終了"},
++    {0x1a0b4, "データ１"}, {0x1a0bd, "データ２"}, {0x1a0c6, "データ３"}, {0x1a0cf, "データ４"},
++    {0x1a15d, "使う"}, {0x1a162, "整理"}, {0x1a167, "捨てる"}, {0x1a16e, "やめる"},
++    {0x1a1ae, "はい"}, {0x1a1b4, "いいえ"},
++    {0x1a1db, "買う"}, {0x1a1e0, "売る"}, {0x1a1e6, "やめる"},
++    {0x1a1ed, "\\>宿泊料金は%d%sです。"}, {0x1a204, "\\>泊まりますか？"},
++    {0x1a27d, "それぞれ%luの経験値を獲得！"}, {0x1a299, "お金を%lu%s手に入れた！"},
++    {0x1a2b1, "%sを手に入れた！"}, {0x1a2c2, "%sはレベル%dになった！"},
++    {0x1a2e3, "%sに%dのダメージ！"}, {0x1a2f6, "%sの%sを%d奪った！"},
++    {0x1a309, "%sは%sを%d奪われた！"}, {0x1a31e, "%sの%sが%d減った！"},
++    {0x1a331, "%sの%sが全回復した！"}, {0x1a346, "%sの%sが%d回復した！"},
++    {0x1a35b, "%sの%sが%d下がった！"}, {0x1a370, "%sの%sが%d上がった！"},
++    {0x1a385, "%sが足りない！"}, {0x1a394, "しかし%s%s"}, {0x1a39f, "%sは%sを使った！"},
++    {0x1a3b0, "しかし何も起こらなかった！"},
++};
++
++std::map<std::string, std::string>& replaced() {
++  static std::map<std::string, std::string> m;
++  return m;
++}
++
++// The printf conversions of a template, in order ("s", "d", "lu"...).
++std::vector<std::string> conversions(const std::string& t) {
++  std::vector<std::string> out;
++  for (size_t i = 0; i < t.size(); ++i) {
++    const unsigned char c = static_cast<unsigned char>(t[i]);
++    if ((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC)) {
++      ++i;  // Shift-JIS lead byte: the next byte is never a '%'
++      continue;
++    }
++    if (c != '%') continue;
++    size_t j = i + 1;
++    while (j < t.size() && std::string("-+ #0123456789").find(t[j]) != std::string::npos) ++j;
++    std::string len;
++    while (j < t.size() && (t[j] == 'l' || t[j] == 'h')) len += t[j++];
++    if (j < t.size() && t[j] != '%') out.push_back(len + t[j]);
++    i = j;
++  }
++  return out;
++}
++
++bool sameKind(const std::string& a, const std::string& b) {
++  return (a.back() == 's') == (b.back() == 's');
++}
++
++}  // namespace
++
++void loadExeText(const std::string& root) {
++  replaced().clear();
++  std::vector<uint8_t> exe;
++  if (!core::tryReadFile(root, "RPG.EXE", exe) || exe.size() != 110607) return;
++  for (const Spot& s : k9606) {
++    const std::string stock = core::utf8ToSjis(s.stock);
++    if (s.offset + stock.size() >= exe.size()) continue;
++    std::string text(reinterpret_cast<const char*>(&exe[s.offset]), stock.size());
++    // The game's text fills the stock text's place exactly and ends there.
++    if (text == stock || exe[s.offset + stock.size()] != 0 || text.find('\0') != std::string::npos) continue;
++    const auto want = conversions(stock), got = conversions(text);
++    if (want.size() != got.size()) continue;
++    bool ok = true;
++    for (size_t i = 0; i < want.size(); ++i) ok = ok && sameKind(want[i], got[i]);
++    if (!ok) continue;
++    while (!text.empty() && text.back() == ' ') text.pop_back();
++    replaced().emplace(s.key ? s.key : s.stock, text);
++  }
++}
++
++int exeTextCount() { return int(replaced().size()); }
++
++std::string exeWord(const char* utf8) {
++  auto it = replaced().find(utf8);
++  if (it == replaced().end()) return core::utf8ToSjis(utf8);
++  // A number format in the player is wider than the EXE's (long long).
++  std::string t = it->second;
++  if (it->first.find("lld") != std::string::npos)
++    for (size_t p = t.find("ld"); p != std::string::npos; p = t.find("ld", p + 3)) t.insert(p, "l");
++  return t;
++}
++
++std::string exeMessage(const char* key, const std::vector<MsgArg>& args, const std::string& fallback) {
++  auto it = replaced().find(key);
++  if (it == replaced().end()) return fallback;
++  const std::string& t = it->second;
++  std::string out;
++  size_t arg = 0;
++  for (size_t i = 0; i < t.size(); ++i) {
++    const unsigned char c = static_cast<unsigned char>(t[i]);
++    if (((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC)) && i + 1 < t.size()) {
++      out += t[i];
++      out += t[++i];
++      continue;
++    }
++    if (c != '%') {
++      out += t[i];
++      continue;
++    }
++    size_t j = i + 1;
++    std::string flags;
++    while (j < t.size() && std::string("-+ #0123456789").find(t[j]) != std::string::npos) flags += t[j++];
++    while (j < t.size() && (t[j] == 'l' || t[j] == 'h')) ++j;
++    if (j >= t.size()) break;
++    const char conv = t[j];
++    i = j;
++    if (conv == '%') {
++      out += '%';
++      continue;
++    }
++    if (arg >= args.size()) return fallback;
++    const MsgArg& a = args[arg++];
++    char buf[256];
++    if (conv == 's')
++      std::snprintf(buf, sizeof buf, ("%" + flags + "s").c_str(), a.number ? std::to_string(a.n).c_str() : a.s.c_str());
++    else if (a.number)
++      std::snprintf(buf, sizeof buf, ("%" + flags + (conv == 'u' ? "llu" : "lld")).c_str(), a.n);
++    else
++      return fallback;
++    out += buf;
++  }
++  return out;
++}
++
++}  // namespace d2
+diff --git a/src/d2/exe_text.h b/src/d2/exe_text.h
+new file mode 100644
+index 0000000..f6e831a
+--- /dev/null
++++ b/src/d2/exe_text.h
+@@ -0,0 +1,38 @@
++// Built-in messages from the game's own RPG.EXE (HardRPG addition, not part of the spec).
++// Fan translations of Dante98 II games translate the engine's built-in words and messages
++// by editing RPG.EXE in place: each message keeps its place and byte length, padded with
++// spaces. The player shows those words instead of the stock Japanese ones.
++#pragma once
++#include <string>
++#include <vector>
++
++namespace d2 {
++
++// Reads the replaced messages from root/RPG.EXE (known builds only).
++void loadExeText(const std::string& root);
++// Number of messages the game replaced (for logs and tests).
++int exeTextCount();
++
++// A built-in word or message without arguments: the game's text if it replaced it, else the
++// stock text (both Shift-JIS).
++std::string exeWord(const char* utf8);
++
++struct MsgArg {
++  std::string s;
++  long long n = 0;
++  bool number = false;
++  MsgArg(const std::string& v) : s(v) {}
++  MsgArg(const char* v) : s(v) {}
++  MsgArg(int v) : n(v), number(true) {}
++  MsgArg(long v) : n(v), number(true) {}
++  MsgArg(long long v) : n(v), number(true) {}
++  MsgArg(unsigned v) : n(v), number(true) {}
++  MsgArg(unsigned long v) : n(static_cast<long long>(v)), number(true) {}
++  MsgArg(unsigned long long v) : n(static_cast<long long>(v)), number(true) {}
++};
++
++// A message built from a printf template (`key` is RPG.EXE's stock template, UTF-8): when
++// the game replaced the template, fills the game's template with args; else returns fallback.
++std::string exeMessage(const char* key, const std::vector<MsgArg>& args, const std::string& fallback);
++
++}  // namespace d2
+diff --git a/src/d2/flow.cpp b/src/d2/flow.cpp
+index 7d58c0f..7bcb22a 100644
+--- a/src/d2/flow.cpp
++++ b/src/d2/flow.cpp
+@@ -1,13 +1,14 @@
+ // D2 game flow: startup, title, new game, save/load (spec 21 §3, 20 §9, 23 §8).
+ #include <cstring>
+ 
++#include "d2/exe_text.h"
+ #include "d2/d2.h"
+ #include "d2/game.h"
+ 
+ namespace d2 {
+ 
+ namespace {
+-std::string sj(const char* utf8) { return core::utf8ToSjis(utf8); }
++std::string sj(const char* utf8) { return exeWord(utf8); }
+ }  // namespace
+ 
+ void Game::run() {
+@@ -157,13 +158,13 @@ std::vector<uint8_t> Game::buildSave() const {
+ }
+ 
+ bool Game::saveSlot(int k) {
+-  const std::string path = root + "/SAVE" + std::to_string(k + 1) + ".DAT";
++  const std::string path = core::saveDir(root) + "/SAVE" + std::to_string(k + 1) + ".DAT";
+   return core::writeFileAbs(path, buildSave());
+ }
+ 
+ bool Game::loadSlot(int k) {
+   std::vector<uint8_t> d;
+-  if (!core::tryReadFile(root, "SAVE" + std::to_string(k + 1) + ".DAT", d) || d.empty()) return false;
++  if (!core::tryReadFile(core::saveDir(root), "SAVE" + std::to_string(k + 1) + ".DAT", d) || d.empty()) return false;
+   blackOut(1);
+   size_t p = 0;
+   bool ok = true;
+@@ -213,6 +214,7 @@ bool Game::loadSlot(int k) {
+ 
+ // ---------------------------------------------------------------------------------------------
+ std::unique_ptr<core::Engine> createEngine(core::Host& host, const std::string& root, const core::StartOptions& opt) {
++  loadExeText(root);
+   return std::make_unique<Game>(host, root, opt);
+ }
+ 
+diff --git a/src/d2/menus.cpp b/src/d2/menus.cpp
+index f518f4d..480508c 100644
+--- a/src/d2/menus.cpp
++++ b/src/d2/menus.cpp
+@@ -1,4 +1,5 @@
+ // D2 field menu, item/magic field use, save/load menu, debug menu, shops and inns (spec 23).
++#include "d2/exe_text.h"
+ #include "d2/menus.h"
+ 
+ #include <algorithm>
+@@ -10,7 +11,7 @@ namespace d2 {
+ 
+ namespace {
+ 
+-std::string sj(const char* utf8) { return core::utf8ToSjis(utf8); }
++std::string sj(const char* utf8) { return exeWord(utf8); }
+ 
+ // printf into a string. The format may contain Shift-JIS text (SJIS bytes never equal '%').
+ // (va_start needs a non-reference last parameter, so the variadic part takes a C string.)
+@@ -210,9 +211,9 @@ struct UseCtx {
+     gap();
+     const std::string hp = g.db.wordAt(0x00);
+     if (n == 9999)
+-      menuMsgLine(g, 1, memberName(p) + sj("の") + hp + sj("が全回復した！"));
++      menuMsgLine(g, 1, exeMessage("%sの%sが全回復した！", {memberName(p), hp}, memberName(p) + sj("の") + hp + sj("が全回復した！")));
+     else
+-      menuMsgLine(g, 1, memberName(p) + sj("の") + hp + sj("が") + std::to_string(n) + sj("回復した！"));
++      menuMsgLine(g, 1, exeMessage("%sの%sが%d回復した！", {memberName(p), hp, n}, memberName(p) + sj("の") + hp + sj("が") + std::to_string(n) + sj("回復した！")));
+     p.hp = int16_t(std::min(int(p.hp) + n, int(p.maxHp)));
+   }
+   void mpRecover(Member& p, int n) {
+@@ -220,9 +221,9 @@ struct UseCtx {
+     gap();
+     const std::string mp = g.db.wordAt(0x0B);
+     if (n == 999)
+-      menuMsgLine(g, 1, memberName(p) + sj("の") + mp + sj("が全回復した！"));
++      menuMsgLine(g, 1, exeMessage("%sの%sが全回復した！", {memberName(p), mp}, memberName(p) + sj("の") + mp + sj("が全回復した！")));
+     else
+-      menuMsgLine(g, 1, memberName(p) + sj("の") + mp + sj("が") + std::to_string(n) + sj("回復した！"));
++      menuMsgLine(g, 1, exeMessage("%sの%sが%d回復した！", {memberName(p), mp, n}, memberName(p) + sj("の") + mp + sj("が") + std::to_string(n) + sj("回復した！")));
+     p.mp = int16_t(std::min(int(p.mp) + n, int(p.maxMp)));
+   }
+   void stateRecover(Member& p, int s) {
+@@ -316,11 +317,11 @@ void useItem(Game& g, int a) {
+       menuMsgLine(g, 0, sj("すでに覚えている。"));
+     } else if (found == 2) {
+       g.sfx(8);
+-      menuMsgLine(g, 0, memberName(p) + sj("は") + magicName(g, m) + sj("を覚えた！"));
++      menuMsgLine(g, 0, exeMessage("%sは%sを覚えた！", {memberName(p), magicName(g, m)}, memberName(p) + sj("は") + magicName(g, m) + sj("を覚えた！")));
+       g.learnMagic(p, m);
+       if (it.consumable()) g.removeItem(a);
+     } else {
+-      menuMsgLine(g, 0, memberName(p) + sj("は") + itemName(g, a) + sj("を使えない。"));
++      menuMsgLine(g, 0, exeMessage("%sは%sを使えない。", {memberName(p), itemName(g, a)}, memberName(p) + sj("は") + itemName(g, a) + sj("を使えない。")));
+     }
+     g.keyWait();
+     return;
+@@ -328,7 +329,7 @@ void useItem(Game& g, int a) {
+   // 4.
+   UseCtx u(g);
+   menuMsgOpen(g);
+-  menuMsgLine(g, 0, itemName(g, a) + sj("を使った！"));
++  menuMsgLine(g, 0, exeMessage("%sを使った！", {itemName(g, a)}, itemName(g, a) + sj("を使った！")));
+   // 5.
+   if (k == 8 && mg.target != 2 && mg.target != 3)
+     magicFlash(g, mg);
+@@ -405,7 +406,7 @@ void useMagic(Game& g, int c, int m) {
+   menuMsgLine(g, 0, memberName(caster) + core::rawName(reinterpret_cast<const uint8_t*>(mg.message), 39));
+   magicFlash(g, mg);
+   if (caster.mp < mg.mpCost) {
+-    menuMsgLine(g, 1, g.db.wordAt(0x0B) + sj("が足りない！"));
++    menuMsgLine(g, 1, exeMessage("%sが足りない！", {g.db.wordAt(0x0B)}, g.db.wordAt(0x0B) + sj("が足りない！")));
+     g.keyWait();
+     return;
+   }
+@@ -1127,8 +1128,8 @@ void inn(Game& g, int price) {
+   if (P != 0) {
+     g.openMessage();
+     g.goldWindow(0x198, 0x130);
+-    g.messageLine(0, "\\>" + sj("宿泊料金は") + std::to_string(P) + g.db.wordAt(0x6F) + sj("です。"));
+-    g.messageLine(1, "\\>" + sj("泊まりますか？"));
++    g.messageLine(0, exeMessage("\\>宿泊料金は%d%sです。", {P, g.db.wordAt(0x6F)}, "\\>" + sj("宿泊料金は") + std::to_string(P) + g.db.wordAt(0x6F) + sj("です。")));
++    g.messageLine(1, exeMessage("\\>泊まりますか？", {}, "\\>" + sj("泊まりますか？")));
+     yes = yesNoWindow(g) == 0;
+   }
+   if (!yes) {

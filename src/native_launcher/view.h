@@ -189,7 +189,7 @@ private:
   bool marqueeMoving = false;
   uint64_t marqueeFrame = 0; // the last frame that showed it
   std::map<std::string, ListRow> listNames;
-  Layer listAddLayer, listTagLayers[formatMZ + 1];
+  Layer listAddLayer, listTagLayers[formatLast + 1];
   void buildList(const UI &, const std::vector<size_t> &list, int target);
   template <class AddQuad>
   bool marquee(const std::string &id, const std::string &name, int maxW, int x, double y, int h, AddQuad &&quad);

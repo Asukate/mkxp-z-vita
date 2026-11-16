@@ -1,5 +1,6 @@
 #include "buffered_io.h"
 #include "model.h"
+#include "pc98_fat.h"
 #include "i18n.h"
 #include "release.h"
 #include <algorithm>
@@ -786,6 +787,164 @@ std::vector<std::string> Node::rtps() const {
   }
   return out;
 }
+// ---- PC-98 games (RPG Maker Dante 98 / Dante 98 II and other disk images).
+// A game is a folder with a Neko Project ini naming its hard disk (fan
+// translations ship one with Neko Project 21/W), with exactly one disk image,
+// or holding a Dante 98 game's own files. Dante 98 games run natively with
+// OpenDT, other disks with NP2kai. Only plain folders: the runtimes need real
+// files.
+struct Pc98Game {
+  std::string title, disk, font; // disk and font relative to the folder
+  std::vector<std::pair<std::string, std::string>> options;
+  bool danteFolder = false; // the folder is a Dante 98 game (no disk image)
+};
+// Same rules as OpenDT: Dante 98 II has DAT_RPG/PLAYER.DAT and a DAT_MAP
+// folder; Dante 98 has PLAYER.DAT, MAPCHIP.DAT and PALET.DAT.
+bool danteFolder(const Node &node, const std::vector<File> &fs) {
+  auto has = [&](const char *name, bool folder) {
+    for (const auto &f : fs)
+      if (f.directory == folder && lower(f.name) == name)
+        return f.name;
+    return std::string();
+  };
+  auto rpg = has("dat_rpg", true);
+  if (!rpg.empty() && !has("dat_map", true).empty())
+    for (const auto &f : node.child(rpg).files())
+      if (!f.directory && lower(f.name) == "player.dat")
+        return true;
+  return !has("player.dat", false).empty() && !has("mapchip.dat", false).empty() &&
+         !has("palet.dat", false).empty();
+}
+bool pc98Disk(const std::string &name) {
+  for (auto ext : {".hdi", ".nhd", ".hdd", ".thd", ".fdi", ".d88", ".d98", ".88d",
+                   ".98d", ".hdm", ".xdf", ".dup", ".2hd", ".tfd", ".nfd", ".fdd"})
+    if (suffix(name, ext))
+      return true;
+  return false;
+}
+// Neko Project 21/W writes its ini as UTF-16LE; keep only ASCII from it
+// (paths and settings; the title may carry Japanese, which is dropped).
+std::string iniText(const std::string &raw) {
+  if (raw.size() < 2 || (unsigned char)raw[0] != 0xff || (unsigned char)raw[1] != 0xfe)
+    return raw;
+  std::string out;
+  for (size_t i = 2; i + 1 < raw.size(); i += 2)
+    if (!raw[i + 1] && (unsigned char)raw[i] < 0x80)
+      out += raw[i];
+  return out;
+}
+// The file at a folder-relative path, matched without regard to case.
+std::string pc98Find(const Node &folder, std::string path) {
+  for (auto &c : path)
+    if (c == '\\')
+      c = '/';
+  while (path.compare(0, 2, "./") == 0)
+    path.erase(0, 2);
+  if (path.empty() || !relative(path))
+    return "";
+  Node at = folder;
+  std::string found;
+  auto parts = split(path, '/');
+  for (size_t i = 0; i < parts.size(); ++i) {
+    bool last = i + 1 == parts.size(), hit = false;
+    for (const auto &f : at.files())
+      if (f.directory != last && lower(f.name) == lower(parts[i])) {
+        found = found.empty() ? f.name : found + "/" + f.name;
+        if (!last)
+          at = at.child(f.name);
+        hit = true;
+        break;
+      }
+    if (!hit)
+      return "";
+  }
+  return found;
+}
+bool pc98Game(const Node &node, const std::vector<File> &fs, Pc98Game &out) {
+  if (node.archive)
+    return false;
+  if (danteFolder(node, fs)) {
+    out.danteFolder = true;
+    return true;
+  }
+  for (const auto &f : fs) {
+    if (f.directory || !suffix(f.name, ".ini") || f.size > 262144)
+      continue;
+    std::string text;
+    try {
+      text = iniText(node.read(f.name));
+    } catch (const std::exception &) {
+      continue;
+    }
+    std::map<std::string, std::string> v;
+    std::istringstream stream(text);
+    std::string line, section;
+    while (std::getline(stream, line)) {
+      auto s = trim(line);
+      if (!s.empty() && s.front() == '[' && s.back() == ']')
+        section = lower(s.substr(1, s.size() - 2));
+      else if (section == "nekoproject21" || section == "nekoprojectii" ||
+               section == "nekoproject2" || section == "np2") {
+        auto eq = s.find('=');
+        if (eq != std::string::npos)
+          v[lower(trim(s.substr(0, eq)))] = trim(s.substr(eq + 1));
+      }
+    }
+    std::string disk;
+    for (auto name : {"hdd1file", "hdd2file", "fdd1file"})
+      if (disk.empty() && v.count(name))
+        disk = pc98Find(node, v[name]);
+    if (disk.empty())
+      continue;
+    out.disk = disk;
+    out.title = scrubUtf8(v["np2title"]);
+    if (v.count("fontfile"))
+      out.font = pc98Find(node, v["fontfile"]);
+    auto model = v["pc_model"];
+    if (model == "VX" || model == "VM")
+      out.options.push_back({"np2kai_model", "PC-9801" + model});
+    else if (model == "EPSON")
+      out.options.push_back({"np2kai_model", "PC-286"});
+    if (v["clk_base"] == "1996800")
+      out.options.push_back({"np2kai_clk_base", "1.9968 MHz"});
+    else if (v["clk_base"] == "2457600")
+      out.options.push_back({"np2kai_clk_base", "2.4576 MHz"});
+    int mult = std::atoi(v["clk_mult"].c_str());
+    if (mult >= 1 && mult <= 64)
+      out.options.push_back({"np2kai_clk_mult", std::to_string(mult)});
+    int memory = std::atoi(v["exmemory"].c_str());
+    if (memory >= 1 && memory <= 230)
+      out.options.push_back({"np2kai_ExMemory", std::to_string(memory)});
+    static const std::pair<int, const char *> boards[] = {
+        {0x01, "PC9801-14"}, {0x02, "PC9801-26K"}, {0x04, "PC9801-86"},
+        {0x06, "PC9801-26K + 86"}, {0x08, "PC9801-118"}};
+    if (v.count("sndboard"))
+      for (auto &b : boards)
+        if (std::strtol(v["sndboard"].c_str(), nullptr, 16) == b.first)
+          out.options.push_back({"np2kai_SNDboard", b.second});
+    return true;
+  }
+  // No ini: a folder holding exactly one disk image.
+  for (const auto &f : fs)
+    if (!f.directory && pc98Disk(f.name)) {
+      if (!out.disk.empty())
+        return false;
+      out.disk = f.name;
+    }
+  if (out.disk.empty())
+    return false;
+  for (const auto &f : fs)
+    if (!f.directory && (lower(f.name) == "font.bmp" || lower(f.name) == "anex86.bmp"))
+      out.font = f.name;
+  return true;
+}
+bool pc98Entry(const Node &node, const std::vector<File> &fs, Entry &result) {
+  Pc98Game pc98;
+  if (!pc98Game(node, fs, pc98))
+    return false;
+  result = {pc98.title.empty() ? basename(node.path()) : pc98.title, Kind::Game, node, formatPC98};
+  return true;
+}
 struct CachedZipGame {
   int64_t size, modified, changed;
   Entry entry;
@@ -817,7 +976,7 @@ bool game(const Node &node, Entry &result) {
       return n.files();
     });
     if (!web)
-      return false;
+      return pc98Entry(node, fs, result);
     auto title = scrubUtf8(webGameTitle([&](const std::string &name) {
       try {
         return node.read(name);
@@ -833,7 +992,7 @@ bool game(const Node &node, Entry &result) {
   auto v = ini.empty() ? object() : parseGameIni(node.read(ini));
   int version = gameVersion(v, fs);
   if (!version)
-    return false;
+    return pc98Entry(node, fs, result); // a Game.ini that is not RPG Maker's
   auto title = scrubUtf8(jsonString(v, "title", jsonString(v, "gametitle")));
   if (title.empty())
     title = basename(node.inner.empty() ? node.path() : node.inner);
@@ -1766,8 +1925,63 @@ Json Model::launch(const Entry &e, Progress progress, PreparationStatus status) 
   const auto *engine = engineFor(e.version);
   if (e.kind != Kind::Game || !engine)
     throw std::runtime_error("Choose a valid game");
-  if (backendAvailable && !backendAvailable(*engine))
-    throw std::runtime_error(trf("The {} runtime is missing from this package.", {engine->id}));
+  auto missing = [&](const Engine &runtime) {
+    if (backendAvailable && !backendAvailable(runtime))
+      throw std::runtime_error(trf("The {} runtime is missing from this package.", {runtime.id}));
+  };
+  if (e.version != formatPC98)
+    missing(*engine);
+  if (e.version == formatPC98) {
+    Pc98Game pc98;
+    if (e.node.archive || !pc98Game(e.node, e.node.files(), pc98))
+      throw std::runtime_error(tr("This PC-98 game's disk image was not found."));
+    // Dante 98 games run natively (OpenDT), from their folder or from inside
+    // their disk image; NP2kai stays for every other disk, and for Dante 98
+    // disks when a package has no OpenDT.
+    hardrpg::DanteInImage dante;
+    bool native = pc98.danteFolder;
+    if (!native) {
+      hardrpg::Pc98Fat fat;
+      native = fat.open(join(e.node.path(), pc98.disk)) && hardrpg::findDanteGame(fat, dante) &&
+               (!backendAvailable || backendAvailable(*openDtEngine()));
+    }
+    if (native) {
+      missing(*openDtEngine());
+      auto selection = object();
+      auto &v = selection.as_object();
+      v["backend"] = "opendt";
+      v["schema"] = Json::integer_type(1);
+      v["config"] = key(e.node.identity(paths));
+      v["project"] = e.node.path();
+      if (!pc98.danteFolder) {
+        v["disk"] = pc98.disk;
+        if (!dante.folder.empty())
+          v["folder"] = dante.folder;
+      }
+      auto saveBase = paths.at("saves/opendt");
+      mkdirOne(saveBase);
+      v["save"] = join(saveBase, key(e.node.identity(paths)));
+      return writeSelection(e, selection);
+    }
+    missing(*engine);
+    auto selection = object();
+    auto &v = selection.as_object();
+    v["backend"] = "np2kai";
+    v["schema"] = Json::integer_type(1);
+    v["config"] = key(e.node.identity(paths));
+    v["project"] = e.node.path();
+    v["disk"] = pc98.disk;
+    if (!pc98.font.empty())
+      v["font"] = pc98.font;
+    auto options = object();
+    for (auto &o : pc98.options)
+      options.as_object()[o.first] = o.second;
+    v["options"] = options;
+    auto saveBase = paths.at("saves/np2kai");
+    mkdirOne(saveBase);
+    v["save"] = join(saveBase, key(e.node.identity(paths)));
+    return writeSelection(e, selection);
+  }
   auto mounts = e.version == 4 ? std::vector<Mount>{} : resolveRtp(e.node);
   // A game unpacked from a ZIP that is gone runs from its unpacked copy.
   bool unpacked = !e.node.archive && e.node.root == paths.at("cache");
@@ -1850,6 +2064,9 @@ Json Model::launch(const Entry &e, Progress progress, PreparationStatus status) 
       v["execName"] = ini.substr(0, ini.size() - 4);
   }
 
+  return writeSelection(e, selection);
+}
+Json Model::writeSelection(const Entry &e, const Json &selection) {
   auto encoded = selection.stringify();
   if (encoded.size() > 4096)
     throw std::runtime_error(tr("Launch paths are too long; choose a closer game or RTP folder."));

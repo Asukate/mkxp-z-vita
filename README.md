@@ -4,22 +4,24 @@
   <img src="docs/images/readme-header.gif" width="900" alt="HardRPG on a PS Vita: the launcher, then To the Moon, LISA, Hylics and other games">
 </p>
 
-<p align="center"><b>Play your RPG Maker games on PlayStation Vita</b><br>XP · VX · VX Ace · 2000 · 2003</p>
+<p align="center"><b>Play your RPG Maker games on PlayStation Vita</b><br>XP · VX · VX Ace · 2000 · 2003 · Dante 98</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-PS%20Vita-0070d1?style=for-the-badge" alt="Platform: PS Vita">
   <a href="#status"><img src="https://img.shields.io/badge/Status-Alpha-orange?style=for-the-badge" alt="Status: Alpha"></a>
-  <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/RPG%20Maker-XP%20%2F%20VX%20%2F%20Ace%20%2F%202000%20%2F%202003-5865f2?style=for-the-badge" alt="RPG Maker: XP, VX, VX Ace, 2000, 2003"></a>
+  <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/RPG%20Maker-XP%20%2F%20VX%20%2F%20Ace%20%2F%202000%20%2F%202003%20%2F%20Dante%2098-5865f2?style=for-the-badge" alt="RPG Maker: XP, VX, VX Ace, 2000, 2003, Dante 98"></a>
 </p>
 
 <p align="center"><a href="#install">Install</a> · <a href="#add-your-games">Add games</a> · <a href="#what-hardrpg-can-do">Features</a> · <a href="#using-hardrpg">Use</a> · <a href="#per-game-settings-and-controls">Controls</a> · <a href="#artwork-game-info-and-title-music">Artwork</a> · <a href="#compatibility">Compatibility</a> · <a href="#something-went-wrong">Help</a> · <a href="#faq">FAQ</a> · <a href="#building">Build</a> · <a href="#support-hardrpg">Support</a></p>
 
 
-**HardRPG** plays RPG Maker XP, VX, VX Ace, 2000 and 2003 games on the PS Vita.
+**HardRPG** plays RPG Maker XP, VX, VX Ace, 2000, 2003 and Dante 98 games on the PS Vita.
 Copy your games to the Vita and play them from a game library with covers.
 XP, VX and VX Ace games run natively on mkxp-z-vita, this repository's Vita
 port of [mkxp-z](https://github.com/mkxp-z/mkxp-z). RPG Maker 2000 and 2003
 games run on the [EasyRPG Player](https://easyrpg.org/) that comes built in.
+RPG Maker Dante 98 and Dante 98 II games (the PC-98 RPG Makers) run natively
+on a built-in port of [OpenDT](https://github.com/MaxSignal/OpenDT).
 It is free, open source homebrew for any Vita with HENkaku or Ensō.
 
 ## Install
@@ -57,6 +59,11 @@ which installs it for you. You can also follow
 Copy each game's folder into `ux0:/data/hardrpg/games/`.
 Keep the folder exactly as the game ships: the folder with `Game.ini` (or
 `RPG_RT.ini` for 2000/2003) inside it.
+
+**Dante 98 games** come as a PC-98 disk image (`.hdi`, `.nhd`, `.fdi`, `.d88`
+and similar) or as the game's own files (`PLAYER.DAT` and its `DAT_` files).
+Put each game in a folder of its own in `games/`: the disk image alone, or the
+image with the Neko Project `.ini` it came with. There is nothing to extract.
 
 ```text
 ux0:/data/hardrpg/
@@ -221,6 +228,9 @@ Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
   `.rgss3a` archives.
 - RPG Maker **2000 and 2003** games run on the built-in EasyRPG Player, from the
   same library.
+- RPG Maker **Dante 98 and Dante 98 II** games (PC-98) run natively on the
+  built-in OpenDT port, straight from their disk image, with the same in-game
+  menu, controls, screen filters, fast forward and play time as other games.
 - Games from Steam, itch.io, DLsite or a free download are added the same
   way: copy the game's folder to the Vita as it is, with nothing to convert or
   repack.
@@ -282,7 +292,7 @@ Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
 | Square | Show or hide the details |
 | Down (in details) | Screenshots; Cross shows one full screen |
 | Up | Toolbar: view (carousel, grid or list), engine tabs, search, sort and filter |
-| L / R | Show only one engine (XP, VX, Ace, 2000/2003) |
+| L / R | Show only one engine (XP, VX, Ace, 2000/2003, Dante 98) |
 | Select | Search by name |
 | Start | Open the folder browser |
 | Touch | Drag to scroll, tap to select, tap again to play |
@@ -296,7 +306,8 @@ Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
 The in-game menu also opens from the small icon in the screen's empty border.
 It pauses the game, and changes apply at once. For RPG Maker 2000/2003
 games (EasyRPG), L + R + Select returns to the library; EasyRPG's own menu
-is on Start.
+is on Start. Dante 98 games have the same in-game menu and buttons as XP, VX
+and VX Ace games (crash rescue excepted).
 
 ## Per-game settings and controls
 
@@ -366,13 +377,14 @@ Sound**.
 
 ## Compatibility
 
-HardRPG runs RPG Maker XP, VX, VX Ace, 2000 and 2003 games. Some games stop
+HardRPG runs RPG Maker XP, VX, VX Ace, 2000, 2003 and Dante 98 games. Some games stop
 with a script error, and very demanding games can run slowly.
 
 **Frame rates:** each RPG Maker version has its own speed limit. XP games run
 at up to **40 fps**, so 40 fps is full speed for an XP game; a few set their
 own limit (Pokémon Uranium runs at up to 50). VX and VX Ace games run at up
-to **60 fps**. RPG Maker 2000 and 2003 games run at 60 fps.
+to **60 fps**. RPG Maker 2000 and 2003 games run at 60 fps. Dante 98 games
+run at the PC-98's **56 fps**.
 
 **Can I play … on the Vita?** Popular games, as tested on a real PS Vita:
 
@@ -397,6 +409,8 @@ to **60 fps**. RPG Maker 2000 and 2003 games run at 60 fps.
 | Exit Fate | XP | 🟡 Plays |
 | The Music Box (Mario) | XP | 🟡 Plays, later parts untested |
 | OFF, Ib, Yume Nikki, Flow | 2000/2003 | ✅ Yes, through the built-in EasyRPG Player |
+| Peret em Heru: For the Prisoners | Dante 98 | ✅ Yes, natively (OpenDT) |
+| Corpse Party (1996, PC-98 original) | Dante 98 | 🟡 Starts and plays at full speed, later parts untested |
 | Pokémon Uranium, Pokémon Insurgence | XP (Pokémon Essentials) | 🟡 Plays, progression untested |
 | Pokémon Infinite Fusion | XP (Pokémon Essentials) | ⛔ No: needs more memory than the Vita gives the game |
 | OMORI, Fear & Hunger, Look Outside | MV / MZ | 🛠️ Not yet: MV and MZ support is in development |
@@ -443,6 +457,7 @@ replaying the game to reach the same spot.
 | A game folder in `games/` | Inside the game's own folder, usually `Save01.rxdata`, `Save01.rvdata` or `Save01.rvdata2` |
 | A ZIP game unpacked by an earlier HardRPG | Inside its unpacked copy in `ux0:/data/hardrpg/cache/` |
 | An RPG Maker 2000/2003 game | `ux0:/data/hardrpg/saves/easyrpg/` (files named `Save01.lsd` and so on) |
+| A Dante 98 game | `ux0:/data/hardrpg/saves/opendt/`, one folder per game (its disk image stays untouched) |
 
 Some games save in a folder of their own; if you can't find it, mention that
 in the report.
@@ -458,7 +473,7 @@ in the report.
 
 **Can a PS Vita play RPG Maker games?**
 Yes, with homebrew (HENkaku or Ensō). HardRPG plays RPG Maker XP, VX, VX Ace,
-2000 and 2003 games. See [Install](#install).
+2000, 2003 and Dante 98 games. See [Install](#install).
 
 **Can I play RPG Maker XP, VX or VX Ace games on the Vita?**
 Yes. HardRPG runs them natively, with a real Ruby interpreter, like the PC
@@ -493,7 +508,8 @@ is the one to copy.
 
 **Which RPG Maker made my game?**
 Look in the game's folder: `Game.rgssad` or `Data/*.rxdata` is XP, `.rvdata`
-is VX, `.rvdata2` or `Game.rgss3a` is VX Ace, `RPG_RT.ldb` is 2000/2003, and a
+is VX, `.rvdata2` or `Game.rgss3a` is VX Ace, `RPG_RT.ldb` is 2000/2003,
+`PLAYER.DAT` or a PC-98 disk image (`.hdi`, `.fdi`) is Dante 98, and a
 `www` folder or `js/rpg_core.js` is MV/MZ. In HardRPG, **L / R** in the
 library shows one engine at a time.
 
@@ -650,7 +666,7 @@ for quick UI work.
 | Directory | Purpose |
 | --- | --- |
 | `src/`, `binding/`, `shader/`, `assets/` | Engine, Ruby bindings, renderer and built-in resources |
-| `backends/` | EasyRPG Player integration for RPG Maker 2000/2003 |
+| `backends/` | EasyRPG Player integration for RPG Maker 2000/2003; OpenDT (Dante 98) and NP2kai (PC-98) runtimes |
 | `launcher/` | Package defaults, scripts loaded into games, LiveArea assets |
 | `deps/` | Pinned dependencies and their patches |
 | `scripts/`, `ci/` | Build, package, verification and CI |
@@ -668,7 +684,9 @@ contribution. Both options let you choose your own amount.
 
 HardRPG is developed by [Asukate](https://github.com/Asukate).
 Built on [mkxp-z](https://github.com/mkxp-z/mkxp-z) and Ancurio's original mkxp,
-with [EasyRPG Player](https://easyrpg.org/), [VitaSDK](https://vitasdk.org/),
+with [EasyRPG Player](https://easyrpg.org/),
+[OpenDT](https://github.com/MaxSignal/OpenDT) for Dante 98 games,
+[NP2kai](https://github.com/libretro/NP2kai), [VitaSDK](https://vitasdk.org/),
 Rinnegatamante's [vitaGL](https://github.com/Rinnegatamante/vitaGL) and
 [vitaShaRK](https://github.com/Rinnegatamante/vitaShaRK), Ruby, and the other
 libraries listed in [third-party notices](THIRD-PARTY-NOTICES.md).

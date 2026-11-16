@@ -50,7 +50,7 @@ Json listing(const std::vector<Entry> &list, const Paths &paths) {
     o["inner"] = e.node.inner;
     o["config"] = key(e.node.identity(paths));
     o["rgss"] = e.version <= 3 ? e.version : 0;
-    if (e.version == 4) {
+    if (e.version == 4 || e.version == formatPC98) {
       o["format"] = e.version;
       o["backend"] = engineFor(e.version)->id;
     }
@@ -731,6 +731,7 @@ int main(int argc, char **argv) {
     state.as_object()["message"] = ui.message;
     state.as_object()["launchRequested"] = ui.launchRequested;
     state.as_object()["launchFormat"] = ui.launchFormat;
+    state.as_object()["launchExecutable"] = ui.launchExecutable;
     state.as_object()["launchingName"] = ui.launchingName;
     state.as_object()["preparationLabel"] = ui.preparationLabel;
     state.as_object()["rtpSelected"] = ui.rtpSelected;

@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -249,6 +250,176 @@ class NativeLauncher(unittest.TestCase):
         request.write_text('x'*4097)
         self.assertNotEqual(subprocess.run([str(probe),str(request),str(self.root),
             str(self.storage)+'/'],capture_output=True).returncode,0)
+
+    def pc98_game(self, path, title='Peret em Heru: For the Prisoners'):
+        """A PC-98 fan release laid out like Peret em Heru: a Neko Project 21/W
+        ini in UTF-16 naming the hard disk and font under game/."""
+        (path/'game').mkdir(parents=True)
+        (path/'game'/'Disk Image.hdi').write_bytes(b'\0'*4096)
+        (path/'game'/'anex86.bmp').write_bytes(b'BM'+b'\0'*64)
+        ini=('[NekoProject21]\r\nnp2title='+title+'\r\nHDfolder=\r\n'
+             'HDD1FILE=game\\Disk Image.hdi\r\nfontfile=game\\anex86.bmp\r\n'
+             'pc_model=VX\r\nclk_base=2457600\r\nclk_mult=32\r\nExMemory=7\r\n'
+             'SNDboard=4\r\n[NP2 tool]\r\nWindposX=0\r\n')
+        (path/'Game.ini').write_bytes(b'\xff\xfe'+ini.encode('utf-16-le'))
+        (path/'Game.exe').write_bytes(b'MZ')
+        return path
+
+    def test_pc98_games_are_found_and_launch_the_np2kai_runtime(self):
+        peret=self.pc98_game(self.games/'Peret em Heru - For the Prisoners')
+        floppy=self.games/'Floppy only'; floppy.mkdir()
+        (floppy/'disk1.d88').write_bytes(b'\0'*1024)
+        two=self.games/'Two disks'; two.mkdir()
+        (two/'a.fdi').write_bytes(b'\0'); (two/'b.fdi').write_bytes(b'\0')
+        listed={x['name']:x for x in self.cmd('list')}
+        self.assertEqual(sorted(listed),['Floppy only','Peret em Heru: For the Prisoners','Two disks/'])
+        self.assertEqual(listed['Two disks/']['kind'],'folder') # two disks: no single game
+        self.assertEqual(listed['Floppy only']['backend'],'np2kai')
+        self.assertEqual(listed['Floppy only']['format'],7)
+        refused=self.cmd('launch',peret,runtime='missing')
+        self.assertIn('runtime is missing',refused['error'])
+        pick=self.cmd('launch',peret)
+        self.assertEqual(pick['backend'],'np2kai')
+        self.assertEqual(pick['project'],str(peret))
+        self.assertEqual(pick['disk'],'game/Disk Image.hdi')
+        self.assertEqual(pick['font'],'game/anex86.bmp')
+        self.assertEqual(pick['save'],str(self.root/'saves/np2kai'/fnv('Peret em Heru - For the Prisoners')))
+        self.assertEqual(pick['options'],{'np2kai_model':'PC-9801VX','np2kai_clk_base':'2.4576 MHz',
+            'np2kai_clk_mult':'32','np2kai_ExMemory':'7','np2kai_SNDboard':'PC9801-86'})
+        self.assertEqual(json.loads((self.root/'selection.json').read_text()),pick)
+        bare=self.cmd('launch',floppy)
+        self.assertEqual((bare['disk'],bare['options']),('disk1.d88',{}))
+        self.assertNotIn('font',bare)
+        # Engine tabs: All, then PC-98.
+        state=self.ui('r')
+        self.assertEqual(state['engineFilter'],7)
+        self.assertEqual(sorted(e['name'] for e in state['homeEntries']),
+                         ['Floppy only','Peret em Heru: For the Prisoners','Two disks/'])
+        # The runtime checks the request again.
+        probe=WORK/'np2kai-handoff'
+        subprocess.check_call([os.environ.get('CXX','g++'),'-std=c++14',
+            '-I'+str(ROOT/'src'),str(ROOT/'tests/np2kai-handoff.cpp'),'-o',str(probe)])
+        request=self.root/'selection.json'
+        def check(value):
+            request.write_text(json.dumps(value))
+            return subprocess.run([str(probe),str(request),str(self.root),str(self.storage)+'/'],
+                capture_output=True,text=True)
+        result=check(pick)
+        self.assertEqual(result.returncode,0,result.stderr)
+        parsed=json.loads(result.stdout)
+        self.assertEqual(parsed['disk'],str(peret/'game/Disk Image.hdi'))
+        self.assertEqual(parsed['font'],str(peret/'game/anex86.bmp'))
+        self.assertEqual(parsed['options']['np2kai_clk_mult'],'32')
+        for update in [dict(backend='easyrpg'),dict(schema=2),dict(config='../bad'),
+                dict(project='app0:/x'),dict(save=str(peret)),dict(disk='../escape.hdi'),
+                dict(disk=''),dict(disk='/abs.hdi'),dict(font='a/../../b'),
+                dict(options={'bad key':'1'}),dict(options={'np2kai_x':'a"b'}),
+                dict(options={'other_x':'1'})]:
+            with self.subTest(update=update):
+                self.assertNotEqual(check({**pick,**update}).returncode,0)
+
+    def fat12_image(self, path, tree, header=4096):
+        """A PC-98 style disk image: a header, then a FAT12 floppy holding tree
+        (name -> bytes, or name -> dict for a folder)."""
+        bps, spf, nroot, total = 512, 9, 224, 2880
+        img = bytearray(total * bps)
+        img[0:11] = b'\xeb\x3c\x90NEC     '
+        struct.pack_into('<HBHBHHBHHH', img, 11, bps, 1, 1, 2, nroot, total, 0xf0, spf, 18, 2)
+        fat, data = [0xff0, 0xfff], (1 + 2 * spf) * bps + nroot * 32
+        def alloc(content):
+            first, n = len(fat), max(1, (len(content) + bps - 1) // bps)
+            for i in range(n):
+                fat.append(first + i + 1 if i < n - 1 else 0xfff)
+                at = data + (first + i - 2) * bps
+                chunk = content[i * bps:(i + 1) * bps]
+                img[at:at + len(chunk)] = chunk
+            return first
+        def entry(name, attr, cluster, size):
+            base, _, ext = name.partition('.')
+            return (base.ljust(8) + ext.ljust(3)).encode() + bytes([attr]) + bytes(14) + struct.pack('<HI', cluster, size)
+        def folder(d):
+            out = b''
+            for name, v in d.items():
+                if isinstance(v, dict):
+                    out += entry(name, 0x10, alloc(folder(v)), 0)
+                else:
+                    out += entry(name, 0x20, alloc(v) if v else 0, len(v))
+            return out
+        root = folder(tree)
+        at = (1 + 2 * spf) * bps
+        img[at:at + len(root)] = root
+        table = bytearray(spf * bps)
+        for i, v in enumerate(fat):
+            o = i * 3 // 2
+            if i & 1:
+                table[o] |= (v << 4) & 0xf0; table[o + 1] = (v >> 4) & 0xff
+            else:
+                table[o] = v & 0xff; table[o + 1] |= (v >> 8) & 0x0f
+        for k in range(2):
+            img[(1 + k * spf) * bps:(1 + (k + 1) * spf) * bps] = table
+        path.write_bytes(bytes(header) + bytes(img))
+
+    def test_dante_games_run_natively_with_opendt(self):
+        d2 = {'RPG.EXE': b'MZ', 'DAT_RPG': {'PLAYER.DAT': b'p' * 1200}, 'DAT_MAP': {'MAP000.DAT': b'm'}}
+        imaged = self.games / 'Imaged'; imaged.mkdir(parents=True)
+        self.fat12_image(imaged / 'game.hdi', {'AUTOEXEC.BAT': b'cd game', 'GAME': d2})
+        folder = self.games / 'Folder game'; folder.mkdir()
+        for name in ['PLAYER.DAT', 'MAPCHIP.DAT', 'PALET.DAT', 'RPG.EXE']:
+            (folder / name).write_bytes(b'1')
+        other = self.games / 'Other disk'; other.mkdir()
+        self.fat12_image(other / 'disk.fdi', {'AUTOEXEC.BAT': b'game'})
+        listed = {x['name']: x for x in self.cmd('list')}
+        self.assertEqual(sorted(listed), ['Folder game', 'Imaged', 'Other disk'])
+        self.assertTrue(all(x['format'] == 7 for x in listed.values()))
+        pick = self.cmd('launch', imaged)
+        self.assertEqual((pick['backend'], pick['disk'], pick['folder']), ('opendt', 'game.hdi', 'GAME'))
+        self.assertEqual(pick['save'], str(self.root / 'saves/opendt' / fnv('Imaged')))
+        self.assertEqual(json.loads((self.root / 'selection.json').read_text()), pick)
+        plain = self.cmd('launch', folder)
+        self.assertEqual((plain['backend'], plain['project']), ('opendt', str(folder)))
+        self.assertNotIn('disk', plain)
+        self.assertEqual(self.cmd('launch', other)['backend'], 'np2kai')
+        self.assertIn('runtime is missing', self.cmd('launch', folder, runtime='missing')['error'])
+        # Pressing play starts the program the request names, not the tab's engine.
+        for game, program in [('Imaged', 'app0:/opendt.self'), ('Other disk', 'app0:/np2kai.self')]:
+            state = self.ui(self.to(game) + PLAY)
+            self.assertTrue(state['launchRequested'], game)
+            self.assertEqual(state['launchExecutable'], program)
+        # The runtime checks the request again.
+        probe = WORK / 'opendt-handoff'
+        subprocess.check_call([os.environ.get('CXX', 'g++'), '-std=c++14',
+            '-I' + str(ROOT / 'src'), str(ROOT / 'tests/opendt-handoff.cpp'), '-o', str(probe)])
+        request = self.root / 'selection.json'
+        def check(value):
+            request.write_text(json.dumps(value))
+            return subprocess.run([str(probe), str(request), str(self.root), str(self.storage) + '/'],
+                capture_output=True, text=True)
+        for good in [pick, plain]:
+            result = check(good)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        parsed = json.loads(check(pick).stdout)
+        self.assertEqual((parsed['disk'], parsed['folder']), (str(imaged / 'game.hdi'), 'GAME'))
+        for update in [dict(backend='np2kai'), dict(schema=2), dict(config='../bad'),
+                dict(project='app0:/x'), dict(save=str(imaged)), dict(disk='../escape.hdi'),
+                dict(disk='/abs.hdi'), dict(folder='../x'), dict(folder='a\\b')]:
+            with self.subTest(update=update):
+                self.assertNotEqual(check({**pick, **update}).returncode, 0)
+        self.assertNotEqual(check({**plain, 'folder': 'GAME'}).returncode, 0)
+        # The image reader finds the game and reads its files back.
+        reader = WORK / 'pc98-fat'
+        subprocess.check_call([os.environ.get('CXX', 'g++'), '-std=c++14', '-I' + str(ROOT / 'src'),
+            str(ROOT / 'tests/pc98-fat.cpp'), '-o', str(reader)])
+        unpacked = self.storage / 'unpacked'
+        (unpacked / 'GAME/DAT_RPG').mkdir(parents=True); (unpacked / 'GAME/DAT_MAP').mkdir()
+        (unpacked / 'AUTOEXEC.BAT').write_bytes(b'cd game')
+        for rel, data in [('GAME/RPG.EXE', b'MZ'), ('GAME/DAT_RPG/PLAYER.DAT', b'p' * 1200),
+                          ('GAME/DAT_MAP/MAP000.DAT', b'm')]:
+            (unpacked / rel).write_bytes(data)
+        out = subprocess.run([str(reader), str(imaged / 'game.hdi'), str(unpacked)],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("engine D2 in 'GAME'", out.stdout)
+        self.assertIn('4 files, 0 mismatches', out.stdout)
 
     def test_in_game_menu_edits_the_running_game(self):
         self.game(self.games/'Running', title='Running')

@@ -8,14 +8,18 @@ OUT=""
 TITLE_ID="HARDRPG01"
 PROFILE="real-vita"
 EASY_WS=""
+NP2_WS=""
+ODT_WS=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [--out DIR] [--title-id ID] [--easyrpg-ws DIR]\n' "$0"; exit 0;;
-        --ws|--profile|-j|--out|--title-id|--easyrpg-ws)
+        -h|--help) printf 'usage: %s [--ws DIR] [--profile real-vita|vita3k] [--out DIR] [--title-id ID] [--easyrpg-ws DIR] [--np2kai-ws DIR] [--opendt-ws DIR]\n' "$0"; exit 0;;
+        --ws|--profile|-j|--out|--title-id|--easyrpg-ws|--np2kai-ws|--opendt-ws)
             [[ $# -ge 2 && "$2" != --* && -n "$2" ]] || { printf 'missing value for %s\n' "$1" >&2; exit 2; } ;;
     esac
     case "$1" in
         --easyrpg-ws) EASY_WS="$2"; shift 2;;
+        --np2kai-ws) NP2_WS="$2"; shift 2;;
+        --opendt-ws) ODT_WS="$2"; shift 2;;
         --ws) WS="$2"; shift 2;;
         --out) OUT="$2"; shift 2;;
         --title-id) TITLE_ID="$2"; shift 2;;
@@ -103,6 +107,29 @@ if [[ -n "$EASY_WS" ]]; then
     done
 fi
 
+# PC-98 runtime (scripts/build-np2kai-vita.sh).
+NP2_ARGS=()
+if [[ -n "$NP2_WS" ]]; then
+    NP2_WS="$(realpath "$NP2_WS")"
+    [[ -s "$NP2_WS/runtime/np2kai.self" && -s "$NP2_WS/runtime/manifest.json" ]] ||
+        { echo "missing PC-98 runtime in $NP2_WS" >&2; exit 1; }
+    NP2_ARGS=(-a "$NP2_WS/runtime/np2kai.self=np2kai.self"
+              -a "$NP2_WS/runtime/manifest.json=runtime/np2kai-manifest.json"
+              -a "$NP2_WS/runtime/licenses/NP2kai.txt=licenses/np2kai/NP2kai.txt")
+fi
+
+# Dante 98 runtime (scripts/build-opendt-vita.sh).
+ODT_ARGS=()
+if [[ -n "$ODT_WS" ]]; then
+    ODT_WS="$(realpath "$ODT_WS")"
+    [[ -s "$ODT_WS/runtime/opendt.self" && -s "$ODT_WS/runtime/manifest.json" ]] ||
+        { echo "missing Dante 98 runtime in $ODT_WS" >&2; exit 1; }
+    ODT_ARGS=(-a "$ODT_WS/runtime/opendt.self=opendt.self"
+              -a "$ODT_WS/runtime/manifest.json=runtime/opendt-manifest.json"
+              -a "$ODT_WS/runtime/licenses/OpenDT.txt=licenses/opendt/OpenDT.txt"
+              -a "$ODT_WS/runtime/licenses/ymfm.txt=licenses/opendt/ymfm.txt")
+fi
+
 VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
 (cd "$STAGE" && "$BIN/vita-pack-vpk" \
     -s param.sfo -b eboot.bin \
@@ -147,6 +174,8 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/src/display/libnsgif/COPYING=licenses/libnsgif.txt" \
     "${LAUNCHER_ARGS[@]}" \
     "${EASY_ARGS[@]}" \
+    "${NP2_ARGS[@]}" \
+    "${ODT_ARGS[@]}" \
     "$VPK")
 python3 "$ROOT/scripts/verify-launcher-payload.py" "$VPK" "$TITLE_ID"
 sha256sum "$VPK"
