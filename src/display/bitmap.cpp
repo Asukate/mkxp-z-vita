@@ -997,6 +997,11 @@ bool Bitmap::takeReclaimRequest()
     return requested;
 }
 
+void Bitmap::requestReclaim()
+{
+    reclaimRequested = true;
+}
+
 /* One transparent texel, bound in place of a bitmap whose texture could not
  * be allocated mid-draw: it shows as empty for that frame. Made on the first
  * upload of any CPU bitmap, while memory is still available. */

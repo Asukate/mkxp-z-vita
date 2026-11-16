@@ -524,8 +524,25 @@ void SharedState::requestAtlasTex(int w, int h, TEXFBO &out)
 	}
 	else
 	{
+		/* A kept atlas of another size would only sit beside the new one
+		 * (a tall tileset's atlas is up to 20 MB): give it back first. */
+		TEXFBO::fini(p->atlasTex);
+		p->atlasTex = TEXFBO();
+
 		TEXFBO::init(tex);
-		TEXFBO::allocEmpty(tex, w, h);
+		try
+		{
+			TEXFBO::allocEmpty(tex, w, h);
+		}
+		catch (const Exception &)
+		{
+			/* allocEmpty discarded tex. Give back pooled render targets
+			 * and kept file images, then try once more. */
+			p->texPool.clearCache();
+			texMakeRoom((size_t)w * h * 4);
+			TEXFBO::init(tex);
+			TEXFBO::allocEmpty(tex, w, h);
+		}
 		TEXFBO::linkFBO(tex);
 	}
 
@@ -541,6 +558,10 @@ void SharedState::releaseAtlasTex(TEXFBO &tex)
 	TEXFBO::fini(p->atlasTex);
 
 	p->atlasTex = tex;
+	/* The cache owns it now. A caller that kept these ids would free them
+	 * again on its next release, after GL may have handed the same ids to
+	 * another texture, or get them back as a cached atlas with no storage. */
+	tex = TEXFBO();
 }
 
 void SharedState::dropCachedAtlasTex()

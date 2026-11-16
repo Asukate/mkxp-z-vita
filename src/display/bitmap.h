@@ -229,6 +229,9 @@ public:
 	/* True once after a bitmap could not get graphics memory while drawing
 	 * and was skipped for that frame; the next Ruby safe point reclaims. */
 	static bool takeReclaimRequest();
+	/* Something other than a bitmap (a tilemap atlas) was skipped for lack
+	 * of graphics memory: same deep reclaim at the next safe point. */
+	static void requestReclaim();
 	static size_t cpuPixelBytes();
 
     void assumeRubyGC();

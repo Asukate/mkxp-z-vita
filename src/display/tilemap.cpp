@@ -41,9 +41,13 @@
 #include "tilemap-common.h"
 
 #include "sigslot/signal.hpp"
+#include "exception.h"
+
+#include <string>
 
 #ifdef __vita__
 #include <psp2/gxm.h>
+#include "vita_error_report.h"
 extern "C" void *vglGetTexDataPointerByID(unsigned int texture);
 extern "C" void vglGetTexDescriptor(unsigned int id, int *w, int *h, int *stride,
                                     int *format, int *mipcount, int *swizzle,
@@ -267,6 +271,17 @@ struct TilemapPrivate
 		 * clamped to a multiple of 32 */
 		int efTilesetH;
 
+		/* Height of the tileset as laid out in the atlas: efTilesetH, or
+		 * for a packed atlas only the rows the map uses. */
+		int layoutH;
+
+		/* Packed atlas (tall tilesets, see packUsedRows): rowMap gives
+		 * each tileset row's row in the layout, -1 if not packed;
+		 * packedRows lists the packed tileset rows in layout order. */
+		bool packed;
+		std::vector<int16_t> rowMap;
+		std::vector<int> packedRows;
+
 		/* Indices of usable
 		 * (not null, not disposed) autotiles */
 		std::vector<uint8_t> usableATs;
@@ -349,6 +364,11 @@ struct TilemapPrivate
 	/* Resources are sufficient and tilemap is ready to be drawn */
 	bool tilemapReady;
 
+	/* A packed atlas lacks a row the map now shows (set by handleTile) */
+	bool atlasRowsMissing = false;
+	/* Frames in a row the atlas could not get graphics memory */
+	int atlasFailFrames = 0;
+
 	/* Change watches */
 	sigslot::connection tilesetCon;
 	sigslot::connection autotilesCon[autotileCount];
@@ -393,6 +413,8 @@ struct TilemapPrivate
 
 		atlas.animatedATs.reserve(autotileCount);
 		atlas.efTilesetH = 0;
+		atlas.layoutH = 0;
+		atlas.packed = false;
 
 		tiles.animated = false;
 		tiles.aniIdx = 0;
@@ -459,12 +481,90 @@ struct TilemapPrivate
 
 		int tsH = tileset->height();
 		atlas.efTilesetH = tsH - (tsH % 32);
+		atlas.layoutH = atlas.efTilesetH;
+		atlas.packed = false;
+		atlas.rowMap.clear();
+		atlas.packedRows.clear();
 
 		atlas.size = TileAtlas::minSize(atlas.efTilesetH, glState.caps.maxTexSize);
+
+		if (mapData && (atlas.size.x < 0 ||
+		                (size_t)atlas.size.x * atlas.size.y * 4 > packAtlasBytes))
+			packUsedRows();
 
 		if (atlas.size.x < 0)
 			throw Exception(Exception::MKXPError,
 		                    "Cannot allocate big enough texture for tileset atlas");
+	}
+
+	/* A whole-tileset atlas larger than this packs only the rows in use.
+	 * Exit Fate's world map tileset is 256x14784: a 1280x4096 atlas (20 MB)
+	 * for a map that uses 40 of its 462 rows (issue 31). */
+	static const size_t packAtlasBytes = 8u * 1024 * 1024;
+
+	/* Lay out only the tileset rows the map data uses, in tileset order.
+	 * handleTile flags a row the map shows later (a script changing tiles)
+	 * and prepare() packs again. */
+	void packUsedRows()
+	{
+		const int rows = atlas.efTilesetH / 32;
+		if (rows <= 0)
+			return;
+
+		atlas.rowMap.assign(rows, -1);
+		const Table &data = *mapData;
+		for (int z = 0; z < data.zSize(); ++z)
+			for (int y = 0; y < data.ySize(); ++y)
+				for (int x = 0; x < data.xSize(); ++x)
+				{
+					const int t = data.at(x, y, z);
+					if (t < 48*8)
+						continue;
+					const int row = (t - 48*8) / 8;
+					if (row < rows)
+						atlas.rowMap[row] = 0;
+				}
+
+		atlas.packedRows.clear();
+		for (int row = 0; row < rows; ++row)
+			if (atlas.rowMap[row] == 0)
+			{
+				atlas.rowMap[row] = (int16_t)atlas.packedRows.size();
+				atlas.packedRows.push_back(row);
+			}
+		if (atlas.packedRows.empty())
+		{
+			atlas.rowMap[0] = 0;
+			atlas.packedRows.push_back(0);
+		}
+
+		atlas.packed = true;
+		atlas.layoutH = (int)atlas.packedRows.size() * 32;
+		atlas.size = TileAtlas::minSize(atlas.layoutH, glState.caps.maxTexSize);
+	}
+
+	/* calcBlits works on the layout; map each blit's layout rows back to
+	 * the tileset, one blit per run of consecutive tileset rows. */
+	TileAtlas::BlitVec packedBlits(const TileAtlas::BlitVec &layout) const
+	{
+		TileAtlas::BlitVec out;
+		for (size_t b = 0; b < layout.size(); ++b)
+		{
+			const TileAtlas::Blit &op = layout[b];
+			const int first = op.src.y / 32;
+			const int n = op.h / 32;
+			for (int i = 0; i < n;)
+			{
+				const int srcRow = atlas.packedRows[first + i];
+				int run = 1;
+				while (i + run < n && atlas.packedRows[first + i + run] == srcRow + run)
+					++run;
+				out.push_back(TileAtlas::Blit(op.src.x, srcRow * 32,
+				                              op.dst.x, op.dst.y + i * 32, run * 32));
+				i += run;
+			}
+		}
+		return out;
 	}
 
 	void updateAutotileInfo()
@@ -693,7 +793,9 @@ struct TilemapPrivate
         updateAutotileInfo();
         tileset->ensureNonAnimated();
 
-		TileAtlas::BlitVec blits = TileAtlas::calcBlits(atlas.efTilesetH, atlas.size);
+		TileAtlas::BlitVec blits = TileAtlas::calcBlits(atlas.layoutH, atlas.size);
+		if (atlas.packed)
+			blits = packedBlits(blits);
 
 		/* Clear atlas */
 #ifdef __vita__
@@ -1254,7 +1356,20 @@ struct TilemapPrivate
 		int tileX = tsInd % 8;
 		int tileY = tsInd / 8;
 
-		Vec2i texPos = TileAtlas::tileToAtlasCoor(tileX, tileY, atlas.efTilesetH, atlas.size.y);
+		if (atlas.packed)
+		{
+			/* Past the tileset: RGSS draws nothing */
+			if (tileY >= (int)atlas.rowMap.size())
+				return;
+			if (atlas.rowMap[tileY] < 0)
+			{
+				atlasRowsMissing = true;
+				return;
+			}
+			tileY = atlas.rowMap[tileY];
+		}
+
+		Vec2i texPos = TileAtlas::tileToAtlasCoor(tileX, tileY, atlas.layoutH, atlas.size.y);
 		FloatRect texRect((float) texPos.x+0.5f, (float) texPos.y+0.5f, 31, 31);
 		FloatRect posRect(x*32, y*32, 32, 32);
 
@@ -1540,6 +1655,60 @@ struct TilemapPrivate
 		dispPos = elem.sceneGeo.rect.pos() - wrap(combOrigin, 32);
 	}
 
+	static bool graphicsOutOfMemory(const Exception &e)
+	{
+		return e.type == Exception::MKXPError &&
+		       e.msg.find("out of memory") != std::string::npos;
+	}
+
+	/* Frames (about 3 s) the map may stay hidden waiting for memory before
+	 * the error ends the game, where crash rescue can take over. Hiding it
+	 * for good would leave the player walking in a void. */
+	static const int atlasFailLimit = 180;
+
+	/* Allocates and builds the atlas. When graphics memory runs out, the
+	 * tilemap is hidden for this frame and the next Ruby safe point
+	 * reclaims memory (as for a skipped bitmap); the next frame retries. */
+	bool prepareAtlas()
+	{
+		try
+		{
+			if (atlasSizeDirty)
+			{
+				allocateAtlas();
+				atlasSizeDirty = false;
+				/* Tile positions in the atlas may have moved */
+				buffersDirty = true;
+			}
+
+			if (atlasDirty)
+			{
+				buildAtlas();
+				atlasDirty = false;
+			}
+		}
+		catch (const Exception &e)
+		{
+			if (!graphicsOutOfMemory(e) || ++atlasFailFrames > atlasFailLimit)
+			{
+				atlasFailFrames = 0;
+				throw;
+			}
+#ifdef __vita__
+			if (atlasFailFrames == 1)
+				vitaErrorMemoryEvent("atlas-skipped", "tilemap atlas");
+#endif
+			Bitmap::requestReclaim();
+			if (tilemapReady)
+				hideElements();
+			tilemapReady = false;
+			return false;
+		}
+
+		atlasFailFrames = 0;
+		return true;
+	}
+
 	void prepare()
 	{
 		if (!verifyResources())
@@ -1551,17 +1720,8 @@ struct TilemapPrivate
 			return;
 		}
 
-		if (atlasSizeDirty)
-		{
-			allocateAtlas();
-			atlasSizeDirty = false;
-		}
-
-		if (atlasDirty)
-		{
-			buildAtlas();
-			atlasDirty = false;
-		}
+		if ((atlasSizeDirty || atlasDirty) && !prepareAtlas())
+			return;
 
 		if (mapViewportDirty)
 		{
@@ -1571,7 +1731,19 @@ struct TilemapPrivate
 
 		if (buffersDirty)
 		{
+			atlasRowsMissing = false;
 			buildQuadArray();
+			if (atlasRowsMissing)
+			{
+				/* The map now shows a tileset row the packed atlas lacks
+				 * (a script changed tiles): pack again from the map data. */
+				atlasRowsMissing = false;
+				atlasSizeDirty = true;
+				if (!prepareAtlas())
+					return;
+				buildQuadArray();
+				atlasRowsMissing = false;
+			}
 			uploadBuffers();
 			updateSceneElements();
 			buffersDirty = false;
