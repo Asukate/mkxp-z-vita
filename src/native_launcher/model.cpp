@@ -1583,7 +1583,7 @@ void Model::changeDisplay(const std::string &name, const Json &value) {
     if (!value.is_integer() || (value.as_integer() != 16 && value.as_integer() != 32))
       throw std::runtime_error("Invalid image quality");
   } else if ((name == "fixedAspectRatio" || name == "integerScalingActive" ||
-              name == "fastForward" || name == "crashRescue")
+              name == "fastForward" || name == "crashRescue" || name == "saveBackups")
           ? !value.is_boolean()
           : name != "smoothScaling" || filterIndex(value) < 0)
     throw std::runtime_error("Invalid display setting");
@@ -1611,7 +1611,7 @@ void Model::changeGameSetting(const Entry &entry, const std::string &name,
     throw std::runtime_error(tr("Select a game to change its settings."));
   bool boolean = name == "fixedAspectRatio" || name == "integerScalingActive" ||
                  name == "enableAudio" || name == "midiChorus" ||
-                 name == "midiReverb" || name == "fastForward" || name == "crashRescue";
+                 name == "midiReverb" || name == "fastForward" || name == "crashRescue" || name == "saveBackups";
   bool integer = name == "smoothScaling" || name == "performanceMetrics" || name == "audioBoost" ||
                  name == "textureDepth";
   auto boostValid = [&] {

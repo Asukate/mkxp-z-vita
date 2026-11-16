@@ -764,6 +764,39 @@ int runNativeLauncher(bool returning) {
     LauncherBench bench;
     bench.load();
 #endif
+#ifdef __vita__
+    // The saves of the game played last are copied to its backups on a
+    // worker once the library shows; a launch, the Saves pages and removing
+    // a game wait for it first (UI::waitBackground).
+    struct BackupSync {
+      UI *ui;
+      SceUID thread = -1;
+      static int run(SceSize, void *argument) {
+        (*static_cast<UI **>(argument))->syncReturnedGame();
+        return sceKernelExitThread(0);
+      }
+      void start() {
+        wait();
+        UI *argument = ui;
+        thread = sceKernelCreateThread("hardrpg_save_backups", run, 0x10000100, 256 * 1024, 0, 0, nullptr);
+        if (thread >= 0 && sceKernelStartThread(thread, sizeof argument, &argument) < 0) {
+          sceKernelDeleteThread(thread);
+          thread = -1;
+        }
+        if (thread < 0)
+          ui->syncReturnedGame();
+      }
+      void wait() {
+        if (thread >= 0) {
+          sceKernelWaitThreadEnd(thread, nullptr, nullptr);
+          sceKernelDeleteThread(thread);
+          thread = -1;
+        }
+      }
+      ~BackupSync() { wait(); }
+    } backupSync{&ui};
+    ui.waitBackground = [&backupSync] { backupSync.wait(); };
+#endif
     // The library is read while the splash is up (a cold start) instead of
     // before the screen shows anything; the splash lasts only that long.
     // Returning from a game has no splash.
@@ -810,6 +843,9 @@ int runNativeLauncher(bool returning) {
         std::fclose(f);
         return true;
       };
+      backupSync.start();
+#else
+      ui.syncReturnedGame();
 #endif
       homeLoaded = true;
     };

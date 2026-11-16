@@ -137,7 +137,7 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(listed[1]['backend'],'easyrpg')
         # From the carousel and from its game settings: the same EasyRPG handoff.
         # (Playing moves the game to the front, so find it again each time.)
-        for route in [PLAY, GAME+',scroll:7,cross']:
+        for route in [PLAY, GAME+',scroll:8,cross']:
             with self.subTest(route=route):
                 state=self.ui(self.to('Older game')+route)
                 self.assertTrue(state['launchRequested'])
@@ -677,6 +677,123 @@ class NativeLauncher(unittest.TestCase):
         prefs.write_text('{"language": "xx"}')
         self.assertEqual(self.ui()['language'], 'en')
 
+    def test_save_backups(self):
+        ace = self.game(self.games/'Ace', 3, 'Ace')
+        backups = self.root/'save-backups'/fnv('Ace')
+        old = time.time() - 7200
+        for n, text in ((1, b'first one'), (2, b'second')):
+            (ace/f'Save0{n}.rvdata2').write_bytes(text)
+            os.utime(ace/f'Save0{n}.rvdata2', (old + n, old + n))
+        saves = GAME + ',scroll:7,cross'
+        # Opening a game's Saves copies in what has no backup yet.
+        state = self.ui(saves)
+        self.assertEqual(state['page'], 15)
+        self.assertEqual(state['message'], '2 saves copied to their backups.')
+        slots = state['saves']['slots']
+        self.assertEqual([(x['name'], x['number'], x['present']) for x in slots],
+                         [('Save01.rvdata2', 1, True), ('Save02.rvdata2', 2, True)])
+        self.assertEqual([[v['why'] for v in x['versions']] for x in slots], [['library'], ['library']])
+        self.assertEqual(json.loads((backups/'game.json').read_text())['folder'], str(ace))
+        # Nothing new: nothing copied again.
+        self.assertEqual(self.ui(saves)['message'], '')
+        # The game overwrote slot 1 (a save the hook did not see): the old
+        # one is kept, the copy of the new one is not shown as a version.
+        (ace/'Save01.rvdata2').write_bytes(b'overwritten by mistake')
+        state = self.ui(saves + ',cross')
+        self.assertEqual(state['page'], 16)
+        self.assertEqual(len(state['saves']['slots'][0]['versions']), 2)
+        self.assertEqual([v['size'] for v in state['saves']['shown']], [len(b'first one')])
+        # Restoring an older save over a newer one asks, starting on Cancel.
+        state = self.ui(saves + ',cross,cross')
+        self.assertEqual((state['page'], state['setting'], state['saves']['question']), (17, 0, 0))
+        self.assertEqual(self.ui(saves + ',cross,cross,cross')['page'], 16)
+        self.assertEqual((ace/'Save01.rvdata2').read_bytes(), b'overwritten by mistake')
+        state = self.ui(saves + ',cross,cross,down,cross')
+        self.assertEqual(state['message'], 'Save restored. The one it replaced is kept as a backup.')
+        self.assertEqual((ace/'Save01.rvdata2').read_bytes(), b'first one')
+        self.assertFalse(list(ace.glob('*.hardrpg-*')))
+        # The overwritten one is still there to switch back to.
+        kept = [p.read_bytes() for p in (backups/'Save01.rvdata2').iterdir() if p.suffix == '.rvdata2']
+        self.assertIn(b'overwritten by mistake', kept)
+        # Square deletes a version, after asking.
+        before = len(self.ui(saves + ',cross')['saves']['shown'])
+        self.assertEqual(self.ui(saves + ',cross,square')['page'], 17)
+        state = self.ui(saves + ',cross,square,down,cross')
+        self.assertEqual((state['page'], state['message']), (16, 'Backup deleted.'))
+        self.assertEqual(len(state['saves']['shown']), before - 1)
+        # A version the save hook kept, with what it knew of the game.
+        slot2 = backups/'Save02.rvdata2'
+        (slot2/'20261101-120000.rvdata2').write_bytes(b'older second')
+        (slot2/'20261101-120000.json').write_text(json.dumps(dict(saved=int(old) - 86400, why='save', map_name='Forest', level=7, leader='Grim')))
+        shown = self.ui(saves + ',down,cross')['saves']['shown']
+        self.assertEqual([(v['why'], v['map']) for v in shown], [('save', 'Forest')])
+
+        # Starting the game records it; back in the library its changed
+        # saves are copied in.
+        self.ui(PLAY)
+        self.assertTrue((self.root/'selection.json').exists())
+        self.assertEqual((self.root/'save-backups'/'running.txt').read_text(), fnv('Ace'))
+        (ace/'Save02.rvdata2').write_bytes(b'played on')
+        os.utime(ace/'Save02.rvdata2', (old + 100, old + 100))
+        self.ui()
+        self.assertFalse((self.root/'save-backups'/'running.txt').exists())
+        self.assertIn(b'played on', [p.read_bytes() for p in slot2.iterdir() if p.suffix == '.rvdata2'])
+
+        # Switched off for the game: nothing is copied back from the library.
+        self.ui(GAME + ',scroll:3,cross,down,down,down,cross')
+        self.ui(PLAY)
+        (ace/'Save02.rvdata2').write_bytes(b'while off')
+        os.utime(ace/'Save02.rvdata2', (old + 200, old + 200))
+        self.ui()
+        self.assertNotIn(b'while off', [p.read_bytes() for p in slot2.iterdir() if p.suffix == '.rvdata2'])
+        self.ui(GAME + ',scroll:3,cross,down,down,down,cross')
+
+        # Removing the game with its files keeps a last copy of its saves.
+        state = self.ui(GAME + ',scroll:9,cross,down,cross')
+        self.assertFalse(ace.exists())
+        self.assertIn(b'while off', [p.read_bytes() for p in slot2.iterdir() if p.suffix == '.rvdata2'])
+        self.assertTrue(any(json.loads(p.read_text()).get('why') == 'removed' for p in slot2.glob('2*.json')))
+        # Settings, Save backups lists it as not in the library.
+        listing = SETTINGS + ',down' * 11 + ',cross'
+        state = self.ui(listing)
+        self.assertEqual(state['page'], 18)
+        self.assertEqual([(g['name'], g['installed'], g['slots']) for g in state['saves']['games']], [('Ace', False, 2)])
+        # Its saves can be looked at but not restored.
+        state = self.ui(listing + ',cross')
+        self.assertEqual((state['page'], state['saves']['installed']), (15, False))
+        self.assertEqual(state['saves']['rows'], [1, 1, 4])
+        state = self.ui(listing + ',cross,cross,cross')
+        self.assertEqual((state['page'], state['message']), (16, 'Add the game to the library again to restore its saves.'))
+        # The versions kept per save: 5, then 10 and so on.
+        state = self.ui(listing + ',down,right')
+        self.assertEqual(state['saves']['keep'], 10)
+        self.assertEqual(json.loads((self.root/'launcher-preferences.json').read_text())['saveBackupVersions'], 10)
+        self.ui(listing + ',down,left')
+
+        # Back in the same folder: the missing saves come back on request.
+        ace = self.game(self.games/'Ace', 3, 'Ace')
+        state = self.ui(saves)
+        self.assertEqual([x['present'] for x in state['saves']['slots']], [False, False])
+        self.assertEqual(state['saves']['rows'], [1, 1, 2, 3])
+        state = self.ui(saves + ',down,down,down,cross,cross')
+        self.assertEqual(state['message'], '2 saves restored.')
+        self.assertEqual((ace/'Save01.rvdata2').read_bytes(), b'first one')
+        self.assertEqual((ace/'Save02.rvdata2').read_bytes(), b'while off')
+
+        # The same game added from elsewhere gets a new key: once its own
+        # copy is gone, the old backups are offered to it.
+        state = self.ui(GAME + ',scroll:9,cross,down,cross')
+        elsewhere = self.game(self.storage/'other'/'Ace', 3, 'Ace')
+        self.cmd('add-search', self.storage/'other')
+        state = self.ui(saves)
+        self.assertEqual(state['saves']['rows'], [0, 2])
+        state = self.ui(saves + ',cross,cross')
+        self.assertEqual(state['message'], "The earlier copy's saves are now this game's.")
+        self.assertEqual([x['name'] for x in state['saves']['slots']], ['Save01.rvdata2', 'Save02.rvdata2'])
+        self.assertFalse(backups.exists())
+        state = self.ui(saves + ',down,down,down,cross,cross')
+        self.assertEqual((elsewhere/'Save01.rvdata2').read_bytes(), b'first one')
+
     def test_english_fallback_and_complete_translations(self):
         tr = lambda lang, text, **kw: self.cmd('tr', language=lang, text=text, **kw)
         self.assertEqual(tr('es', 'Settings'), 'Ajustes')
@@ -1011,7 +1128,7 @@ class NativeLauncher(unittest.TestCase):
         self.assertTrue(self.ui()['autoGameInfo'])
         info=page+',down'
 
-        self.assertTrue(self.ui(SETTINGS+',down'*11+',cross')['exitRequested'])
+        self.assertTrue(self.ui(SETTINGS+',down'*12+',cross')['exitRequested'])
         # The blur starts off; an old file's "blurAdult": true is not read.
         prefs.write_text('{"blurAdult": true}')
         self.assertFalse(self.ui()['blurAdult'])
@@ -1118,7 +1235,7 @@ class NativeLauncher(unittest.TestCase):
         # From the game's settings page, Play asks too; Circle goes back to it.
         (self.root/'selection.json').unlink()
         leave()
-        play_row = GAME+',down,down,down,down,down,down,down'
+        play_row = GAME+',down,down,down,down,down,down,down,down'
         self.assertEqual(self.ui(play_row+',cross')['page'], 14)
         self.assertEqual(self.ui(play_row+',cross,circle')['page'], 8)
         # A copy the writer left when the game stopped without an error (power
@@ -1221,9 +1338,15 @@ class NativeLauncher(unittest.TestCase):
         self.assertIs(config()['crashRescue'], False)
         self.ui(speed + ',down,down,square')
         self.assertIs(config()['crashRescue'], True)
+        # Save backups: the same.
+        self.ui(speed + ',down,down,down,cross')
+        self.assertIs(config()['saveBackups'], False)
+        self.ui(speed + ',down,down,down,square')
+        self.assertIs(config()['saveBackups'], True)
         before = file.read_bytes()
         for key, invalid in [('SESourceCount', [7]), ('performanceMetrics', [-1, 4, True, 'FPS']),
-                             ('fastForward', [0, 1, 'on', None]), ('crashRescue', [0, 'off', None])]:
+                             ('fastForward', [0, 1, 'on', None]), ('crashRescue', [0, 'off', None]),
+                             ('saveBackups', [0, 'off', None])]:
             for value in invalid:
                 with self.subTest(key=key, value=value):
                     self.assertIn('error', self.cmd('set-display', key=key, value=value))
@@ -1352,9 +1475,9 @@ class NativeLauncher(unittest.TestCase):
                          ('cache', x['path'], x['config']))
         self.assertEqual((dest/'Save01.rvdata2').read_bytes(), b'save')
         # Its game files are now the unpacked copy: one question, about that copy.
-        state = self.ui(GAME+',scroll:8,cross')
+        state = self.ui(GAME+',scroll:9,cross')
         self.assertEqual(state['removeQuestion'], [str(dest)])
-        self.ui(GAME+',scroll:8,cross,down,cross')
+        self.ui(GAME+',scroll:9,cross,down,cross')
         self.assertFalse(dest.exists())
         self.assertEqual(self.cmd('refresh'), [])
     def test_remove_from_library_asks_about_files_one_question_at_a_time(self):
@@ -1364,7 +1487,7 @@ class NativeLauncher(unittest.TestCase):
         dest = self.root/'cache'/x['path']
         names = lambda: sorted(e['name'] for e in self.cmd('refresh'))
         def remove(name, keys=''):
-            return self.ui(self.to(name) + GAME + ',scroll:8,cross' + keys)
+            return self.ui(self.to(name) + GAME + ',scroll:9,cross' + keys)
         # First the game files (the ZIP), then the unpacked copy; No by default.
         self.assertEqual(remove('packed.zip')['removeQuestion'], [str(zip_path)])
         self.assertEqual(remove('packed.zip', ',down,cross')['removeQuestion'], [str(dest)])
@@ -1395,15 +1518,15 @@ class NativeLauncher(unittest.TestCase):
     def test_delete_the_zip_keeps_an_unpacked_game_playable(self):
         zip_path = self.zip(self.games/'freed.zip')
         # Not unpacked yet: no such row, the menu ends at Remove from library.
-        self.assertEqual(self.ui(GAME+',scroll:9')['setting'], 8)
+        self.assertEqual(self.ui(GAME+',scroll:10')['setting'], 9)
         x = self.cmd('launch', zip_path, kind='zip', inner='Wrapper')
         dest = self.root/'cache'/x['path']
-        state = self.ui(GAME+',scroll:9,cross')
+        state = self.ui(GAME+',scroll:10,cross')
         self.assertEqual(state['removeQuestion'], [str(zip_path)])
         # No goes back to the menu and keeps the ZIP.
-        self.assertEqual(self.ui(GAME+',scroll:9,cross,cross')['page'], self.ui(GAME)['page'])
+        self.assertEqual(self.ui(GAME+',scroll:10,cross,cross')['page'], self.ui(GAME)['page'])
         self.assertTrue(zip_path.exists())
-        state = self.ui(GAME+',scroll:9,cross,down,cross')
+        state = self.ui(GAME+',scroll:10,cross,down,cross')
         self.assertIn('plays from its unpacked copy', state['message'])
         self.assertTrue(state['homeActive'])
         self.assertFalse(zip_path.exists())
@@ -1413,7 +1536,7 @@ class NativeLauncher(unittest.TestCase):
         # A game folder that is itself an extra search folder is only taken off the list.
         outside = self.game(self.storage/'elsewhere'/'Solo', title='Solo game')
         self.cmd('add-search', outside)
-        state = self.ui(GAME+',scroll:8,cross')
+        state = self.ui(GAME+',scroll:9,cross')
         self.assertIn('removed from the list', state['message'])
         self.assertTrue((outside/'Game.ini').exists())
     def test_zip_game_asks_to_be_unzipped_when_unpacking_is_off(self):
@@ -1910,10 +2033,10 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(path.read_bytes(),before)
         self.assertEqual(list((self.root/'cache').iterdir()),[])
         self.assertFalse(state['launchRequested'])
-        self.ui(GAME+',scroll:7,cross')
+        self.ui(GAME+',scroll:8,cross')
         selection=json.loads((self.root/'selection.json').read_text())
         self.assertEqual(selection['config'],direct['config'])
-        self.assertTrue(self.ui(GAME+',scroll:7,cross')['launchRequested'])
+        self.assertTrue(self.ui(GAME+',scroll:8,cross')['launchRequested'])
 
     def test_game_menu_touch_and_rename_preserve_selected_context(self):
         self.game(self.games/'a',title='A game')
@@ -1948,10 +2071,10 @@ class NativeLauncher(unittest.TestCase):
 
     def test_game_menu_missing_rtp_and_browser_return_keep_games_context(self):
         self.game(self.games/'rtp',title='RTP fixture',rtp='RPGVXAce')
-        state=self.ui(GAME+',scroll:7,cross')
+        state=self.ui(GAME+',scroll:8,cross')
         self.assertEqual(state['missingRtp'],'RPGVXAce')
         self.assertFalse(state['launchRequested'])
-        state=self.ui(GAME+',scroll:7,cross,cross,circle,circle')
+        state=self.ui(GAME+',scroll:8,cross,cross,circle,circle')
         self.assertFalse(state['gameOptions'])
         self.assertTrue(state['homeActive'])
         self.assertEqual(state['homeTarget'],0)

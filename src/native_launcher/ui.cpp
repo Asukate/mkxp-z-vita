@@ -157,6 +157,7 @@ UI::UI(Paths paths, bool scan)
     : model(std::move(paths), scan),
       displayValues(std::initializer_list<Json::pair_type>{}),
       rtpChoices(std::initializer_list<Json::pair_type>{}) {
+  backups.root = model.paths.root;
   try {auto text=readFile(model.paths.at("update-settings.json"),4096);
     if(!text.empty())automaticUpdates=json5pp::parse(text).as_object().at("automatic").as_boolean();
   }catch(...) {}
@@ -340,6 +341,15 @@ void UI::search(const std::string &text) {
 void UI::scroll(int rows) {
   if (homeActive())
     return;
+  if (savesPage()) {
+    int count = saveRowsCount();
+    setting = std::max(0, std::min(setting + rows, std::max(0, count - 1)));
+    settingFirst = std::max(0, std::min(settingFirst, setting));
+    int shown = page == Page::SaveConfirm ? 7 : 5;
+    if (setting >= settingFirst + shown)
+      settingFirst = setting - shown + 1;
+    return;
+  }
   if (gameOptions && page != Page::Controls) {
     if (browser || !errorReport.empty() || !releaseReport.empty() || !missingRtp.empty()) return;
     int count = optionRows();
@@ -514,6 +524,11 @@ void UI::sheetTouch(int x, int y) {
   }
   if (!errorReport.empty() || !releaseReport.empty() || focus == Focus::About)
     return;
+  if (savesPage()) {
+    bool tall = page != Page::SaveConfirm;
+    int r = rowAt(tall ? rtpRowH : sheetRowH, tall ? 5 : sheetRows);
+    if (r >= 0)
+      pickRow(setting, settingFirst + r, saveRowsCount());
   if (gameOptions && inGame && page == Page::Game) {
     // The menu over a game: its taller rows.
     const int rowH = inGameMenuRowHeight(optionRows());
@@ -844,6 +859,17 @@ void UI::answerRemove(bool yes) {
 }
 void UI::finishRemove() {
   auto name = gameEntry.name;
+  if (removeFiles || removeUnpacked) {
+    // The saves go with the files: a last copy first.
+    try {
+      if (waitBackground)
+        waitBackground();
+      backups.record(entryKey(gameEntry), gameEntry.name, gameEntry.version, gameFolderOf(gameEntry),
+                     saveFolderOf(gameEntry), backupsEnabled(gameEntry), backupKeep);
+      backups.sync(entryKey(gameEntry), "removed", backupKeep);
+    } catch (const std::exception &) {
+    }
+  }
   model.remove(gameEntry, removeFiles, removeUnpacked);
   gameOptions = false;
   page = Page::Home;
@@ -1089,13 +1115,16 @@ void UI::gameAction(Button b) {
     case 6:
       openPage(Page::GameInfo);
       break;
-    case 8:
-      openRemove();
+    case 7:
+      openSaves(entryKey(gameEntry), false);
       break;
     case 9:
+      openRemove();
+      break;
+    case 10:
       openFreeZip();
       break;
-    case 7:
+    case 8:
       if (offerRescue(gameEntry, gameMenuSource, false))
         break;
       startGame(gameEntry);
@@ -1572,9 +1601,10 @@ void UI::changeDisplay(int step, bool reset) {
                 : tr("Display settings saved for the next game launch.");
 }
 void UI::changeMetrics(int step, bool reset) {
-  if (setting == 1 || setting == 2) {
-    // Fast forward (L+R in game) and crash rescue: on unless switched off.
-    const char *key = setting == 1 ? "fastForward" : "crashRescue";
+  if (setting == 1 || setting == 2 || setting == 3) {
+    // Fast forward (L+R in game), crash rescue and save backups: on unless
+    // switched off.
+    const char *key = setting == 1 ? "fastForward" : setting == 2 ? "crashRescue" : "saveBackups";
     auto found = displayValues.as_object().find(key);
     bool on = found == displayValues.as_object().end() || !found->second.is_boolean() ||
               found->second.as_boolean();
@@ -1585,7 +1615,9 @@ void UI::changeMetrics(int step, bool reset) {
       model.changeDisplay(key, value);
     displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
     message = gameOptions ? trf(inGame ? "Saved for {}. Applied now." : "Saved for {}. Applies on next launch.", {gameEntry.name})
-                          : tr(setting == 1 ? "Fast forward saved for the next game launch." : "Crash rescue saved for the next game launch.");
+                          : tr(setting == 1   ? "Fast forward saved for the next game launch."
+                               : setting == 2 ? "Crash rescue saved for the next game launch."
+                                              : "Save backups saved for the next game launch.");
     return;
   }
   auto i = displayValues.as_object().find("performanceMetrics");
@@ -1763,6 +1795,10 @@ void UI::openSetting() {
       return;
     }
     if (setting == 11) {
+      openBackups();
+      return;
+    }
+    if (setting == 12) {
       exitRequested = true;
       return;
     }
@@ -1877,6 +1913,7 @@ void UI::startGame(const Entry &chosen) {
   auto request = model.launch(chosen, [this](uint64_t done, uint64_t total) {
     progress(done, total);
   }, [this](const std::string &label) { preparation(label); });
+  prepareBackups(chosen);
   launchFormat = chosen.version;
   setLaunchExecutable(request);
   launchRequested = true;
@@ -1899,6 +1936,7 @@ void UI::play(size_t index) {
     auto request = model.launch(chosen, [this](uint64_t done, uint64_t total) {
       progress(done, total);
     }, [this](const std::string &label) { preparation(label); });
+    prepareBackups(chosen);
     model.recordLaunch(entryKey(e));
     launchFormat = chosen.version;
     setLaunchExecutable(request);
@@ -1968,6 +2006,10 @@ void UI::action(Button b) {
     }
     if (browser) {
       browserAction(b);
+      return;
+    }
+    if (savesPage()) {
+      savesAction(b);
       return;
     }
     if (gameOptions) { gameAction(b); return; }
@@ -2069,5 +2111,305 @@ void UI::action(Button b) {
     launchingName.clear();
     message = e.what();
   }
+}
+// Save backups.
+std::string UI::gameFolderOf(const Entry &e) const {
+  if (e.node.archive)
+    return model.paths.at("cache/zip-" + key(e.node.identity(model.paths)));
+  return e.node.path();
+}
+std::string UI::saveFolderOf(const Entry &e) const {
+  return e.version == 4 ? model.paths.at("saves/easyrpg/" + key(e.node.identity(model.paths))) : std::string();
+}
+bool UI::backupsEnabled(const Entry &e) const {
+  try {
+    auto values = model.gameSettings(e);
+    auto i = values.as_object().find("saveBackups");
+    return i == values.as_object().end() || !i->second.is_boolean() || i->second.as_boolean();
+  } catch (const std::exception &) {
+    return true;
+  }
+}
+void UI::prepareBackups(const Entry &chosen) {
+  try {
+    if (waitBackground)
+      waitBackground();
+    auto k = entryKey(chosen);
+    backups.record(k, chosen.name, chosen.version, gameFolderOf(chosen), saveFolderOf(chosen), backupsEnabled(chosen),
+                   backupKeep);
+    backups.markRunning(k);
+    // EasyRPG has no save hook: its saves are copied before it starts.
+    if (chosen.version == 4)
+      backups.sync(k, "library", backupKeep);
+  } catch (const std::exception &) {
+    // A backup never stops a game from starting.
+  }
+}
+void UI::syncReturnedGame() {
+  try {
+    auto k = backups.takeRunning();
+    if (!k.empty())
+      backups.sync(k, "library");
+  } catch (const std::exception &) {
+  }
+}
+std::vector<std::pair<UI::SaveRow, int>> UI::saveRows() const {
+  std::vector<std::pair<SaveRow, int>> out;
+  if (!adoptFrom.empty())
+    out.push_back({AdoptRow, 0});
+  int missing = 0;
+  for (size_t i = 0; i < saveSlots.size(); ++i) {
+    out.push_back({SlotRow, int(i)});
+    missing += !saveSlots[i].present && !saveSlots[i].versions.empty() && !saveSlots[i].target.empty();
+  }
+  if (backupGame.installed) {
+    out.push_back({BackUpRow, 0});
+    if (missing)
+      out.push_back({RestoreMissingRow, missing});
+  } else if (!saveSlots.empty())
+    out.push_back({ForgetRow, 0});
+  return out;
+}
+std::vector<SaveVersion> UI::shownVersions() const {
+  std::vector<SaveVersion> out;
+  if (slotIndex < 0 || slotIndex >= int(saveSlots.size()))
+    return out;
+  auto &slot = saveSlots[slotIndex];
+  for (auto &v : slot.versions)
+    if (!(slot.present && v.saved == slot.now.saved && v.size == slot.now.size))
+      out.push_back(v);
+  return out;
+}
+bool UI::restoreReplacesNewer() const {
+  auto list = shownVersions();
+  if (slotIndex >= int(saveSlots.size()) || versionIndex >= int(list.size()))
+    return false;
+  auto &slot = saveSlots[slotIndex];
+  return slot.present && slot.now.saved > list[versionIndex].saved;
+}
+int UI::saveRowsCount() const {
+  return page == Page::Backups        ? int(backupGames.size()) + 1
+         : page == Page::Saves        ? int(saveRows().size())
+         : page == Page::SaveVersions ? int(shownVersions().size())
+                                      : 2;
+}
+void UI::refreshSaves() {
+  backupGame = backups.game(backupKey);
+  saveSlots = backups.slots(backupKey);
+  if (!savesFromSettings && gameOptions) {
+    backupGame.name = gameEntry.name;
+    backupGame.installed = true;
+  }
+  slotIndex = std::max(0, std::min(slotIndex, int(saveSlots.size()) - 1));
+}
+void UI::openSaves(const std::string &k, bool fromSettings) {
+  if (waitBackground)
+    waitBackground();
+  backupKey = k;
+  savesFromSettings = fromSettings;
+  adoptFrom.clear();
+  message.clear();
+  int copied = 0;
+  try {
+    if (!fromSettings) {
+      backups.record(k, gameEntry.name, gameEntry.version, gameFolderOf(gameEntry), saveFolderOf(gameEntry),
+                     backupsEnabled(gameEntry), backupKeep);
+      copied = backups.sync(k, "library", backupKeep);
+    } else if (backups.game(k).installed)
+      copied = backups.sync(k, "library");
+  } catch (const std::exception &e) {
+    message = e.what();
+  }
+  refreshSaves();
+  // The same game added again from somewhere else: offer its old backups.
+  if (!fromSettings && saveSlots.empty()) {
+    auto folder = gameFolderOf(gameEntry);
+    auto base = folder.substr(folder.find_last_of('/') + 1);
+    for (auto &g : backups.games()) {
+      auto oldBase = g.folder.substr(g.folder.find_last_of('/') + 1);
+      if (g.key != k && !g.installed && g.engine == gameEntry.version && (g.name == gameEntry.name || oldBase == base)) {
+        adoptFrom = g.key;
+        break;
+      }
+    }
+  }
+  if (!fromSettings)
+    gameSetting = setting;
+  else
+    backupsSetting = setting;
+  page = Page::Saves;
+  focus = Focus::Settings;
+  setting = settingFirst = 0;
+  slotIndex = 0;
+  if (copied && message.empty())
+    message = copied == 1 ? tr("1 save copied to its backups.") : trf("{} saves copied to their backups.", {std::to_string(copied)});
+}
+void UI::openBackups() {
+  if (waitBackground)
+    waitBackground();
+  backupGames = backups.games();
+  page = Page::Backups;
+  focus = Focus::Settings;
+  savesFromSettings = true;
+  setting = std::max(0, std::min(backupsSetting, int(backupGames.size())));
+  settingFirst = std::max(0, setting - 4);
+  message.clear();
+}
+void UI::savesAction(Button b) {
+  int count = saveRowsCount();
+  auto back = [&] {
+    message.clear();
+    if (page == Page::SaveConfirm) {
+      bool version = saveQuestion == RestoreVersion || saveQuestion == DeleteVersion;
+      page = version ? Page::SaveVersions : Page::Saves;
+      setting = version ? versionIndex : savesSetting;
+    } else if (page == Page::SaveVersions) {
+      page = Page::Saves;
+      setting = savesSetting;
+    } else if (page == Page::Saves && savesFromSettings) {
+      openBackups();
+      return;
+    } else if (page == Page::Saves) {
+      page = Page::Game;
+      setting = gameSetting;
+    } else {
+      page = Page::Home;
+      setting = 11;
+    }
+    if (savesPage())
+      setting = std::max(0, std::min(setting, saveRowsCount() - 1));
+    settingFirst = std::max(0, setting - (savesPage() ? 4 : 6));
+  };
+  if (b == Button::Circle) {
+    back();
+    return;
+  }
+  if (b == Button::Up || b == Button::Down) {
+    move(setting, settingFirst, count, page == Page::SaveConfirm ? 7 : 5, b == Button::Up ? -1 : 1);
+    message.clear();
+    return;
+  }
+  auto ask = [&](SaveQuestion q, int focusRow) {
+    saveQuestion = q;
+    page = Page::SaveConfirm;
+    setting = focusRow;
+    settingFirst = 0;
+    message.clear();
+  };
+  if (page == Page::Backups) {
+    bool keepRow = setting >= int(backupGames.size());
+    if (keepRow && (b == Button::Cross || b == Button::Left || b == Button::Right)) {
+      int n = 4, at = 1;
+      for (int i = 0; i < n; ++i)
+        if (SaveBackups::keepChoices[i] == backupKeep)
+          at = i;
+      at = (at + (b == Button::Left ? n - 1 : 1)) % n;
+      backupKeep = SaveBackups::keepChoices[at];
+      savePreferences();
+      message = trf("Up to {} versions of each save are kept from the next save on.", {std::to_string(backupKeep)});
+    } else if (!keepRow && b == Button::Cross)
+      openSaves(backupGames[setting].key, true);
+    return;
+  }
+  if (page == Page::Saves) {
+    auto rows = saveRows();
+    if (b != Button::Cross || setting >= int(rows.size()))
+      return;
+    savesSetting = setting;
+    auto r = rows[setting];
+    if (r.first == AdoptRow)
+      ask(AdoptBackups, 1);
+    else if (r.first == SlotRow) {
+      slotIndex = r.second;
+      page = Page::SaveVersions;
+      setting = settingFirst = 0;
+      message.clear();
+    } else if (r.first == BackUpRow) {
+      int copied = backups.sync(backupKey, "manual", backupKeep);
+      refreshSaves();
+      message = copied == 0   ? tr("Every save already has a backup.")
+                : copied == 1 ? tr("1 save copied to its backups.")
+                              : trf("{} saves copied to their backups.", {std::to_string(copied)});
+    } else if (r.first == RestoreMissingRow)
+      ask(RestoreMissing, 1);
+    else
+      ask(ForgetGame, 0);
+    return;
+  }
+  if (page == Page::SaveVersions) {
+    if (setting >= count)
+      return;
+    versionIndex = setting;
+    if (b == Button::Square)
+      ask(DeleteVersion, 0);
+    else if (b == Button::Cross) {
+      if (!backupGame.installed)
+        message = tr("Add the game to the library again to restore its saves.");
+      else
+        ask(RestoreVersion, restoreReplacesNewer() ? 0 : 1);
+    }
+    return;
+  }
+  // The question: Cancel, or do it.
+  if (b != Button::Cross)
+    return;
+  if (setting == 0) {
+    back();
+    return;
+  }
+  auto list = shownVersions();
+  bool hasVersion = versionIndex < int(list.size()) && slotIndex < int(saveSlots.size());
+  switch (saveQuestion) {
+  case RestoreVersion:
+    if (!hasVersion)
+      break;
+    {
+      bool present = saveSlots[slotIndex].present;
+      backups.restore(backupKey, saveSlots[slotIndex], list[versionIndex]);
+      refreshSaves();
+      page = Page::Saves;
+      setting = savesSetting;
+      message = tr(present ? "Save restored. The one it replaced is kept as a backup." : "Save restored.");
+    }
+    break;
+  case DeleteVersion:
+    if (!hasVersion)
+      break;
+    backups.drop(list[versionIndex]);
+    refreshSaves();
+    page = Page::SaveVersions;
+    setting = std::max(0, std::min(versionIndex, saveRowsCount() - 1));
+    message = tr("Backup deleted.");
+    break;
+  case ForgetGame:
+    backups.forget(backupKey);
+    backupsSetting = 0;
+    openBackups();
+    message = tr("Backups deleted.");
+    return;
+  case RestoreMissing: {
+    int restored = 0;
+    for (auto &slot : saveSlots)
+      if (!slot.present && !slot.versions.empty() && !slot.target.empty()) {
+        backups.restore(backupKey, slot, slot.versions.front());
+        ++restored;
+      }
+    refreshSaves();
+    page = Page::Saves;
+    setting = 0;
+    message = restored == 1 ? tr("1 save restored.") : trf("{} saves restored.", {std::to_string(restored)});
+    break;
+  }
+  case AdoptBackups:
+    backups.adopt(adoptFrom, backupKey);
+    adoptFrom.clear();
+    refreshSaves();
+    page = Page::Saves;
+    setting = 0;
+    message = tr("The earlier copy's saves are now this game's.");
+    break;
+  }
+  setting = std::max(0, std::min(setting, saveRowsCount() - 1));
+  settingFirst = std::max(0, setting - 4);
 }
 } // namespace hardrpg

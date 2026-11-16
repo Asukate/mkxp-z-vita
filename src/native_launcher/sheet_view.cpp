@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <ctime>
 
 namespace hardrpg {
@@ -306,10 +307,16 @@ void View::buildSheet(const UI &u) {
     const char *modes[] = {"Off", "FPS", "FPS and frame timing", "Full stats"};
     row(Row::Choice, "Overlay in game", modes[mode]);
     row(Row::Toggle, "Fast forward with <l>+<r>", "", boolean("fastForward", true));
-    if (u.metricsRows() > 2)
+    if (u.metricsRows() > 2) {
       row(Row::Toggle, "Crash rescue", "", boolean("crashRescue", true));
+      row(Row::Toggle, "Save backups", "", boolean("saveBackups", true));
+    }
     focusRow = u.setting;
-    if (u.setting == 2)
+    if (u.setting == 3)
+      notes = {tr("Keeps the save a game replaces, outside the game folder, so an overwritten save can be put back and "
+                  "removing a game keeps its saves."),
+               tr(u.gameOptions && !u.inGame ? "The saves are on this game's page, Saves." : "The saves are in Settings, Save backups.")};
+    else if (u.setting == 2)
       notes = {tr("Keeps a quick copy of the game at map changes and battle starts, where crashes usually happen. "
                   "If the game stops (an error, a closed app, a power loss), starting it again offers to resume there."),
                tr(u.inGame ? "Your save files are never changed. Saving in the game drops the copy."
@@ -462,6 +469,160 @@ void View::buildSheet(const UI &u) {
     left = {hint("btn-cross-26", "Open", Button::Cross),
             hint("btn-square-26", rtp || folder ? "Use this folder" : "Add games here", Button::Square), back};
     right = {{"START", tr("Close"), Button::Start}};
+  } else if (u.savesPage()) {
+    // Save backups (save_backups.h): a game's saves, one save's versions,
+    // a question before anything is replaced or deleted, and Settings' list.
+    rowH = rtpRowH;
+    shown = 5;
+    first = u.settingFirst;
+    focusRow = u.setting;
+    auto played = [](int64_t seconds) {
+      char text[24];
+      std::snprintf(text, sizeof text, "%d:%02d", int(seconds / 3600), int(seconds / 60 % 60));
+      return trf("{} played", {text});
+    };
+    auto describe = [&](const SaveVersion &v, bool when) {
+      std::vector<std::string> parts;
+      if (when)
+        parts.push_back(backupTime(v.saved));
+      if (!v.mapName.empty())
+        parts.push_back(v.mapName);
+      if (!v.leader.empty())
+        parts.push_back(v.level > 0 ? trf("{}, level {}", {v.leader, std::to_string(v.level)}) : v.leader);
+      if (v.playtime > 0)
+        parts.push_back(played(v.playtime));
+      std::string out;
+      for (auto &p : parts)
+        out += (out.empty() ? "" : " \xc2\xb7 ") + p;
+      return out;
+    };
+    auto why = [](const std::string &w) {
+      return tr(w == "save"      ? "Replaced by a save in the game"
+                : w == "manual"  ? "Backed up by hand"
+                : w == "restore" ? "Kept before a restore"
+                : w == "removed" ? "Kept when the game was removed"
+                                 : "Copied by the launcher");
+    };
+    auto slotName = [](const SaveSlot &slot) {
+      return slot.number >= 0 ? trf("Slot {}", {std::to_string(slot.number)}) : slot.name;
+    };
+    auto count = [](size_t n) { return n == 1 ? tr("1 backup") : trf("{} backups", {std::to_string(n)}); };
+    const auto &g = u.backupGame;
+    section = tr(u.savesFromSettings || u.page == Page::Backups ? "Save backups" : "Game settings");
+    if (u.page == Page::Backups) {
+      section = tr("Settings");
+      title = tr("Save backups");
+      int64_t total = 0;
+      for (auto &b : u.backupGames)
+        total += b.bytes;
+      subtitle = u.backupGames.empty() ? "" : trf("{} on the memory card", {backupSize(total)});
+      for (auto &b : u.backupGames) {
+        row(Row::Nav, "", b.installed ? backupSize(b.bytes) : trf("Not in library \xc2\xb7 {}", {backupSize(b.bytes)}));
+        rows.back().label = b.name;
+        rows.back().detail = b.installed ? trf("{} saves \xc2\xb7 newest {}", {std::to_string(b.slots), backupTime(b.newest)})
+                                         : trf("Was in {}", {tail(b.folder, 70)});
+      }
+      row(Row::Choice, "Versions kept per save", std::to_string(u.backupKeep));
+      notes = {tr(u.backupGames.empty() ? "No backups yet. A copy is kept each time a game replaces a save."
+                                        : "Games removed from the library keep their saves here. Add the game back in "
+                                          "the same folder and they return to it.")};
+      left = {u.setting < int(u.backupGames.size()) ? hint("btn-cross-26", "Open", Button::Cross)
+                                                    : hint("btn-cross-26", "Change", Button::Cross),
+              back};
+    } else if (u.page == Page::Saves) {
+      title = tr("Saves");
+      subtitle = g.name;
+      for (auto &r : u.saveRows()) {
+        if (r.first == UI::AdoptRow) {
+          row(Row::Action, "Use saves from an earlier copy");
+          rows.back().detail = tail(u.backups.game(u.adoptFrom).folder, 70);
+        } else if (r.first == UI::SlotRow) {
+          auto &slot = u.saveSlots[r.second];
+          size_t kept = 0;
+          for (auto &v : slot.versions)
+            kept += !(slot.present && v.saved == slot.now.saved && v.size == slot.now.size);
+          bool current = kept < slot.versions.size();
+          row(Row::Nav, "", !slot.present ? tr("Backup only")
+                            : kept       ? count(kept)
+                            : current    ? tr("Backed up")
+                                         : tr("No backup yet"));
+          rows.back().label = slotName(slot);
+          rows.back().detail = slot.present ? describe(slot.now, true)
+                               : g.installed ? tr("Missing from the game")
+                                             : describe(slot.versions.front(), true);
+        } else if (r.first == UI::BackUpRow)
+          row(Row::Action, "Back up now");
+        else if (r.first == UI::RestoreMissingRow) {
+          row(Row::Action, "");
+          rows.back().label = trf("Restore missing saves ({})", {std::to_string(r.second)});
+        } else
+          row(Row::Danger, "Delete all backups of this game");
+      }
+      if (u.saveSlots.empty())
+        notes.push_back(tr("No saves found yet. A copy is kept each time the game replaces a save."));
+      if (g.installed)
+        notes.push_back(tr("A copy of a save is kept each time the game replaces it, and when you come back to the library."));
+      else
+        notes.push_back(tr("This game is not in the library. Add it back in the same folder and its saves return to it."));
+      left = {hint("btn-cross-26", "Open", Button::Cross), back};
+    } else if (u.page == Page::SaveVersions && u.slotIndex < int(u.saveSlots.size())) {
+      auto &slot = u.saveSlots[u.slotIndex];
+      title = slotName(slot);
+      subtitle = slot.present ? trf("Now: {}", {describe(slot.now, true)}) : tr("Missing from the game");
+      auto list = u.shownVersions();
+      for (auto &v : list) {
+        row(Row::Nav, "", backupSize(v.size));
+        rows.back().label = backupTime(v.saved);
+        auto info = describe(v, false);
+        rows.back().detail = why(v.why) + (info.empty() ? "" : " \xc2\xb7 " + info);
+      }
+      if (list.empty())
+        notes = {tr("No earlier versions of this save are kept yet.")};
+      else if (!g.installed)
+        notes = {tr("Add the game to the library again to restore its saves.")};
+      left = {hint("btn-cross-26", "Restore", Button::Cross), hint("btn-square-26", "Delete", Button::Square), back};
+    } else if (u.page == Page::SaveConfirm) {
+      rowH = sheetRowH;
+      shown = sheetRows;
+      first = 0;
+      auto q = u.saveQuestion;
+      const SaveSlot *slot = u.slotIndex < int(u.saveSlots.size()) ? &u.saveSlots[u.slotIndex] : nullptr;
+      auto list = u.shownVersions();
+      const SaveVersion *v = u.versionIndex < int(list.size()) ? &list[u.versionIndex] : nullptr;
+      subtitle = slot && (q == UI::RestoreVersion || q == UI::DeleteVersion) ? slotName(*slot) + " \xc2\xb7 " + g.name : g.name;
+      const char *yes = "Restore";
+      if (q == UI::RestoreVersion) {
+        title = tr(u.restoreReplacesNewer() ? "Replace a newer save?" : "Restore this save?");
+        if (slot && slot->present)
+          notes.push_back(trf(u.restoreReplacesNewer() ? "In the game now (newer): {}" : "In the game now: {}",
+                              {describe(slot->now, true)}));
+        if (v)
+          notes.push_back(trf("Backup to restore: {}", {describe(*v, true)}));
+        if (slot && slot->present)
+          notes.push_back(tr("The save in the game is kept as a backup, so you can switch back."));
+      } else if (q == UI::DeleteVersion) {
+        title = tr("Delete this backup?");
+        yes = "Delete";
+        if (v)
+          notes = {describe(*v, true), tr("This cannot be undone.")};
+      } else if (q == UI::ForgetGame) {
+        title = tr("Delete all backups of this game?");
+        yes = "Delete all";
+        notes = {trf("{} saves \xc2\xb7 {}", {std::to_string(g.slots), backupSize(g.bytes)}), tr("This cannot be undone.")};
+      } else if (q == UI::RestoreMissing) {
+        title = tr("Restore the missing saves?");
+        notes = {tr("The newest backup of each save the game does not have goes back into the game.")};
+      } else {
+        title = tr("Use the saves from an earlier copy?");
+        yes = "Use them";
+        auto other = u.backups.game(u.adoptFrom);
+        notes = {trf("Backups of {} from {}.", {other.name, tail(other.folder, 60)}),
+                 tr("They move to this copy of the game.")};
+      }
+      row(Row::Plain, "Cancel");
+      row(q == UI::DeleteVersion || q == UI::ForgetGame ? Row::Danger : Row::Primary, yes);
+      left = {hint("btn-cross-26", "Choose", Button::Cross), hint("btn-circle-26", "Cancel", Button::Circle)};
+    }
   } else if (u.gameOptions) {
     section = tr("Game settings");
     topFocus = -1;
@@ -469,8 +630,8 @@ void View::buildSheet(const UI &u) {
       title = u.gameEntry.name;
       subtitle = engineLong(u.gameEntry.version);
       const char *names[] = {"Controls", "Display", "Audio and MIDI", "Performance and speed", "RTP locations",
-                             "Rename", "Game information", "Play", "Remove from library", "Delete the ZIP, keep the game"};
-      Row::Kind kinds[] = {Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Action, Row::Nav, Row::Primary, Row::Danger, Row::Danger};
+                             "Rename", "Game information", "Saves", "Play", "Remove from library", "Delete the ZIP, keep the game"};
+      Row::Kind kinds[] = {Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Action, Row::Nav, Row::Nav, Row::Primary, Row::Danger, Row::Danger};
       // Over a running game: resume, the settings that apply at once, leave.
       const char *playing[] = {"Resume", "Controls", "Display", "Audio", "Performance and speed", "Cheats", "Back to library"};
       // Resume is a row like the others: only the focus is ruby.
@@ -636,6 +797,8 @@ void View::buildSheet(const UI &u) {
                tr(zipOnly ? "Saves and settings stay: they are in the unpacked copy."
                   : copy  ? "The unpacked copy holds the game's saves. This cannot be undone."
                           : "Saves kept inside the game files go with them. This cannot be undone.")};
+      if (!zipOnly)
+        notes.push_back(tr("A copy of its saves stays in Settings, Save backups."));
       left = {hint("btn-cross-26", "Answer", Button::Cross), hint("btn-circle-26", "Cancel", Button::Circle)};
     } else if (u.page == Page::GameInfo) {
       title = tr("Game information");
@@ -805,6 +968,7 @@ void View::buildSheet(const UI &u) {
                              : u.menuSounds              ? "Menu sounds only"
                              : u.themeMusic              ? "Title music only"
                                                          : "Off");
+      row(Row::Nav, "Save backups");
       row(Row::Action, "Exit HardRPG");
       focusRow = u.setting;
       first = u.settingFirst;

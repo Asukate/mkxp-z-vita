@@ -534,6 +534,8 @@ int main(int argc, char **argv) {
       ui.model.settleActivity(returning);
       ui.loadHome();
     }
+    // As the Vita does once the library shows (there on a worker thread).
+    ui.syncReturnedGame();
     ui.batteryPercent = battery;
     if (welcome != "auto")
       ui.welcome.active = false;
@@ -794,6 +796,58 @@ int main(int argc, char **argv) {
     state.as_object()["welcomeSlide"] = ui.welcome.slide;
     state.as_object()["welcomeSeen"] = ui.welcomeSeen;
     state.as_object()["autoGameInfo"] = ui.autoGameInfo;
+    {
+      // Save backups: the pages' state and what is on disk for the open game.
+      auto saves = object();
+      auto &o = saves.as_object();
+      o["key"] = ui.backupKey;
+      o["installed"] = ui.backupGame.installed;
+      o["keep"] = ui.backupKeep;
+      o["question"] = int(ui.saveQuestion);
+      o["slotIndex"] = ui.slotIndex;
+      o["adoptFrom"] = ui.adoptFrom;
+      auto version = [](const SaveVersion &v) {
+        auto j = object();
+        j.as_object()["why"] = v.why;
+        j.as_object()["saved"] = Json::integer_type(v.saved);
+        j.as_object()["size"] = Json::integer_type(v.size);
+        j.as_object()["map"] = v.mapName;
+        return j;
+      };
+      auto slots = array();
+      for (auto &s : ui.saveSlots) {
+        auto j = object();
+        j.as_object()["name"] = s.name;
+        j.as_object()["number"] = s.number;
+        j.as_object()["present"] = s.present;
+        j.as_object()["target"] = s.target;
+        auto versions = array();
+        for (auto &v : s.versions)
+          versions.as_array().push_back(version(v));
+        j.as_object()["versions"] = versions;
+        slots.as_array().push_back(j);
+      }
+      o["slots"] = slots;
+      auto shown = array();
+      for (auto &v : ui.shownVersions())
+        shown.as_array().push_back(version(v));
+      o["shown"] = shown;
+      auto rows = array();
+      for (auto &r : ui.saveRows())
+        rows.as_array().push_back(Json::integer_type(int(r.first)));
+      o["rows"] = rows;
+      auto games = array();
+      for (auto &g : ui.backupGames) {
+        auto j = object();
+        j.as_object()["key"] = g.key;
+        j.as_object()["name"] = g.name;
+        j.as_object()["installed"] = g.installed;
+        j.as_object()["slots"] = g.slots;
+        games.as_array().push_back(j);
+      }
+      o["games"] = games;
+      state.as_object()["saves"] = saves;
+    }
     std::cout << state.stringify() << "\n";
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

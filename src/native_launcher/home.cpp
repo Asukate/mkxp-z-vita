@@ -260,6 +260,10 @@ void UI::loadHome() {
       };
       level("menuSoundVolume", effectsVolume);
       level("musicVolume", musicVolume);
+      if (o.count("saveBackupVersions") && o.at("saveBackupVersions").is_integer())
+        for (int k : SaveBackups::keepChoices)
+          if (k == o.at("saveBackupVersions").as_integer())
+            backupKeep = k;
     }
   } catch (...) {
     // A damaged file only loses the preferences.
@@ -283,6 +287,7 @@ void UI::savePreferences() {
   o["menuSoundVolume"] = Json::integer_type(effectsVolume);
   o["themeMusic"] = themeMusic;
   o["musicVolume"] = Json::integer_type(musicVolume);
+  o["saveBackupVersions"] = Json::integer_type(backupKeep);
   try {
     atomicWrite(model.paths.at("launcher-preferences.json"), prefs.stringify());
   } catch (const std::exception &e) {

@@ -102,7 +102,15 @@ module HardRPGSafeSave
         File.rename(old, target) if File.exist?(old) && !File.exist?(target)
         raise
       end
-      File.delete(old) rescue nil
+      retire(old, target)
+    end
+
+    # The replaced save, once the new one is in place (old may not exist: a
+    # first save). save_backup.rb keeps it as a backup; here it goes.
+    def retire(old, _target)
+      File.delete(old) if File.exist?(old)
+    rescue SystemCallError
+      nil
     end
 
     # A slot whose new file never arrived gets its old file back; temp files

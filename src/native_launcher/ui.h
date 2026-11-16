@@ -2,6 +2,7 @@
 #include "art_fetch.h"
 #include "i18n.h"
 #include "model.h"
+#include "save_backups.h"
 #include "sounds.h"
 #include "update_check.h"
 #include <map>
@@ -43,7 +44,11 @@ enum class Page {
   Keys, // artwork source keys
   Sound,
   Rescue, // a game left a crash rescue: resume from it, start normally, discard
-  Cheats  // over a running game: the game's script owns these pages (see UI::cheat)
+  Cheats,  // over a running game: the game's script owns these pages (see UI::cheat)
+  Saves,        // a game's backed up saves, one row per save file
+  SaveVersions, // the kept versions of one save file
+  SaveConfirm,  // restore, delete or adopt, asked first
+  Backups       // Settings: every game with backups, installed or not
 };
 enum class BrowseMode { Games, Rtp, Folder };
 // The home screen: a centred cover carousel over the library, with an
@@ -263,7 +268,7 @@ public:
   int gameSetting = 0;
   // The last row, deleting the ZIP of an unpacked ZIP game, shows only then.
   bool canFreeZip = false;
-  int gameOptionsCount() const { return inGame ? (cheat ? 7 : 6) : canFreeZip ? 10 : 9; }
+  int gameOptionsCount() const { return inGame ? (cheat ? 7 : 6) : canFreeZip ? 11 : 10; }
   // Cheats over a running game. The engine's script owns the pages and rows
   // (launcher/cheats.rb for XP/VX/VX Ace/Essentials, launcher/cheats.js for
   // MV/MZ): cheat sends it a button ("open", "back", "cross", "left",
@@ -290,7 +295,7 @@ public:
   void openCheats();
   void cheatRequest(const char *cmd, int row);
   // PC-98 games have no crash rescue (their runtimes keep no quick save).
-  int metricsRows() const { return gameOptions && gameEntry.version == formatPC98 ? 2 : 3; }
+  int metricsRows() const { return gameOptions && gameEntry.version == formatPC98 ? 2 : 4; }
   // The menu opened over a running game (L+R+Start or the corner icon): the
   // game's page with Resume, Controls, Display, Audio, Performance and speed
   // and Back to library. Its changes apply at once (see inGameChanged).
@@ -325,6 +330,45 @@ public:
   void setLaunchExecutable(const Json &request);
   // Rows on the current page of the game settings.
   int optionRows() const;
+  // Save backups (see save_backups.h). The Saves pages open from a game's
+  // page or from Settings, Save backups; restoring needs the game in the
+  // library.
+  SaveBackups backups;
+  int backupKeep = SaveBackups::defaultKeep; // versions kept per save (launcher preference)
+  std::string backupKey, adoptFrom;
+  BackupGame backupGame;
+  std::vector<SaveSlot> saveSlots;
+  std::vector<BackupGame> backupGames;
+  int slotIndex = 0, versionIndex = 0, backupsSetting = 0, savesSetting = 0;
+  bool savesFromSettings = false;
+  enum SaveRow { AdoptRow, SlotRow, BackUpRow, RestoreMissingRow, ForgetRow };
+  std::vector<std::pair<SaveRow, int>> saveRows() const;
+  // The versions of the chosen slot shown on its page: a copy of the file the
+  // game has now is left out while the game has it.
+  std::vector<SaveVersion> shownVersions() const;
+  enum SaveQuestion { RestoreVersion, DeleteVersion, ForgetGame, RestoreMissing, AdoptBackups };
+  SaveQuestion saveQuestion = RestoreVersion;
+  bool restoreReplacesNewer() const;
+  int saveRowsCount() const;
+  void openSaves(const std::string &key, bool fromSettings);
+  void openBackups();
+  void refreshSaves();
+  void savesAction(Button);
+  bool savesPage() const {
+    return page == Page::Saves || page == Page::SaveVersions || page == Page::SaveConfirm || page == Page::Backups;
+  }
+  // The game's folder as the engine runs it, and its EasyRPG save folder.
+  std::string gameFolderOf(const Entry &) const;
+  std::string saveFolderOf(const Entry &) const;
+  bool backupsEnabled(const Entry &) const;
+  // Records the game being started and keeps its EasyRPG saves; never stops
+  // a launch.
+  void prepareBackups(const Entry &chosen);
+  // The game played last: its changed saves are copied in (the host runs
+  // this on a worker thread after the library shows).
+  void syncReturnedGame();
+  // Waits for that worker; set by the host. Unset: nothing runs in the background.
+  std::function<void()> waitBackground;
   ControlProfile controls;
   ControlState controlsTestState;
   ControlSample controlsSample;
@@ -475,7 +519,7 @@ public:
   // Touch on the sheets (every screen but home).
   void sheetTouch(int x, int y);
   // Rows on the settings page; the last is Exit.
-  int settingsRows() const { return 12; }
+  int settingsRows() const { return 13; }
   // Rows on the Sound page.
   static constexpr int soundRows = 4;
   void changeSound(int step, bool reset = false);
