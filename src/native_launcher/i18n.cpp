@@ -160,6 +160,24 @@ const Text table[] = {
     {"Fit screen", "Ajustar a pantalla", "Ajustar à tela"},
     {"Whole pixels", "Píxeles enteros", "Pixels inteiros"},
     {"Custom", "Personalizado", "Personalizado"},
+    {"Image quality", "Calidad de imagen", "Qualidade de imagem"},
+    {"16-bit (recommended)", "16 bits (recomendado)", "16 bits (recomendado)"},
+    {"32-bit (more memory)", "32 bits (más memoria)", "32 bits (mais memória)"},
+    {"16-bit keeps game pictures in half the video memory, with a fine dither that is hard to see on the Vita screen. "
+     "Recommended for every game.",
+     "16 bits guarda las imágenes del juego en la mitad de memoria de vídeo, con un tramado fino que casi no se ve en "
+     "la pantalla de la Vita. Recomendado para todos los juegos.",
+     "16 bits guarda as imagens do jogo na metade da memória de vídeo, com um pontilhado fino que quase não se vê na "
+     "tela do Vita. Recomendado para todos os jogos."},
+    {"32-bit keeps every colour exact but needs twice the memory: bigger games can run out of it and crash. Only use "
+     "it if a game looks wrong in 16-bit.",
+     "32 bits mantiene cada color exacto pero necesita el doble de memoria: los juegos grandes pueden quedarse sin ella "
+     "y cerrarse. Úsalo solo si un juego se ve mal en 16 bits.",
+     "32 bits mantém cada cor exata, mas precisa do dobro da memória: jogos maiores podem ficar sem ela e travar. Use "
+     "só se um jogo ficar errado em 16 bits."},
+    {"Used by games without settings of their own. Applies the next time a game starts.",
+     "Lo usan los juegos sin ajustes propios. Se aplica la próxima vez que se inicie un juego.",
+     "Usado pelos jogos sem ajustes próprios. Vale na próxima vez que um jogo iniciar."},
     {"Saved for this game. <square> Square goes back to the default for every game.",
      "Guardado para este juego. <square> Cuadrado vuelve al ajuste de todos los juegos.",
      "Salvo para este jogo. <square> Quadrado volta ao padrão de todos os jogos."},

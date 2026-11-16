@@ -165,9 +165,19 @@ void View::buildSheet(const UI &u) {
       }
       row(Row::Choice, labels[i], custom ? "Custom" : i == 2 ? filterNames[value] : names[i][value]);
     }
+    auto depth = values().find("textureDepth");
+    bool full = depth != values().end() && depth->second.is_integer() && depth->second.as_integer() == 32;
+    row(Row::Choice, "Image quality", full ? "32-bit (more memory)" : "16-bit (recommended)");
     focusRow = u.setting;
     notes = {tr(u.gameOptions ? "Saved for this game. <square> Square goes back to the default for every game."
                               : "Used by games without settings of their own.")};
+    if (u.setting == 3)
+      notes = {tr("16-bit keeps game pictures in half the video memory, with a fine dither that is hard to see on the "
+                  "Vita screen. Recommended for every game."),
+               tr("32-bit keeps every colour exact but needs twice the memory: bigger games can run out of it and "
+                  "crash. Only use it if a game looks wrong in 16-bit."),
+               tr(u.gameOptions ? "Saved for this game; applies the next time it starts."
+                                : "Used by games without settings of their own. Applies the next time a game starts.")};
     left = {hint("btn-cross-26", "Change", Button::Cross), hint("btn-square-26", u.gameOptions ? "Use default" : "Reset", Button::Square), back};
   };
   auto metricsPage = [&] {

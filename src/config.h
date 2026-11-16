@@ -48,6 +48,9 @@ struct Config {
     /* HardRPG volume boost for this game, in percent (100 = off): the mixer's
      * listener gain, so a quiet game can go past its own maximum. */
     int audioBoost;
+    // Game images on the GPU: 16 = dithered 16-bit (default, half the
+    // memory), 32 = full 32-bit. Launcher: Display > Image quality.
+    int textureDepth;
     
     bool winResizable;
     bool fullscreen;

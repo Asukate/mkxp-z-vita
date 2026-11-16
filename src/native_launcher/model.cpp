@@ -1420,6 +1420,9 @@ void Model::changeDisplay(const std::string &name, const Json &value) {
   if (name == "performanceMetrics") {
     if (!value.is_integer() || value.as_integer() < 0 || value.as_integer() > 3)
       throw std::runtime_error("Invalid performance metrics mode");
+  } else if (name == "textureDepth") {
+    if (!value.is_integer() || (value.as_integer() != 16 && value.as_integer() != 32))
+      throw std::runtime_error("Invalid image quality");
   } else if ((name == "fixedAspectRatio" || name == "integerScalingActive" ||
               name == "fastForward" || name == "crashRescue")
           ? !value.is_boolean()
@@ -1450,7 +1453,8 @@ void Model::changeGameSetting(const Entry &entry, const std::string &name,
   bool boolean = name == "fixedAspectRatio" || name == "integerScalingActive" ||
                  name == "enableAudio" || name == "midiChorus" ||
                  name == "midiReverb" || name == "fastForward" || name == "crashRescue";
-  bool integer = name == "smoothScaling" || name == "performanceMetrics" || name == "audioBoost";
+  bool integer = name == "smoothScaling" || name == "performanceMetrics" || name == "audioBoost" ||
+                 name == "textureDepth";
   auto boostValid = [&] {
     return value.is_integer() && value.as_integer() == audioBoostValues[audioBoostIndex(value)];
   };
@@ -1458,6 +1462,8 @@ void Model::changeGameSetting(const Entry &entry, const std::string &name,
       (!reset && (boolean ? !value.is_boolean()
                   : name == "smoothScaling" ? filterIndex(value) < 0
                   : name == "audioBoost"    ? !boostValid()
+                  : name == "textureDepth"  ? !value.is_integer() || (value.as_integer() != 16 &&
+                                                                      value.as_integer() != 32)
                                             : !value.is_integer() || value.as_integer() < 0 ||
                                                   value.as_integer() > 3)))
     throw std::runtime_error("Invalid game setting.");

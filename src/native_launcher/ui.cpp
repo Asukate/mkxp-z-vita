@@ -29,7 +29,7 @@ void move(int &selection, int &first, int count, int rows, int step) {
     first = selection - rows + 1;
 }
 const char *const displayKeys[] = {"fixedAspectRatio", "integerScalingActive",
-                                   "smoothScaling"};
+                                   "smoothScaling", "textureDepth"};
 } // namespace
 
 // One input, one sound: the state before and after an input decides what
@@ -366,6 +366,7 @@ void UI::scroll(int rows) {
                : page == Page::Keys    ? keysRows
                 : page == Page::Sound   ? soundRows
                 : page == Page::Metrics ? 3
+                : page == Page::Display ? 4
                                         : 3;
     setting = std::max(0, std::min(setting + rows, std::max(0, count - 1)));
     settingFirst = std::max(0, std::min(settingFirst, setting));
@@ -524,7 +525,7 @@ void UI::sheetTouch(int x, int y) {
                 : page == Page::Keys    ? keysRows
                 : page == Page::Sound   ? soundRows
                 : page == Page::Updates ? 3
-                : page == Page::Display ? 3
+                : page == Page::Display ? 4
                 : page == Page::Metrics ? 3
                 : page == Page::Rtp     ? rtpPackCount
                 : page == Page::Folders ? 1 + int(gameFolders.size())
@@ -601,6 +602,7 @@ int UI::optionRows() const {
          : page == Page::Remove   ? 2
          : page == Page::Rescue   ? 3
          : page == Page::Audio    ? (inGame ? 1 : 4)
+         : page == Page::Display  ? 4
                                   : 3;
 }
 void UI::openRemove() {
@@ -1211,6 +1213,19 @@ void UI::openBrowser(BrowseMode mode) {
 }
 void UI::changeDisplay(int step, bool reset) {
   const auto k = displayKeys[setting];
+  if (setting == 3) {
+    // Image quality: 16-bit images (default) or 32-bit. Read when a game
+    // starts, so it never applies at once.
+    auto i = displayValues.as_object().find(k);
+    bool full = i != displayValues.as_object().end() && i->second.is_integer() && i->second.as_integer() == 32;
+    Json v(Json::integer_type(reset || full ? 16 : 32));
+    if (gameOptions) model.changeGameSetting(gameEntry, k, v, reset);
+    else model.changeDisplay(k, v);
+    displayValues = gameOptions ? model.gameSettings(gameEntry) : model.display();
+    message = gameOptions ? trf("Saved for {}. Applies on next launch.", {gameEntry.name})
+                          : tr("Display settings saved for the next game launch.");
+    return;
+  }
   bool defaultBool = setting == 0;
   auto i = displayValues.as_object().find(k);
   Json v = setting == 2 ? Json(Json::integer_type(filterDefault)) : Json(defaultBool);
@@ -1637,6 +1652,7 @@ void UI::action(Button b) {
                : page == Page::Keys    ? keysRows
              : page == Page::Sound   ? soundRows
              : page == Page::Metrics ? 3
+             : page == Page::Display ? 4
                                      : 3,
              7, step);
       message.clear();

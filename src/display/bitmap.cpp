@@ -233,14 +233,17 @@ static int currentMode()
     if (mode < 0)
     {
 #ifdef __vita__
+        /* The player's choice (launcher: Display > Image quality, default
+         * 16-bit); the flag files are test switches for A/B runs. */
         SceIoStat st;
-        if (sceIoGetstat("ux0:/data/hardrpg/tex16_off.flag", &st) >= 0)
+        if (shState->config().textureDepth == 32 ||
+            sceIoGetstat("ux0:/data/hardrpg/tex16_off.flag", &st) >= 0)
             mode = 0;
         else if (sceIoGetstat("ux0:/data/hardrpg/tex16_soft32.flag", &st) >= 0)
             mode = 2;
         else
             mode = 1;
-        fprintf(stderr, "[tex16] mode=%d neon=%d\n", mode, tex16::usingNeon() ? 1 : 0);
+        fprintf(stderr, "[tex16] mode=%d depth=%d neon=%d\n", mode, shState->config().textureDepth, tex16::usingNeon() ? 1 : 0);
 #else
         mode = 0;
 #endif

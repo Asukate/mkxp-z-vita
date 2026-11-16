@@ -961,6 +961,17 @@ class NativeLauncher(unittest.TestCase):
             self.assertEqual((config()['smoothScaling'], config()['smoothScalingDown']), (expected, down))
         self.call([{'op':'set-display','key':'smoothScaling','value':2}])
         self.assertEqual(config()['smoothScaling'], 5)
+        # Image quality: 16-bit is the default (no key written until changed);
+        # Cross switches to 32 and back, Square resets to 16, other depths are refused.
+        file.write_text(json.dumps(dict(preloadScript=['keep.rb'])))
+        quality = SETTINGS+',cross,down,down,down'
+        for expected in (32, 16, 32):
+            self.ui(quality+',cross')
+            self.assertEqual(config()['textureDepth'], expected)
+        self.ui(quality+',square')
+        self.assertEqual(config()['textureDepth'], 16)
+        self.call([{'op':'set-display','key':'textureDepth','value':24}])
+        self.assertEqual(config()['textureDepth'], 16)
         # Performance and speed: the overlay cycles, fast forward switches.
         file.write_text(json.dumps(dict(preloadScript=['keep.rb'])))
         speed = SETTINGS + ',down,down,down,down,cross'

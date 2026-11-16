@@ -145,6 +145,7 @@ void Config::read(int argc, char *argv[]) {
         {"fastForward", true},
         {"crashRescue", true},
         {"audioBoost", 100},
+        {"textureDepth", 16},
         {"winResizable", true},
         {"fullscreen", false},
         {"fixedAspectRatio", true},
@@ -404,6 +405,9 @@ try { exp } catch (...) {}
     SET_OPT(audioBoost, integer);
     if (audioBoost < 100 || audioBoost > 400)
         audioBoost = 100;
+    SET_OPT(textureDepth, integer);
+    if (textureDepth != 32)
+        textureDepth = 16;
     SET_OPT(fullscreen, boolean);
     SET_OPT(fixedAspectRatio, boolean);
     SET_OPT(smoothScaling, integer);
