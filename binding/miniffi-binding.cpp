@@ -397,12 +397,19 @@ static int vitaVKButton(unsigned int key) {
     }
 }
 
+/* Buttons that were already down when the updates below took over (bit per
+ * Input button). Such a press is not answered until it is let go: the Cross
+ * that chose Continue on Mysta's Vore RPG's title, held a little long, was
+ * otherwise read as the Enter that ends the save name screen, with no name. */
+static uint32_t vitaHeldAtTakeover = 0;
+
 static bool vitaKeyboardOnlyGame() {
     if (SDL_GetTicks() - vitaGameInputTicks < 250)
         return false;
     static int lastFrame = INT_MIN;
     const int frame = shState->graphics().getFrameCount();
     if (frame != lastFrame) {
+        const bool takeover = lastFrame == INT_MIN || frame - lastFrame > 2;
         lastFrame = frame;
         static bool logged = false;
         if (!logged) {
@@ -417,6 +424,13 @@ static bool vitaKeyboardOnlyGame() {
             throw;
         }
         vitaInputAutoUpdate = false;
+        if (takeover) {
+            vitaHeldAtTakeover = 0;
+            for (int b : {Input::Down, Input::Left, Input::Right, Input::Up, Input::A,
+                          Input::B, Input::C, Input::L, Input::R})
+                if (shState->input().isPressed(b))
+                    vitaHeldAtTakeover |= 1u << b;
+        }
     }
     return true;
 }
@@ -427,6 +441,13 @@ static bool vitaVKPressed(unsigned int key) {
     int scancode = vitaVKScancode(key);
     if (scancode <= SDL_SCANCODE_UNKNOWN)
         return false;
+    /* Updated first, even when the glass keyboard answers the key below: the
+     * update has to see the Enter that ends a typing screen. Otherwise the
+     * engine's last update had Enter up, and the next scene's first update
+     * (Mysta's Vore RPG's Scene_Load) took the still-held Enter as a new
+     * press and loaded the first save file. */
+    const int button = vitaVKButton(key);
+    const bool keyboardOnly = button && vitaKeyboardOnlyGame();
     /* The generic Shift, Ctrl and Alt codes answer for either side. */
     if (vitaMappedKey(scancode) ||
         (key == 0x10 && vitaMappedKey(SDL_SCANCODE_RSHIFT)) ||
@@ -436,8 +457,15 @@ static bool vitaVKPressed(unsigned int key) {
         return true;
     if (state && scancode < count && state[scancode] != 0)
         return true;
-    const int button = vitaVKButton(key);
-    return button && vitaKeyboardOnlyGame() && shState->input().isPressed(button);
+    if (!keyboardOnly)
+        return false;
+    const bool pressed = shState->input().isPressed(button);
+    if (vitaHeldAtTakeover & (1u << button)) {
+        if (pressed)
+            return false;
+        vitaHeldAtTakeover &= ~(1u << button);
+    }
+    return pressed;
 }
 
 /* The last Windows message box a game showed. The Vita cannot display it, so
