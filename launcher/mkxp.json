@@ -18,6 +18,7 @@
   "preloadScript": [
     "app0:/legacy_ruby_compat.rb",
     "app0:/rgss_extensions.rb",
+    "app0:/json_natives.rb",
     "app0:/essentials_compat.rb",
     "app0:/time_strftime_guard.rb",
     "app0:/safe_save.rb",

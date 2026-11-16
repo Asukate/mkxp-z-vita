@@ -143,6 +143,7 @@ VPK="$OUT/HardRPG-$TITLE_ID-$PROFILE.vpk"
     -a "$ROOT/launcher/rgss_extensions.rb=rgss_extensions.rb" \
     -a "$ROOT/launcher/essentials_compat.rb=essentials_compat.rb" \
     -a "$ROOT/launcher/essentials_natives.rb=essentials_natives.rb" \
+    -a "$ROOT/launcher/json_natives.rb=json_natives.rb" \
     -a "$ROOT/launcher/time_strftime_guard.rb=time_strftime_guard.rb" \
     -a "$ROOT/launcher/safe_save.rb=safe_save.rb" \
     -a "$ROOT/launcher/save_backup.rb=save_backup.rb" \

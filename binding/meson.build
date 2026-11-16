@@ -37,6 +37,7 @@ binding_source = [files(
     'native-events.cpp',
     'sprite-scripts.cpp',
     'essentials-natives.cpp',
+    'json-natives.cpp',
     'hardrpg-prof.cpp'
 )]
 
