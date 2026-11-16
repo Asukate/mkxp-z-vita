@@ -51,6 +51,9 @@
 #include <chrono>
 #ifdef __vita__
 #include "asset_prefetch.h"
+#ifdef __vita__
+extern "C" void vitaBootPackStart(const char *gameFolder);
+#endif
 #include <sys/stat.h>
 #endif
 
@@ -255,6 +258,7 @@ struct SharedStatePrivate
 		mkdir("ux0:/data/hardrpg/cache", 0777);
 		mkdir("ux0:/data/hardrpg/cache/prefetch-v1", 0777);
 		AssetPrefetch::start(fileSystem, config.gameFolder, "ux0:/data/hardrpg/cache/prefetch-v1/");
+		vitaBootPackStart(config.gameFolder.c_str());
 #endif
 		vitaDiagLog("BOOT", "before_font_discovery");
 		vitaDiagLog("BOOTPERF", "font_discovery_begin");

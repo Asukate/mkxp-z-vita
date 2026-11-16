@@ -58,6 +58,7 @@ extern "C" SceGxmTexture *vglGetGxmTextureByID(unsigned int texture);
 extern "C" void *vglGetTexDataPointerByID(unsigned int texture);
 extern "C" void *vglGetFramebufferColorData(unsigned int fbo);
 extern "C" void glFinish(void);
+extern "C" void vitaBootPackTick(void);
 extern "C" SceGxmContext *gxm_context;
 /* Minimal vitaGL texture-struct prefix (matches the pa build: no
  * TEXTURES_SPEEDHACK / HAVE_TEX_CACHE / HAVE_UNPURE_TEXTURES defines —
@@ -2668,6 +2669,9 @@ double Graphics::lastUpdate() {
 
 void Graphics::update(bool checkForShutdown) {
     FrameProfile::Scope profile(FrameProfile::GraphicsOther);
+#ifdef __vita__
+    vitaBootPackTick();
+#endif
     /* Session 27: heavy per-frame logging removed (only gated S27 tail
      * markers remain in swapGLBuffer, frames 35-50). */
     p->threadData->rqWindowAdjust.wait();

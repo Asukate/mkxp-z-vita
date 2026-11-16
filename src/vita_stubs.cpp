@@ -46,6 +46,7 @@
 #include <malloc.h>
 #include <psp2/kernel/sysmem.h>
 #include "vita_startup_timer.h"
+#include "asset_prefetch.h"
 
 /*
  * _newlib_heap_size_user sets the newlib heap: Ruby, game data and every
@@ -1423,22 +1424,163 @@ static void vitaNoteFailedAlloc(const char *what, size_t size, void *caller)
              (unsigned)mi.ordblks, (unsigned)mi.keepcost, kr, kr == 0 ? info.size_user : 0);
     fputs(line, stderr);
 }
+/* Kernel blocks for allocations of 16 KB and up that the C heap cannot place.
+ * The C heap is one fixed area; a long session leaves its free space in
+ * thousands of small pieces (LonaRPG: 62 MB free in 5400 pieces, no 128 KB
+ * hole, while the kernel still had 56 MB). Each such allocation gets its own
+ * block, given back on free. */
+extern "C" void __real_free(void *);
+extern "C" size_t __real_malloc_usable_size(void *);
+static const size_t kBigMin = 16384;
+static const int kBigMax = 512;
+static struct { uintptr_t lo; size_t size; int uid; } bigBlocks[kBigMax];
+static int bigCount = 0;
+static uintptr_t bigLo = UINTPTR_MAX, bigHi = 0;
+static volatile int bigLock = 0;
+static unsigned bigUsed = 0;
+static void bigEnter()
+{
+    int spins = 0;
+    while (__sync_lock_test_and_set(&bigLock, 1))
+        if (++spins >= 64) { sceKernelDelayThread(50); spins = 0; }
+}
+static void bigLeave() { __sync_lock_release(&bigLock); }
+static void *bigAlloc(size_t n)
+{
+    if (n < kBigMin || n > (64u << 20))
+        return NULL;
+    const size_t size = (n + 4095) & ~(size_t)4095;
+    int uid = sceKernelAllocMemBlock("hardrpg_big", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, size, NULL);
+    if (uid < 0)
+        return NULL;
+    void *base = NULL;
+    if (sceKernelGetMemBlockBase(uid, &base) < 0 || !base) {
+        sceKernelFreeMemBlock(uid);
+        return NULL;
+    }
+    bigEnter();
+    int slot = -1;
+    for (int i = 0; i < bigCount && slot < 0; ++i)
+        if (!bigBlocks[i].lo)
+            slot = i;
+    if (slot < 0 && bigCount < kBigMax)
+        slot = bigCount++;
+    if (slot >= 0) {
+        bigBlocks[slot].lo = (uintptr_t)base;
+        bigBlocks[slot].size = size;
+        bigBlocks[slot].uid = uid;
+        if ((uintptr_t)base < bigLo) bigLo = (uintptr_t)base;
+        if ((uintptr_t)base + size > bigHi) bigHi = (uintptr_t)base + size;
+    }
+    const unsigned used = ++bigUsed;
+    bigLeave();
+    if (slot < 0) {
+        sceKernelFreeMemBlock(uid);
+        return NULL;
+    }
+    if (used <= 3 || (used & (used - 1)) == 0)
+        fprintf(stderr, "C heap full: %u bytes from a kernel block (%u so far)\n", (unsigned)n, used);
+    return base;
+}
+/* Size of a kernel-block allocation, or 0. */
+static size_t bigSize(void *ptr)
+{
+    const uintptr_t p = (uintptr_t)ptr;
+    if (!bigCount || p < bigLo || p >= bigHi)
+        return 0;
+    size_t size = 0;
+    bigEnter();
+    for (int i = 0; i < bigCount; ++i)
+        if (bigBlocks[i].lo == p) {
+            size = bigBlocks[i].size;
+            break;
+        }
+    bigLeave();
+    return size;
+}
+static bool bigFree(void *ptr)
+{
+    const uintptr_t p = (uintptr_t)ptr;
+    if (!bigCount || p < bigLo || p >= bigHi)
+        return false;
+    int uid = -1;
+    bigEnter();
+    for (int i = 0; i < bigCount; ++i)
+        if (bigBlocks[i].lo == p) {
+            uid = bigBlocks[i].uid;
+            bigBlocks[i].lo = 0;
+            break;
+        }
+    bigLeave();
+    if (uid < 0)
+        return false;
+    sceKernelFreeMemBlock(uid);
+    return true;
+}
+
+/* A failed allocation first gives back the prefetcher's decoded images and
+ * sounds (they can all be loaded again) and tries once more: LonaRPG's Ruby
+ * died on a 128 KB string with 43 MB free in 4000 pieces. */
+static volatile int allocRetrying = 0;
+static bool freeForRetry()
+{
+    if (__sync_lock_test_and_set(&allocRetrying, 1))
+        return false;
+    bool freed = AssetPrefetch::releaseMemoryNoWait();
+    __sync_lock_release(&allocRetrying);
+    return freed;
+}
 extern "C" {
 void *__wrap_malloc(size_t n)
 {
     void *p = __real_malloc(n);
+    if (!p && n && freeForRetry())
+        p = __real_malloc(n);
+    if (!p)
+        p = bigAlloc(n);
     if (!p && n) vitaNoteFailedAlloc("malloc", n, __builtin_return_address(0));
     return p;
 }
 void *__wrap_calloc(size_t a, size_t b)
 {
     void *p = __real_calloc(a, b);
+    if (!p && a && b && freeForRetry())
+        p = __real_calloc(a, b);
+    if (!p && a && b && b <= (64u << 20) / a) {
+        p = bigAlloc(a * b);
+        if (p)
+            memset(p, 0, a * b);
+    }
     if (!p && a && b) vitaNoteFailedAlloc("calloc", a * b, __builtin_return_address(0));
     return p;
 }
 void *__wrap_realloc(void *o, size_t n)
 {
+    if (const size_t old = o ? bigSize(o) : 0) {
+        if (!n) {
+            bigFree(o);
+            return NULL;
+        }
+        void *q = __wrap_malloc(n);
+        if (!q)
+            return NULL;
+        memcpy(q, o, old < n ? old : n);
+        bigFree(o);
+        return q;
+    }
     void *p = __real_realloc(o, n);
+    if (!p && n && freeForRetry())
+        p = __real_realloc(o, n);
+    if (!p && n && o) {
+        p = bigAlloc(n);
+        if (p) {
+            const size_t old = __real_malloc_usable_size(o);
+            memcpy(p, o, old < n ? old : n);
+            __real_free(o);
+        }
+    } else if (!p && n) {
+        p = bigAlloc(n);
+    }
     if (!p && n) vitaNoteFailedAlloc("realloc", n, __builtin_return_address(0));
     return p;
 }
@@ -1499,8 +1641,16 @@ static bool rubyPoolOwns(void *ptr)
             return true;
     return false;
 }
+size_t __wrap_malloc_usable_size(void *ptr)
+{
+    if (const size_t size = ptr ? bigSize(ptr) : 0)
+        return size;
+    return __real_malloc_usable_size(ptr);
+}
 void __wrap_free(void *ptr)
 {
+    if (ptr && bigFree(ptr))
+        return;
     if (ptr && rubyPoolOwns(ptr)) {
         rubyPoolEnter();
         *(void **)ptr = rubyPoolFree;
@@ -1524,6 +1674,8 @@ void *__wrap_memalign(size_t a, size_t n)
             return page;
     }
     void *p = __real_memalign(a, n);
+    if (!p && n && a <= 4096)
+        p = bigAlloc(n);
     if (!p && n) vitaNoteFailedAlloc("memalign", n, __builtin_return_address(0));
     return p;
 }

@@ -47,11 +47,23 @@ void *vitaStatCacheBeginWrite(const char *path);
 void vitaStatCacheOpened(void *dir, int fd);
 void vitaStatCacheChanged(const char *path, int subtree);
 
+/* vita_boot_pack.c: small game files answered from one pack file. */
+int vitaBootPackOpen(struct _reent *r, const char *path, int flags);
+void vitaBootPackOpened(const char *path, int flags, int fd);
+
 int __wrap__open_r(struct _reent *r, const char *path, int flags, int mode)
 {
     const int writes = (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)) != 0;
+    if (!writes)
+    {
+        const int packed = vitaBootPackOpen(r, path, flags);
+        if (packed >= 0)
+            return packed;
+    }
     void *dir = writes ? vitaStatCacheBeginWrite(path) : NULL;
     const int result = __real__open_r(r, path, flags, mode);
+    if (!writes)
+        vitaBootPackOpened(path, flags, result);
     /* Counted after the call, so a listing made after the count was read
      * already shows the file. */
     if (writes)

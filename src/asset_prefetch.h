@@ -61,6 +61,10 @@ void noteSound(const std::string &name, double ms);
 // again) and prepare nothing more this session. Any thread.
 void releaseMemory();
 
+// The same from the allocator after a failed allocation: does nothing (false)
+// when the prefetcher's lock is held, which may be by the failing caller.
+bool releaseMemoryNoWait();
+
 // Held by the game thread while it loads a file itself. The worker reads its
 // files in pieces and waits between them while one is held: the memory card
 // serves one read at a time, and a 27 KB fog waited 230 ms behind the

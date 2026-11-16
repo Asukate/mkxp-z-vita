@@ -701,27 +701,44 @@ void keepImage(const std::string &name, SDL_Surface *surface, double ms, const F
   }
 }
 
+// Under the lock.
+static bool releaseLocked() {
+  if (state->released)
+    return false;
+  state->released = true;
+  for (auto &i : state->images)
+    SDL_FreeSurface(i.second.surface);
+  state->images.clear();
+  state->imageBytes = 0;
+  state->sounds.clear();
+  state->soundBytes = 0;
+  for (auto &i : state->kept)
+    SDL_FreeSurface(i.surface);
+  state->kept.clear();
+  state->keptBytes = 0;
+  state->requests.clear();
+  state->requested.clear();
+  state->requestedBytes = 0;
+  return true;
+}
+
+bool releaseMemoryNoWait() {
+  if (!state || SDL_TryLockMutex(state->lock) != 0)
+    return false;
+  bool freed = releaseLocked();
+  SDL_UnlockMutex(state->lock);
+  if (freed)
+    SDL_CondBroadcast(state->changed);
+  return freed;
+}
+
 void releaseMemory() {
   if (!state)
     return;
   {
     Lock hold(state->lock);
-    if (state->released)
+    if (!releaseLocked())
       return;
-    state->released = true;
-    for (auto &i : state->images)
-      SDL_FreeSurface(i.second.surface);
-    state->images.clear();
-    state->imageBytes = 0;
-    state->sounds.clear();
-    state->soundBytes = 0;
-    for (auto &i : state->kept)
-      SDL_FreeSurface(i.surface);
-    state->kept.clear();
-    state->keptBytes = 0;
-    state->requests.clear();
-    state->requested.clear();
-    state->requestedBytes = 0;
   }
   SDL_CondBroadcast(state->changed);
 }

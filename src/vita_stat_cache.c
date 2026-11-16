@@ -83,13 +83,24 @@ typedef struct
     char *name;          /* lower-case ASCII; NULL = empty slot */
     uint32_t hash;
     SceMode mode;
-    SceOff size;
-    SceDateTime ctime, atime, mtime;
+    uint32_t size;      /* newlib's st_size is 32-bit */
+    time_t ctime, atime, mtime;
 } Entry;
+
+/* Names live in a few blocks per folder rather than one allocation each:
+ * thousands of small pieces scattered through the heap split the free space
+ * games need for big strings and images. */
+typedef struct NameBlock
+{
+    struct NameBlock *next;
+    uint32_t used, cap;
+    char data[];
+} NameBlock;
 
 typedef struct Dir
 {
     struct Dir *next;    /* hash chain */
+    NameBlock *names;
     char *key;           /* lower-case absolute path, no trailing slash */
     uint32_t hash;
     Entry *slots;
@@ -150,13 +161,35 @@ static Dir *findDir(const char *key, size_t n, uint32_t h)
     return NULL;
 }
 
+static char *nameAlloc(Dir *d, size_t n)
+{
+    NameBlock *b = d->names;
+    if (!b || b->used + n > b->cap)
+    {
+        uint32_t cap = b ? (b->cap < 32768 ? b->cap * 2 : 65536) : 1024;
+        if (cap < n)
+            cap = (uint32_t)n;
+        NameBlock *nb = malloc(sizeof(NameBlock) + cap);
+        if (!nb)
+            return NULL;
+        nb->next = b;
+        nb->used = 0;
+        nb->cap = cap;
+        d->names = b = nb;
+    }
+    char *p = b->data + b->used;
+    b->used += (uint32_t)n;
+    return p;
+}
+
 static void clearEntries(Dir *d)
 {
-    if (d->slots)
+    free(d->slots);
+    while (d->names)
     {
-        for (uint32_t i = 0; i < d->cap; ++i)
-            free(d->slots[i].name);
-        free(d->slots);
+        NameBlock *next = d->names->next;
+        free(d->names);
+        d->names = next;
     }
     totalEntries -= d->count;
     d->slots = NULL;
@@ -203,6 +236,16 @@ static Entry *lookup(Dir *d, const char *lname, uint32_t h)
 
 static void evictIfNeeded(void);
 
+/* What newlib's scestat_to_stat keeps of a SceIoStat. */
+static void fillEntry(Entry *e, const SceIoStat *st)
+{
+    e->mode = st->st_mode;
+    e->size = (uint32_t)st->st_size;
+    sceRtcGetTime_t(&st->st_atime, &e->atime);
+    sceRtcGetTime_t(&st->st_mtime, &e->mtime);
+    sceRtcGetTime_t(&st->st_ctime, &e->ctime);
+}
+
 static void insert(Dir *d, const char *name, const SceIoStat *st)
 {
     size_t n = strlen(name);
@@ -240,7 +283,7 @@ static void insert(Dir *d, const char *name, const SceIoStat *st)
         while (d->slots[j].name)
             j = (j + 1) & (d->cap - 1);
         e = &d->slots[j];
-        e->name = malloc(n + 1);
+        e->name = nameAlloc(d, n + 1);
         if (!e->name)
             return;
         memcpy(e->name, lname, n + 1);
@@ -248,11 +291,7 @@ static void insert(Dir *d, const char *name, const SceIoStat *st)
         d->count++;
         totalEntries++;
     }
-    e->mode = st->st_mode;
-    e->size = st->st_size;
-    e->ctime = st->st_ctime;
-    e->atime = st->st_atime;
-    e->mtime = st->st_mtime;
+    fillEntry(e, st);
 }
 
 /* What newlib's scestat_to_stat does. */
@@ -264,13 +303,9 @@ static void toStat(const Entry *e, struct stat *out)
         out->st_mode |= S_IFREG;
     if ((e->mode & 0xf000) == SCE_S_IFDIR)
         out->st_mode |= S_IFDIR;
-    time_t t;
-    sceRtcGetTime_t(&e->atime, &t);
-    out->st_atime = t;
-    sceRtcGetTime_t(&e->mtime, &t);
-    out->st_mtime = t;
-    sceRtcGetTime_t(&e->ctime, &t);
-    out->st_ctime = t;
+    out->st_atime = e->atime;
+    out->st_mtime = e->mtime;
+    out->st_ctime = e->ctime;
 }
 
 static void invalidateDir(Dir *d)
@@ -616,11 +651,7 @@ int __wrap__stat_r(struct _reent *r, const char *path, struct stat *out)
         return -1;
     }
     Entry tmp;
-    tmp.mode = sst.st_mode;
-    tmp.size = sst.st_size;
-    tmp.ctime = sst.st_ctime;
-    tmp.atime = sst.st_atime;
-    tmp.mtime = sst.st_mtime;
+    fillEntry(&tmp, &sst);
     toStat(&tmp, out);
     r->_errno = 0;
     return 0;
@@ -701,9 +732,12 @@ void vitaStatCacheOpened(void *dir, int fd)
     unlock();
 }
 
+void vitaBootPackClosed(int fd);
+
 int __wrap__close_r(struct _reent *r, int fd)
 {
     int res = __real__close_r(r, fd);
+    vitaBootPackClosed(fd);
     lock();
     for (int i = 0; i < MAX_WRITERS; ++i)
         if (writers[i].dir && writers[i].fd == fd)
