@@ -38,9 +38,123 @@
 #include "shader.h"
 #include "vita_diagnostic.h"
 #include "tilemap-common.h"
+#include "texpool.h"
+#include "exception.h"
 
+#include <algorithm>
+#include <stdio.h>
+#include <string.h>
 #include <vector>
 #include "sigslot/signal.hpp"
+
+/* Shared tile atlases.
+ *
+ * An atlas is built only from the tilemap's nine bitmaps, so tilemaps that
+ * hold the same nine Bitmap objects would build identical atlases. Layer
+ * scripts do exactly that: N.P.C. Dreams (CanariAlternate's multi-layer
+ * system) gives each map layer its own Tilemap, all filled from Cache, so its
+ * four-layer swamp held four identical 8 MiB atlases and could fail to find
+ * the fourth contiguous block (a Vita crash in 0.5.3). Tilemaps with the same
+ * bitmaps now share one atlas.
+ *
+ * The atlas is taken when the tilemap first draws, not when it is created,
+ * because its bitmaps are only known then. A bitmap change (modified signal)
+ * marks the shared atlas stale and the first sharer to prepare rebuilds it.
+ * A disposed bitmap retires the atlas so that a new Bitmap allocated at the
+ * same address can never match it; its sharers move to new atlases. */
+struct SharedAtlasVX
+{
+	Bitmap *key[BM_COUNT];
+	TEXFBO atlas;
+	TEXFBO atlasHires;
+	int refs;
+	bool stale;
+	bool retired;
+};
+
+static std::vector<SharedAtlasVX*> sharedAtlases;
+
+static size_t sharedAtlasBytes(const SharedAtlasVX *e)
+{
+	size_t bytes = (size_t)e->atlas.width * e->atlas.height * 4;
+	if (e->atlasHires.tex != TEX::ID(0))
+		bytes += (size_t)e->atlasHires.width * e->atlasHires.height * 4;
+	return bytes;
+}
+
+static void sharedAtlasLog(const char *what, const SharedAtlasVX *e)
+{
+	size_t total = 0;
+	for (const SharedAtlasVX *a : sharedAtlases)
+		total += sharedAtlasBytes(a);
+	fprintf(stderr, "Tilemap atlas: %s (refs %d); %u live, %u KiB\n",
+	        what, e->refs, (unsigned)sharedAtlases.size(), (unsigned)(total / 1024));
+}
+
+static SharedAtlasVX *sharedAtlasFind(Bitmap *const key[BM_COUNT])
+{
+	for (SharedAtlasVX *e : sharedAtlases)
+		if (!e->retired && memcmp(e->key, key, sizeof(e->key)) == 0)
+			return e;
+	return nullptr;
+}
+
+static SharedAtlasVX *sharedAtlasCreate(Bitmap *const key[BM_COUNT])
+{
+	SharedAtlasVX *e = new SharedAtlasVX();
+	memcpy(e->key, key, sizeof(e->key));
+	e->refs = 1;
+	e->stale = true;
+	e->retired = false;
+
+	try
+	{
+		shState->requestAtlasTex(ATLASVX_W, ATLASVX_H, e->atlas);
+		e->atlas.selfHires = nullptr;
+
+		if (shState->config().enableHires)
+		{
+			double scalingFactor = shState->config().atlasScalingFactor;
+			int hiresWidth = (int)lround(scalingFactor * ATLASVX_W);
+			int hiresHeight = (int)lround(scalingFactor * ATLASVX_H);
+			shState->requestAtlasTex(hiresWidth, hiresHeight, e->atlasHires);
+			e->atlasHires.selfHires = nullptr;
+			e->atlas.selfHires = &e->atlasHires;
+		}
+	}
+	catch (...)
+	{
+		shState->releaseAtlasTex(e->atlas);
+		delete e;
+		throw;
+	}
+
+	sharedAtlases.push_back(e);
+	sharedAtlasLog("new", e);
+	return e;
+}
+
+static void sharedAtlasRelease(SharedAtlasVX *e)
+{
+	if (!e || --e->refs > 0)
+		return;
+
+	sharedAtlases.erase(std::remove(sharedAtlases.begin(), sharedAtlases.end(), e),
+	                    sharedAtlases.end());
+
+	/* The cached atlas slot must not point into this entry */
+	e->atlas.selfHires = nullptr;
+	shState->releaseAtlasTex(e->atlas);
+	shState->releaseAtlasTex(e->atlasHires);
+	sharedAtlasLog("freed", e);
+	delete e;
+}
+
+static bool isGraphicsOOM(const Exception &e)
+{
+	return e.type == Exception::MKXPError &&
+	       e.msg.find("Graphics memory: out of memory allocating ") == 0;
+}
 
 #ifdef MKXPZ_VITA_DIAGNOSTICS
 /* S42-I: one-shot next-frame tail-trace trigger.
@@ -83,11 +197,10 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 	std::vector<SVertex> groundVert;
 	std::vector<SVertex> aboveVert;
 
-	TEXFBO atlas;
+	/* Shared with tilemaps that hold the same bitmaps (see SharedAtlasVX) */
+	SharedAtlasVX *shared;
 	VBO::ID vbo;
 	GLMeta::VAO vao;
-
-	TEXFBO atlasHires;
 
 	size_t allocQuads;
 
@@ -100,6 +213,7 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 	FlashMap flashMap;
 	uint8_t flashAlphaIdx;
 
+	/* The bitmap set changed: find or make the matching shared atlas */
 	bool atlasDirty;
 	bool buffersDirty;
 	bool mapViewportDirty;
@@ -135,6 +249,7 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 	TilemapVXPrivate(Viewport *viewport)
 	    : ViewportElement(viewport),
 	      mapData(0),
+	      shared(nullptr),
 	      flags(0),
 	      allocQuads(0),
 	      groundQuads(0),
@@ -147,24 +262,6 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 	      above(this, viewport)
 	{
 		memset(bitmaps, 0, sizeof(bitmaps));
-
-		shState->requestAtlasTex(ATLASVX_W, ATLASVX_H, atlas);
-
-		if (shState->config().enableHires) {
-			double scalingFactor = shState->config().atlasScalingFactor;
-			int hiresWidth = (int)lround(scalingFactor * ATLASVX_W);
-			int hiresHeight = (int)lround(scalingFactor * ATLASVX_H);
-			try
-			{
-				shState->requestAtlasTex(hiresWidth, hiresHeight, atlasHires);
-			}
-			catch (...)
-			{
-				shState->releaseAtlasTex(atlas);
-				throw;
-			}
-			atlas.selfHires = &atlasHires;
-		}
 
 		vbo = VBO::gen();
 
@@ -184,10 +281,8 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 		GLMeta::vaoFini(vao);
 		VBO::del(vbo);
 
-		shState->releaseAtlasTex(atlas);
-		if (shState->config().enableHires) {
-			shState->releaseAtlasTex(atlasHires);
-		}
+		sharedAtlasRelease(shared);
+		shared = nullptr;
 
 		prepareCon.disconnect();
 
@@ -201,17 +296,65 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 		}
 	}
 
+	/* A bitmap's pixels changed: every sharer's atlas is out of date */
 	void invalidateAtlas()
 	{
-		atlasDirty = true;
+		if (shared)
+			shared->stale = true;
 	}
 
 	void atlasDisposal(int i)
 	{
 		// Guard against deleted bitmaps
 		bitmaps[i] = 0;
-		
-		invalidateAtlas();
+
+		/* Its address may be reused by a new Bitmap */
+		if (shared)
+			shared->retired = true;
+
+		atlasDirty = true;
+	}
+
+	/* Point this tilemap at the shared atlas for its current bitmaps. When
+	 * none exists, this tilemap's old atlas is let go first if no one else
+	 * uses it, so its texture can be reused for the new one instead of
+	 * needing a second 8 MiB block. */
+	void acquireAtlas()
+	{
+		SharedAtlasVX *next = sharedAtlasFind(bitmaps);
+		if (next && next == shared)
+			return;
+
+		if (next)
+		{
+			++next->refs;
+			sharedAtlasRelease(shared);
+			shared = next;
+			sharedAtlasLog("shared", next);
+			return;
+		}
+
+		sharedAtlasRelease(shared);
+		shared = nullptr;
+
+		try
+		{
+			shared = sharedAtlasCreate(bitmaps);
+		}
+		catch (const Exception &e)
+		{
+			if (!isGraphicsOOM(e))
+				throw;
+
+			/* Same reclaim as Tilemap.new's retry, minus the Ruby GC,
+			 * which cannot run while drawing */
+			fprintf(stderr, "Tilemap atlas: reclaiming graphics memory before retry\n");
+			shState->texPool().clearCache();
+			Bitmap::releaseRecreatableMemory();
+			shState->dropCachedAtlasTex();
+			shared = sharedAtlasCreate(bitmaps);
+			fprintf(stderr, "Tilemap atlas: graphics memory retry succeeded\n");
+		}
 	}
 
 	void invalidateBuffers()
@@ -221,6 +364,7 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 
 	void rebuildAtlas()
 	{
+		TEXFBO &atlas = shared->atlas;
 		TileAtlasVX::build(atlas, bitmaps);
 
 #ifdef MKXPZ_VITA_DIAGNOSTICS
@@ -325,12 +469,18 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 #endif
 
 		vitaDiagLog("TMPREP", "prepare begin atlasDirty=%d buffersDirty=%d", atlasDirty, buffersDirty);
-		if (atlasDirty)
+		if (atlasDirty || !shared)
+		{
+			acquireAtlas();
+			atlasDirty = false;
+		}
+
+		if (shared->stale)
 		{
 			vitaDiagLog("TMPREP", "before rebuildAtlas");
 			rebuildAtlas();
 			vitaDiagLog("TMPREP", "after rebuildAtlas");
-			atlasDirty = false;
+			shared->stale = false;
 		}
 
 		if (mapViewportDirty)
@@ -389,8 +539,10 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 
 	void drawGround()
 	{
-		if (groundQuads == 0)
+		if (groundQuads == 0 || !shared)
 			return;
+
+		const TEXFBO &atlas = shared->atlas;
 
 		ShaderBase *shader;
 
@@ -442,8 +594,10 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 
 	void drawAbove()
 	{
-		if (aboveQuads == 0)
+		if (aboveQuads == 0 || !shared)
 			return;
+
+		const TEXFBO &atlas = shared->atlas;
 
 		SimpleShader &shader = shState->shaders().simple;
 		shader.bind();

@@ -114,6 +114,8 @@ struct SharedState
 	 * replacement for Tilemap atlas use */
 	void requestAtlasTex(int w, int h, TEXFBO &out);
 	void releaseAtlasTex(TEXFBO &tex);
+	/* Free the one atlas kept for reuse (memory pressure) */
+	void dropCachedAtlasTex();
 
 	/* Checks EventThread's shutdown request flag and if set,
 	 * requests the binding to terminate. In this case, this

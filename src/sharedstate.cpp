@@ -543,6 +543,12 @@ void SharedState::releaseAtlasTex(TEXFBO &tex)
 	p->atlasTex = tex;
 }
 
+void SharedState::dropCachedAtlasTex()
+{
+	TEXFBO::fini(p->atlasTex);
+	p->atlasTex = TEXFBO();
+}
+
 void SharedState::checkShutdown()
 {
 	if (!p->rtData.rqTerm)
