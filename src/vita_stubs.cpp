@@ -327,6 +327,8 @@ struct TTF_Font
     bool win_advances;
     double win_scale;                  /* pixels per font unit */
     std::vector<unsigned char> win_hdmx; /* hdmx widths at this ppem, or empty */
+    FT_Fixed win_wide_units;           /* monospaced: wider glyphs are full-width, or 0 */
+    FT_Pos win_wide_px;                /* their width, 2 x the average character width */
     /* Per-codepoint Windows widths for a Liberation stand-in (vitaTtfUseTableAdvances). */
     const uint8_t *win_cp_widths;
     const uint16_t *win_cps;
@@ -484,6 +486,10 @@ void vitaTtfUseTableAdvances(TTF_Font *font, const uint8_t *widths,
  *    cellHeight / (winAscent + winDescent). That is why Hello Charlotte's
  *    Coder's Crux 14 is 9 px a letter on Windows, not the 10 px of ppem 25.
  * Each advance is rounded to whole pixels, and GDI does not kern.
+ * In a monospaced font a full-width glyph (Japanese, Chinese) is exactly twice
+ * the average character width, round(xAvgCharWidth * scale) * 2: VL Gothic 24
+ * draws kana 18 px wide on Windows, not 19 (VL Gothic and UmePlus, sizes 8-48:
+ * 246 of 246 widths).
  * cellHeight 0 (the size came from a VDMX table) scales by the integer ppem. */
 void vitaTtfUseWindowsAdvances(TTF_Font *font, double cellHeight)
 {
@@ -509,6 +515,15 @@ void vitaTtfUseWindowsAdvances(TTF_Font *font, double cellHeight)
         font->win_scale = cellHeight / units;
     else
         font->win_scale = static_cast<double>(ppem) / face->units_per_EM;
+
+    font->win_wide_units = 0;
+    if (mono && os2->xAvgCharWidth > 0)
+    {
+        const double avgScale = (cellHeight > 0 && units > 0)
+            ? cellHeight / units : static_cast<double>(ppem) / face->units_per_EM;
+        font->win_wide_units = os2->xAvgCharWidth + os2->xAvgCharWidth / 2;
+        font->win_wide_px = static_cast<FT_Pos>(os2->xAvgCharWidth * avgScale + 0.5) * 2;
+    }
 
     font->win_hdmx.clear();
     FT_ULong len = 0;
@@ -557,6 +572,8 @@ static FT_Pos vita_ttf_win_advance(TTF_Font *font, FT_UInt glyph, uint32_t codep
     FT_Fixed design = 0;
     if (FT_Get_Advance(font->face, glyph, FT_LOAD_NO_SCALE, &design) != 0)
         return -1;
+    if (font->win_wide_units && design > font->win_wide_units)
+        return font->win_wide_px << 6;
     return static_cast<FT_Pos>(design * font->win_scale + 0.5) << 6;
 }
 
