@@ -30,6 +30,7 @@
 #include "encoding.h"
 #include "vita_diagnostic.h"
 #include "core-font-vdmx.h"
+#include "core-font-widths.h"
 
 #include "debugwriter.h"
 
@@ -128,6 +129,19 @@ static SDL_RWops *openBundledFont()
 typedef std::pair<std::string, int> FontSizeKey;
 /* <name, ppem> */
 typedef std::pair<std::string, int> FontPPEMKey;
+
+/* Pool handles per requested size, not only per ppem: two sizes can round to
+ * one ppem yet need different Windows advance widths (vitaTtfUseWindowsAdvances). */
+static inline int fontPoolKey(int ppemMult, int size)
+{
+	return (ppemMult & 0xFFFF) | (size << 16);
+}
+
+#ifdef __vita__
+void vitaTtfUseWindowsAdvances(TTF_Font *font, double cellHeight);
+void vitaTtfUseTableAdvances(TTF_Font *font, const uint8_t *widths,
+                             const uint16_t *codepoints, int count);
+#endif
 
 struct FontSet
 {
@@ -699,6 +713,22 @@ static int stand_in_VDMX(Font_Container *font, int height)
 	return 0;
 }
 
+#ifdef __vita__
+/* Windows widths for a Liberation stand-in drawn at an unscaled ppem the table covers. */
+static void useStandInWidths(TTF_Font *font, int ppem)
+{
+	FT_Face face = TTF_FONT_TO_FT_FACE(font);
+	const char *family = face->family_name ? face->family_name : "";
+	const uint8_t (*table)[CW_CODEPOINTS] = nullptr;
+	if (!strcmp(family, "Liberation Sans")) table = cwArial;
+	else if (!strcmp(family, "Liberation Serif")) table = cwTimesNewRoman;
+	if (!table || ppem < CW_FIRST_PPEM || ppem > CW_LAST_PPEM ||
+	    (int)face->size->metrics.x_ppem != ppem)
+		return;
+	vitaTtfUseTableAdvances(font, table[ppem - CW_FIRST_PPEM], cwCodepoints, CW_CODEPOINTS);
+}
+#endif
+
 static int calc_ppem_for_height(Font_Container *font, int height)
 {
 	FT_Face ft_face = *(reinterpret_cast<FT_Face *>( font->font ));
@@ -742,11 +772,11 @@ static int calc_ppem_for_height(Font_Container *font, int height)
 			font->yMin = -windescent;
 			units = pOS2->usWinAscent + windescent;
 		}
+		/* Plain rounding, as Windows does. Wine (and PR 26) step down a ppem
+		 * when the rounded size would exceed the height; measured on
+		 * Windows 11, GDI does not (39-41 of 41 sizes for every font tested;
+		 * the step-down matched 34-38, PR 26's rule about half). */
 		ppem = (int)FT_MulDiv(ft_face->units_per_EM, height, units);
-
-		/* If rounding ends up getting a font exceeding height, choose a smaller ppem */
-		if(ppem > 1 && FT_MulDiv(units, ppem, ft_face->units_per_EM) > height)
-			--ppem;
 
 		if(ppem > MAX_PPEM) {
 			//WARN("Ignoring too large height %d, ppem %d\n", height, ppem);
@@ -902,7 +932,7 @@ TTF_Font *SharedFontState::getFont(std::string family,
 	if (ppem != 0)
 	{
 		ppemMult = std::max<int>(ppem * hiresMult, 1);
-		auto &group = p->ppem_to_font[FontPPEMKey(family, ppemMult)];
+		auto &group = p->ppem_to_font[FontPPEMKey(family, fontPoolKey(ppemMult, size))];
 		if(outline_size == 0)
 			font = group[0];
 		else
@@ -998,16 +1028,20 @@ TTF_Font *SharedFontState::getFont(std::string family,
 		/* This is should always be true, but we may as well check... */
 		if (FT_IS_SCALABLE( face ))
 		{
+			/* Cell height Windows scales advances by (see vitaTtfUseWindowsAdvances):
+			 * the requested size, 0 for a VDMX ppem, -1 for a Liberation stand-in. */
+			double winCell = double(size) * p->fontScale * hiresMult;
+			Font_Container c = { 0 };
+			c.font = font;
+			c.ppem = load_VDMX(&c, size);
+			if (c.ppem)
+				winCell = 0;
+			if (!c.ppem && (c.ppem = stand_in_VDMX(&c, size)))
+				winCell = -1;
+			if (!c.ppem)
+				c.ppem = calc_ppem_for_height( &c, size );
 			if (ppem == 0)
 			{
-				Font_Container c = { 0 };
-				c.font = font;
-				c.ppem = load_VDMX(&c, size);
-				if (!c.ppem)
-					c.ppem = stand_in_VDMX(&c, size);
-				if (!c.ppem)
-					c.ppem = calc_ppem_for_height( &c, size );
-
 				ppem = std::max<int>(c.ppem * p->fontScale, 1);
 				ppemMult = std::max<int>(ppem * hiresMult, 1);
 			}
@@ -1020,7 +1054,17 @@ TTF_Font *SharedFontState::getFont(std::string family,
 				font = 0;
 			}
 			else
+			{
 				vitaDiagLog("FONT", "set_size_ok ppemMult=%d", ppemMult);
+#ifdef __vita__
+				/* Liberation stand-ins keep FreeType's widths: Windows takes
+				 * the real font's hdmx widths, which they do not have. */
+				if (winCell >= 0)
+					vitaTtfUseWindowsAdvances(font, winCell);
+				else
+					useStandInWidths(font, ppemMult);
+#endif
+			}
 		} else {
 			/* Someone must have renamed a non-scalable font file to ttf or otf.
 			 * Wine has a scaling setup for these, but I'll just fall back to
@@ -1057,7 +1101,8 @@ TTF_Font *SharedFontState::getFont(std::string family,
 		throw Exception(Exception::SDLError, "%s", SDL_GetError());
 	}
 	
-	auto &group = p->ppem_to_font[FontPPEMKey(family, std::max<int>(ppem * hiresMult, 1))];
+	auto &group = p->ppem_to_font[FontPPEMKey(family,
+		fontPoolKey(std::max<int>(ppem * hiresMult, 1), size))];
 	if(outline_size == 0)
 	{
 		group[0] = font;

@@ -39,6 +39,9 @@
 #include FT_FREETYPE_H
 #include FT_GLYPH_H
 #include FT_STROKER_H
+#include FT_TRUETYPE_TABLES_H
+#include FT_TRUETYPE_TAGS_H
+#include FT_ADVANCES_H
 #include "vita_diagnostic.h"
 #include <malloc.h>
 #include <psp2/kernel/sysmem.h>
@@ -320,6 +323,14 @@ struct TTF_Font
     int outline;
     int hinting;
     int kerning;
+    /* Windows (GDI) advance widths, set by vitaTtfUseWindowsAdvances. */
+    bool win_advances;
+    double win_scale;                  /* pixels per font unit */
+    std::vector<unsigned char> win_hdmx; /* hdmx widths at this ppem, or empty */
+    /* Per-codepoint Windows widths for a Liberation stand-in (vitaTtfUseTableAdvances). */
+    const uint8_t *win_cp_widths;
+    const uint16_t *win_cps;
+    int win_ncps;
 };
 
 static FT_Library vita_ttf_library = NULL;
@@ -446,7 +457,107 @@ static int vita_ttf_set_size(TTF_Font *font, int ptsize)
     if (FT_Set_Pixel_Sizes(font->face, 0, static_cast<FT_UInt>(ptsize)) != 0)
         return -1;
     font->ptsize = ptsize;
+    font->win_advances = false;
+    font->win_hdmx.clear();
+    font->win_cp_widths = NULL;
     return 0;
+}
+
+/* A Liberation stand-in at a ppem the Windows width table covers: take the widths
+ * Windows gives the real font (Arial, Times New Roman) for those codepoints. */
+void vitaTtfUseTableAdvances(TTF_Font *font, const uint8_t *widths,
+                             const uint16_t *codepoints, int count)
+{
+    if (!font)
+        return;
+    font->win_cp_widths = widths;
+    font->win_cps = codepoints;
+    font->win_ncps = count;
+}
+
+/* Advance widths the way Windows GDI gives them to RGSS (measured on Windows 11
+ * against 11 game fonts, sizes 8-48: 441 of 451 strings within 1 px, against
+ * 184 with FreeType's own advances):
+ *  - the font's hdmx widths at this ppem, when it has them;
+ *  - monospaced (panose) and CFF fonts: design advance scaled by the integer ppem;
+ *  - other fonts: design advance scaled by the exact size the game asked for,
+ *    cellHeight / (winAscent + winDescent). That is why Hello Charlotte's
+ *    Coder's Crux 14 is 9 px a letter on Windows, not the 10 px of ppem 25.
+ * Each advance is rounded to whole pixels, and GDI does not kern.
+ * cellHeight 0 (the size came from a VDMX table) scales by the integer ppem. */
+void vitaTtfUseWindowsAdvances(TTF_Font *font, double cellHeight)
+{
+    if (!font || !font->face || !font->face->size || !FT_IS_SCALABLE(font->face))
+        return;
+    FT_Face face = font->face;
+    const unsigned int ppem = face->size->metrics.x_ppem;
+    const TT_OS2 *os2 = static_cast<TT_OS2 *>(FT_Get_Sfnt_Table(face, FT_SFNT_OS2));
+    const TT_HoriHeader *hhea =
+        static_cast<TT_HoriHeader *>(FT_Get_Sfnt_Table(face, FT_SFNT_HHEA));
+    FT_ULong cffLen = 0;
+    const bool cff = FT_Load_Sfnt_Table(face, TTAG_CFF, 0, NULL, &cffLen) == 0 ||
+                     FT_Load_Sfnt_Table(face, TTAG_CFF2, 0, NULL, &cffLen) == 0;
+    const bool mono = os2 && os2->version != 0xFFFF && os2->panose[3] == 9;
+
+    int units = 0;
+    if (os2 && os2->version != 0xFFFF)
+        units = os2->usWinAscent + std::abs(static_cast<FT_Short>(os2->usWinDescent));
+    if (units == 0 && hhea)
+        units = hhea->Ascender - hhea->Descender;
+
+    if (cellHeight > 0 && units > 0 && !mono && !cff)
+        font->win_scale = cellHeight / units;
+    else
+        font->win_scale = static_cast<double>(ppem) / face->units_per_EM;
+
+    font->win_hdmx.clear();
+    FT_ULong len = 0;
+    if (FT_Load_Sfnt_Table(face, TTAG_hdmx, 0, NULL, &len) == 0 && len >= 8)
+    {
+        std::vector<unsigned char> t(len);
+        if (FT_Load_Sfnt_Table(face, TTAG_hdmx, 0, t.data(), &len) == 0)
+        {
+            const int records = static_cast<int16_t>((t[2] << 8) | t[3]);
+            const uint32_t recSize = (uint32_t(t[4]) << 24) | (t[5] << 16) | (t[6] << 8) | t[7];
+            const FT_Long glyphs = face->num_glyphs;
+            for (int r = 0; r < records && recSize >= 2u + glyphs; ++r)
+            {
+                const size_t off = 8 + static_cast<size_t>(r) * recSize;
+                if (off + 2 + glyphs > len)
+                    break;
+                if (t[off] == ppem)
+                {
+                    font->win_hdmx.assign(t.begin() + off + 2, t.begin() + off + 2 + glyphs);
+                    break;
+                }
+            }
+        }
+    }
+    font->win_advances = true;
+    vitaDiagLog("TTF", "win_advances font=%p ppem=%u cell=%.2f units=%d mono=%d cff=%d hdmx=%d scale=%.5f",
+                (void *)font, ppem, cellHeight, units, mono ? 1 : 0, cff ? 1 : 0,
+                font->win_hdmx.empty() ? 0 : 1, font->win_scale);
+}
+
+/* Advance of one glyph in 26.6 under the Windows rule, or -1 if not in use. */
+static FT_Pos vita_ttf_win_advance(TTF_Font *font, FT_UInt glyph, uint32_t codepoint)
+{
+    /* The table holds the regular face's widths; bold and italic keep FreeType's. */
+    if (font->win_cp_widths && font->style == TTF_STYLE_NORMAL)
+    {
+        const uint16_t *end = font->win_cps + font->win_ncps;
+        const uint16_t *it = std::lower_bound(font->win_cps, end, codepoint);
+        if (it != end && *it == codepoint && font->win_cp_widths[it - font->win_cps])
+            return static_cast<FT_Pos>(font->win_cp_widths[it - font->win_cps]) << 6;
+    }
+    if (!font->win_advances)
+        return -1;
+    if (glyph < font->win_hdmx.size())
+        return static_cast<FT_Pos>(font->win_hdmx[glyph]) << 6;
+    FT_Fixed design = 0;
+    if (FT_Get_Advance(font->face, glyph, FT_LOAD_NO_SCALE, &design) != 0)
+        return -1;
+    return static_cast<FT_Pos>(design * font->win_scale + 0.5) << 6;
 }
 
 /* SDL_ttf-parity text layout.
@@ -578,7 +689,7 @@ static bool vita_ttf_layout(TTF_Font *font,
     for (uint32_t codepoint : codepoints)
     {
         FT_UInt glyph = FT_Get_Char_Index(font->face, codepoint);
-        if (font->kerning && previous && glyph)
+        if (font->kerning && !font->win_advances && previous && glyph)
         {
             FT_Vector kerning = {};
             if (FT_Get_Kerning(font->face, previous, glyph,
@@ -744,6 +855,9 @@ static bool vita_ttf_layout(TTF_Font *font,
             }
         }
         if (loaded) {
+            const FT_Pos win_advance = vita_ttf_win_advance(font, glyph, codepoint);
+            if (win_advance >= 0)
+                advance = win_advance;
             if (m_width && m_rows)
             {
                 const int box_left = pos_x + m_left;
