@@ -405,6 +405,13 @@ module HardRPGNative
     # Hime's Any Key Pressed Check, Zale's Keyboard Manager (Input.update)
     "Input.self#update:2414362333:3074637570:176" => "hime",
     "Input.self#update:1279336715:3637752558:537" => "zale",
+    # LonaRPG: its keyboard Input.update (256 keys a frame), CHS event checks
+    "Input.self#update:2007349359:2086834910:432" => "lona",
+    "Game_Event#current_page_charset?:1390804453:1485514403:107" => "lona",
+    "Game_Event#use_chs?:1990479413:3761507594:34" => "lona",
+    "Game_Event#sex_mode?:940108162:198318697:75" => "lona",
+    "Game_Event#character_index:2159403383:2602247621:102" => "lona",
+    "Game_Interpreter#running?:3489182040:2070808771:26" => "",
     # Victor Engine Character Control (poses; LISA: The Joyful)
     "Game_CharacterBase#update_animation:1015179229:4226047143:272" => "vic",
     "Game_CharacterBase#update_anime_count:1699064850:2066622519:108" => "vic",
@@ -506,7 +513,8 @@ module HardRPGNative
   }.freeze
 
   CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Player Game_Map Game_Variables Game_Switches Game_Vehicle
-               Sprite_Base Sprite_Character Spriteset_Map Sprite StarAuraEffect Input.self Switch.self].freeze
+               Sprite_Base Sprite_Character Spriteset_Map Sprite StarAuraEffect Input.self Switch.self
+               Game_Interpreter].freeze
   ATTRS = { 'Game_CharacterBase' => %i[tile_id character_name character_index pattern direction opacity blend_type
                                        bush_depth transparent animation_id balloon_id current_floor pose_sufix
                                        idle_stance],
@@ -525,7 +533,7 @@ module HardRPGNative
   # next start skips reading its scripts again (BLACK SOULS II: about 2 s of every start on the Vita).
   # Only the methods of CLASSES are kept; what they mean (swapped or kept) is still decided each start.
   module SectionCache
-    VERSION = 3 # change it whenever Norm's output or CLASSES changes
+    VERSION = 4 # change it whenever Norm's output or CLASSES changes
     MAX = 4000  # sections; the ones this start used are kept first
 
     class << self
@@ -668,4 +676,69 @@ if Kernel.respond_to?(:rgss_main, true)
     hardrpg_native_events_rgss_main(*args, &block)
   end
   Kernel.send(:private, :rgss_main)
+end
+
+# Games that load their scripts from files with eval never reach section_loaded: LonaRPG's one
+# section evals Data/Scripts/*.rb, and those load about 320 more files. A script_compiled trace
+# sees each eval'd file (its path and text). A file has run by the time the next one compiles,
+# so it is checked then, before a later file can alias its methods; the last one when the first
+# map scene shows. Only files whose path ends in .rb count (not eval'd snippets).
+module HardRPGNative
+  module EvalScripts
+    @pending = nil
+    @count = 0
+    class << self
+      attr_reader :count
+
+      def start
+        return if $hardrpg_native_events == false || !defined?(TracePoint)
+        @tp = TracePoint.new(:script_compiled) do |tp|
+          flush
+          src = tp.eval_script
+          iseq = tp.instruction_sequence
+          path = iseq && iseq.path
+          @pending = [path, src] if src.is_a?(String) && path.is_a?(String) && path.end_with?('.rb') &&
+                                    !path.start_with?('app0:')
+        end
+        @tp.enable
+      rescue StandardError, NotImplementedError
+        @tp = nil
+      end
+
+      def flush
+        pending = @pending
+        @pending = nil
+        return unless pending
+        @count += 1
+        HardRPGNative.section_loaded(pending[0], pending[1])
+      rescue StandardError
+        nil
+      end
+
+      def active?
+        !@tp.nil?
+      end
+
+      def stop
+        return unless @tp
+        @tp.disable
+        @tp = nil
+        flush
+        HardRPGNative::SectionCache.save if @count > 0
+      rescue StandardError
+        nil
+      end
+    end
+  end
+end
+HardRPGNative::EvalScripts.start
+class << Graphics
+  alias_method :hardrpg_eval_scripts_update, :update
+  def update(*args)
+    if HardRPGNative::EvalScripts.active? && defined?(SceneManager) && defined?(Scene_Map) &&
+       (SceneManager.scene.is_a?(Scene_Map) rescue false)
+      HardRPGNative::EvalScripts.stop
+    end
+    hardrpg_eval_scripts_update(*args)
+  end
 end

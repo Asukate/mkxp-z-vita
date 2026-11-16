@@ -186,6 +186,9 @@ enum SlotId {
     S_GM_setup_autorun_common_event, S_GVH_screen_y, S_GVH_altitude, S_CE_autorun, S_ENUM_find,
     /* Galv's Region Effects wrappers, DMO screen_z wrapper (alias names), keyboard scripts on Input */
     S_H_GM_ue_galv, S_H_SM_uc_galv, S_H_GCB_sz_dmo, S_IN_update_hime, S_IN_update_zale,
+    /* LonaRPG: CHS events, its keyboard Input.update; Game_Interpreter#running?; RPG page attributes */
+    S_GE_cpc, S_GE_use_chs, S_GE_sex_mode, S_GE_character_index_lona, S_IN_update_lona, S_GI_running,
+    S_PAGE_graphic, S_GRAPHIC_character_name, S_STR_include,
     /* Victor Engine Character Control: its attributes, resting_pose (checked) and wrapper aliases */
     S_GCB_pose_sufix, S_GCB_idle_stance, S_GCB_resting_pose, S_H_GCB_uac_vic, S_H_GCB_uap_vic,
     S_H_GCB_us_vic, S_H_SC_gc_vic,
@@ -578,7 +581,9 @@ static ID id_update_symbol_reaction, id_update_symbol_movement, id_zero, id_trun
     id_list, id_each, id_each_value, id_GetKeyboardState, id_DOWN_STATE_MASK, id_Keys_To_Check,
     id_th_update, id_Keys, id_AKEY, id_zale_update, iv_r_events, iv_region_sprites, iv_dmo_screen_z,
     iv_state, iv_any_key_pressed, iv_pressed, iv_triggers, iv_released, iv_timer, iv_pose_speed,
-    iv_playing_pose, iv_pose_loop, iv_pose_sufix, id_change_pose;
+    iv_playing_pose, iv_pose_loop, iv_pose_sufix, id_change_pose, iv_page, iv_chs_configuration, iv_fiber,
+    iv_triggered, iv_repeated, id_include;
+static VALUE g_str_sex_pos = Qnil, g_str_char = Qnil;
 static ID gv_game_map, gv_data_animations, gv_game_variables, gv_game_system, gv_game_temp,
     gv_data_common_events, gv_game_switches;
 static VALUE g_spriteBase = Qnil, g_graphics = Qnil;
@@ -1828,6 +1833,130 @@ static VALUE in_update_hime(VALUE self, int, const VALUE *, bool) {
     return r;
 }
 
+/* LonaRPG's keyboard Input.update (1000_Hime_AllKey.rb):
+ *   GetKeyboardState.call(@state.to_i)
+ *   0.upto(255) do |key|
+ *     if @state[key] & DOWN_STATE_MASK == DOWN_STATE_MASK
+ *       @released[key] = false
+ *       @pressed[key]  = true if (@triggered[key] = !@pressed[key])
+ *       @repeated[key] < 17 ? @repeated[key] += 1 : @repeated[key] = 15
+ *     elsif !@released[key] and @pressed[key]
+ *       @triggered[key] = false; @pressed[key] = false; @repeated[key] = 0; @released[key] = true
+ *     else
+ *       @released[key] = false
+ *     end
+ *   end
+ * 256 keys a frame were ~2000 Ruby calls. */
+static VALUE in_update_lona(VALUE self, int, const VALUE *, bool) {
+    if (!(rb_const_defined_at(self, id_GetKeyboardState) && rb_const_defined_at(self, id_DOWN_STATE_MASK)))
+        return callOrig(self, S_IN_update_lona, 0, nullptr);
+    VALUE gks = rb_const_get_at(self, id_GetKeyboardState);
+    VALUE mask = rb_const_get_at(self, id_DOWN_STATE_MASK);
+    VALUE state = rb_ivar_get(self, iv_state);
+    VALUE rel = rb_ivar_get(self, iv_released), pre = rb_ivar_get(self, iv_pressed);
+    VALUE tri = rb_ivar_get(self, iv_triggered), rep = rb_ivar_get(self, iv_repeated);
+    size_t size = 0;
+    unsigned char *data = hardrpgDLData(state, &size);
+    bool ok = data && size >= 256 && FIXNUM_P(mask) && ffiKey(gks, 2) &&
+              slotOk(g_slots[S_DL_aref], rb_class_of(state)) && slotOk(g_slots[S_DL_to_i], rb_class_of(state)) &&
+              plainArray(rel) && plainArray(pre) && plainArray(tri) && plainArray(rep) &&
+              !OBJ_FROZEN(rel) && !OBJ_FROZEN(pre) && !OBJ_FROZEN(tri) && !OBJ_FROZEN(rep) &&
+              slotOk(g_slots[S_ARY_aref], rb_cArray);
+    if (!ok)
+        return callOrig(self, S_IN_update_lona, 0, nullptr);
+    const long m = FIX2LONG(mask);
+    unsigned char down[256];
+    for (unsigned int k = 0; k < 256; ++k) {
+        down[k] = hardrpgVitaKeyPressed(k) ? 0x80 : 0;
+        /* A held key adds to its @repeated count: only an Integer below 2**30 is done here. */
+        if ((((long)down[k]) & m) == m) {
+            VALUE r = rb_ary_entry(rep, k);
+            if (!FIXNUM_P(r) || FIX2LONG(r) > (1L << 29))
+                return callOrig(self, S_IN_update_lona, 0, nullptr);
+        }
+    }
+    memcpy(data, down, 256); /* what GetKeyboardState writes on the Vita */
+    for (long k = 0; k < 256; ++k) {
+        if ((((long)down[k]) & m) == m) {
+            rb_ary_store(rel, k, Qfalse);
+            bool t = !RTEST(rb_ary_entry(pre, k));
+            rb_ary_store(tri, k, t ? Qtrue : Qfalse);
+            if (t)
+                rb_ary_store(pre, k, Qtrue);
+            long r = FIX2LONG(rb_ary_entry(rep, k));
+            rb_ary_store(rep, k, r < 17 ? LONG2FIX(r + 1) : INT2FIX(15));
+        } else if (!RTEST(rb_ary_entry(rel, k)) && RTEST(rb_ary_entry(pre, k))) {
+            rb_ary_store(tri, k, Qfalse);
+            rb_ary_store(pre, k, Qfalse);
+            rb_ary_store(rep, k, INT2FIX(0));
+            rb_ary_store(rel, k, Qtrue);
+        } else {
+            rb_ary_store(rel, k, Qfalse);
+        }
+    }
+    return INT2FIX(0); /* 0.upto(255) returns 0 */
+}
+
+/* LonaRPG CHS events. Game_Event#current_page_charset?:
+ *   return false if @page.nil?
+ *   @page.graphic.character_name.include?("-char-".freeze) */
+static VALUE ge_cpc_lona(VALUE self, int, const VALUE *, bool) {
+    VALUE page = IV(self, page);
+    if (NIL_P(page))
+        return Qfalse;
+    VALUE name = call0(call0(page, S_PAGE_graphic), S_GRAPHIC_character_name);
+    if (RB_TYPE_P(name, T_STRING) && rb_class_of(name) == rb_cString && slotOk(g_slots[S_STR_include], rb_cString)) {
+        /* An ASCII needle: a byte match is a character match in these encodings. */
+        int e = rb_enc_get_index(name);
+        if (e == rb_utf8_encindex() || e == rb_usascii_encindex() || e == rb_ascii8bit_encindex()) {
+            const char *p = RSTRING_PTR(name);
+            long n = RSTRING_LEN(name);
+            return rbool(n >= 6 && memmem(p, (size_t)n, "-char-", 6) != nullptr);
+        }
+    }
+    return rb_funcall(name, id_include, 1, g_str_char);
+}
+/* Game_Event#use_chs?:  current_page_charset? */
+static VALUE ge_use_chs_lona(VALUE self, int, const VALUE *, bool) {
+    return call0(self, S_GE_cpc);
+}
+/* Game_Event#sex_mode?:
+ *   return false if !use_chs?
+ *   @chs_configuration["sex_pos"] != -1 */
+static VALUE ge_sex_mode_lona(VALUE self, int, const VALUE *, bool) {
+    if (!RTEST(call0(self, S_GE_use_chs)))
+        return Qfalse;
+    VALUE cfg = IV(self, chs_configuration);
+    VALUE v = plainHash(cfg) && slotOk(g_slots[S_HSH_aref], rb_cHash)
+                  ? rb_hash_aref(cfg, g_str_sex_pos)
+                  : rb_funcall(cfg, id_aref, 1, rb_str_new_cstr("sex_pos"));
+    if (FIXNUM_P(v))
+        return rbool(v != INT2FIX(-1));
+    if (NIL_P(v) || v == Qfalse || v == Qtrue)
+        return Qtrue;
+    return rb_funcall(v, id_neq, 1, INT2FIX(-1));
+}
+/* Game_Event#character_index:
+ *   return @character_index if !use_chs?
+ *   return 0 if sex_mode?
+ *   return @character_index */
+static VALUE ge_character_index_lona(VALUE self, int, const VALUE *, bool) {
+    if (!RTEST(call0(self, S_GE_use_chs)))
+        return IV(self, character_index);
+    if (RTEST(call0(self, S_GE_sex_mode)))
+        return INT2FIX(0);
+    return IV(self, character_index);
+}
+/* Game_Interpreter#running? (default):  @fiber != nil */
+static VALUE gi_running(VALUE self, int, const VALUE *, bool) {
+    VALUE f = rb_ivar_get(self, iv_fiber);
+    if (NIL_P(f))
+        return Qfalse;
+    if (RTEST(rb_obj_is_fiber(f)))
+        return Qtrue;
+    return rb_funcall(f, id_neq, 1, Qnil);
+}
+
 /* Zale's Keyboard Manager, Input.update (class << self):
  *   zale_keyman_input_update_CIO223cjcivoa
  *   Keys.each_value{ |key|
@@ -2915,6 +3044,13 @@ static const NativeDef g_natives[] = {
     /* keyboard scripts (Hime's Any Key Pressed Check, Zale's Keyboard Manager) */
     ND(S_IN_update_hime, "hime", in_update_hime, -1),
     ND(S_IN_update_zale, "zale", in_update_zale, -1),
+    /* LonaRPG */
+    ND(S_IN_update_lona, "lona", in_update_lona, -1),
+    ND(S_GE_cpc, "lona", ge_cpc_lona, -1),
+    ND(S_GE_use_chs, "lona", ge_use_chs_lona, -1),
+    ND(S_GE_sex_mode, "lona", ge_sex_mode_lona, -1),
+    ND(S_GE_character_index_lona, "lona", ge_character_index_lona, -1),
+    ND(S_GI_running, "", gi_running, -1),
     ND(S_SB_update, "", sb_update, S_SPR_update),
     ND(S_SB_animation, "", sb_animation, -1),
     ND(S_SB_update_animation, "", sb_update_animation, -1),
@@ -3326,7 +3462,8 @@ void nativeEventsInit(int rgssVersion) {
     I(id_DOWN_STATE_MASK, "DOWN_STATE_MASK"); I(id_Keys_To_Check, "Keys_To_Check");
     I(id_th_update, "th_any_key_pressed_check_update"); I(id_Keys, "Keys"); I(id_AKEY, "AKEY");
     I(id_zale_update, "zale_keyman_input_update_CIO223cjcivoa"); I(iv_r_events, "@r_events");
-    I(iv_region_sprites, "@region_sprites"); I(iv_dmo_screen_z, "@dmo_screen_z"); I(iv_state, "@state");
+    I(iv_region_sprites, "@region_sprites"); I(iv_dmo_screen_z, "@dmo_screen_z"); I(iv_state, "@state"); I(iv_page, "@page"); I(iv_chs_configuration, "@chs_configuration");
+    I(iv_fiber, "@fiber"); I(iv_triggered, "@triggered"); I(iv_repeated, "@repeated"); I(id_include, "include?");
     I(iv_any_key_pressed, "@any_key_pressed"); I(iv_pressed, "@pressed"); I(iv_triggers, "@triggers");
     I(iv_released, "@released"); I(iv_timer, "@timer");
     I(iv_pose_speed, "@pose_speed"); I(iv_playing_pose, "@playing_pose"); I(iv_pose_loop, "@pose_loop");
@@ -3490,6 +3627,15 @@ void nativeEventsInit(int rgssVersion) {
     slotDef(S_H_SC_gc_vic, "alias", "graphic_changed_ve_character_control?");
     slotDef(S_IN_update_hime, "Input.self", "update");
     slotDef(S_IN_update_zale, "Input.self", "update");
+    slotDef(S_IN_update_lona, "Input.self", "update");
+    slotDef(S_GE_cpc, "Game_Event", "current_page_charset?");
+    slotDef(S_GE_use_chs, "Game_Event", "use_chs?");
+    slotDef(S_GE_sex_mode, "Game_Event", "sex_mode?");
+    slotDef(S_GE_character_index_lona, "Game_Event", "character_index");
+    slotDef(S_GI_running, "Game_Interpreter", "running?");
+    slotDef(S_PAGE_graphic, "RPG::Event::Page", "graphic");
+    slotDef(S_GRAPHIC_character_name, "RPG::Event::Page::Graphic", "character_name");
+    slotDef(S_STR_include, "String", "include?");
     slotDef(S_FFI_call, "MiniFFI", "call");
     slotDef(S_DL_aref, "DL::CPtr", "[]");
     slotDef(S_DL_to_i, "DL::CPtr", "to_i");
@@ -3739,7 +3885,7 @@ static VALUE initRuby(VALUE) {
         {S_ARY_delete_if, rb_cArray}, {S_ARY_each_with_index, rb_cArray}, {S_ENUM_find, rb_cArray},
         {S_HSH_aref, rb_cHash}, {S_HSH_aset, rb_cHash}, {S_HSH_each_value, rb_cHash}, {S_ARY_any, rb_cArray},
         {S_HSH_values, rb_cHash}, {S_ARY_select, rb_cArray}, {S_ARY_collect, rb_cArray}, {S_ARY_plus, rb_cArray},
-        {S_SYM_eqq, rb_cSymbol}};
+        {S_SYM_eqq, rb_cSymbol}, {S_STR_include, rb_cString}};
     for (auto &b : builtins) {
         Slot &s = g_slots[b.id];
         /* The method that class has now (String#!= is BasicObject#!=, which calls ==;
@@ -3756,6 +3902,12 @@ static VALUE initRuby(VALUE) {
     attrSlotFrom(S_MAP_width, rpgClass("RPG::Map"));
     attrSlotFrom(S_MAP_height, rpgClass("RPG::Map"));
     attrSlotFrom(S_EVENT_id, rpgClass("RPG::Event"));
+    attrSlotFrom(S_PAGE_graphic, rpgClass("RPG::Event::Page"));
+    attrSlotFrom(S_GRAPHIC_character_name, rpgClass("RPG::Event::Page::Graphic"));
+    g_str_sex_pos = rb_obj_freeze(rb_str_new_cstr("sex_pos"));
+    rb_gc_register_mark_object(g_str_sex_pos);
+    g_str_char = rb_obj_freeze(rb_str_new_cstr("-char-"));
+    rb_gc_register_mark_object(g_str_char);
     attrSlotFrom(S_MAP_data, rpgClass("RPG::Map"));
     attrSlotFrom(S_TS_flags, rpgClass("RPG::Tileset"));
     engineSlot(S_TBL_aref, rb_path2class("Table"));
