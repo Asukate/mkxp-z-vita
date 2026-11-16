@@ -17,7 +17,7 @@ unsigned vitaFileWriteGeneration(void)
 /* HardRPG's own files (logs, reports, crash copies, the image-load history)
  * are written all the time and never hold game assets; games and RTPs under
  * ux0:/data/hardrpg/games and /rtp still count, as does anything elsewhere. */
-static int engineOwnPath(const char *path)
+int vitaEngineOwnPath(const char *path)
 {
     static const char *const roots[] = {"ux0:/data/hardrpg/", "ux0:data/hardrpg/"};
     for (unsigned i = 0; path && i < sizeof(roots) / sizeof(roots[0]); ++i)
@@ -32,9 +32,9 @@ static int engineOwnPath(const char *path)
     return 0;
 }
 
-static void noteWrite(const char *path)
+void vitaFileNoteWrite(const char *path)
 {
-    if (!engineOwnPath(path))
+    if (!vitaEngineOwnPath(path))
         atomic_fetch_add_explicit(&writeGeneration, 1, memory_order_acq_rel);
 }
 
@@ -42,26 +42,39 @@ extern int __real__open_r(struct _reent *, const char *, int, int);
 extern int __real__rename_r(struct _reent *, const char *, const char *);
 extern int __real__mkdir_r(struct _reent *, const char *, int);
 
+/* vita_stat_cache.c: drops cached folder contents that a change touches. */
+void *vitaStatCacheBeginWrite(const char *path);
+void vitaStatCacheOpened(void *dir, int fd);
+void vitaStatCacheChanged(const char *path, int subtree);
+
 int __wrap__open_r(struct _reent *r, const char *path, int flags, int mode)
 {
+    const int writes = (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)) != 0;
+    void *dir = writes ? vitaStatCacheBeginWrite(path) : NULL;
     const int result = __real__open_r(r, path, flags, mode);
     /* Counted after the call, so a listing made after the count was read
      * already shows the file. */
-    if ((flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)) != 0)
-        noteWrite(path);
+    if (writes)
+    {
+        vitaStatCacheOpened(dir, result);
+        vitaFileNoteWrite(path);
+    }
     return result;
 }
 
 int __wrap__rename_r(struct _reent *r, const char *from, const char *to)
 {
     const int result = __real__rename_r(r, from, to);
-    noteWrite(to);
+    vitaStatCacheChanged(from, 1);
+    vitaStatCacheChanged(to, 1);
+    vitaFileNoteWrite(to);
     return result;
 }
 
 int __wrap__mkdir_r(struct _reent *r, const char *path, int mode)
 {
     const int result = __real__mkdir_r(r, path, mode);
-    noteWrite(path);
+    vitaStatCacheChanged(path, 1);
+    vitaFileNoteWrite(path);
     return result;
 }

@@ -212,6 +212,7 @@ void httpBindingInit();
 void nativeEventsInit(int rgssVersion);
 void essentialsNativesInit(int rgssVersion);
 extern "C" void jsonNativesInit();
+extern "C" void fsNativesInit();
 void hardrpgProfInit();
 void spriteScriptsInit();
 
@@ -349,6 +350,7 @@ static void mriBindingInit() {
     nativeEventsInit(rgssVer);
     essentialsNativesInit(rgssVer);
     jsonNativesInit();
+    fsNativesInit();
     hardrpgProfInit();
     spriteScriptsInit();
 

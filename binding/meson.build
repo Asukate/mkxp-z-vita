@@ -38,6 +38,7 @@ binding_source = [files(
     'sprite-scripts.cpp',
     'essentials-natives.cpp',
     'json-natives.cpp',
+    'fs-natives.cpp',
     'hardrpg-prof.cpp'
 )]
 

@@ -14,6 +14,7 @@
 module HardRPGJsonNatives
   METHODS = %i[decode parse next_token parse_object parse_array parse_string parse_number].freeze
   CHECK_CALLS = 6
+  CHECK_MAX_BYTES = 8192
 
   PROBES = [
     '{"a":1,"b":[1,2,3],"c":{"d":"e"}}',
@@ -91,7 +92,9 @@ module HardRPGJsonNatives
       st = state(mod)
       st = set(mod, verify(mod, orig)) if st == :unknown
       return orig.call(text) unless st == :native && native_ok?(text)
-      if @checks > 0
+      # Cross-check a few early calls, small ones only: the game's Ruby decoder takes about a
+      # second per 100 KB on the Vita.
+      if @checks > 0 && text.bytesize <= CHECK_MAX_BYTES
         @checks -= 1
         ruby = outcome { [:ok, orig.call(text), mod.instance_variable_get(:@index)] }
         native = outcome { [:ok, HardRPGJson.gg_decode(mod, text, @sample), mod.instance_variable_get(:@index)] }
