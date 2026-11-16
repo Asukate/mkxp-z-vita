@@ -253,6 +253,46 @@ TEXFBO TexPool::requestImage(int width, int height, const void *pixels)
 	return obj;
 }
 
+unsigned tex16LiveCount = 0;
+size_t tex16LiveBytes = 0;
+
+TEXFBO TexPool::requestImage16(int width, int height, const void *pixels, uint8_t fmt16)
+{
+	int maxSize = glState.caps.maxTexSize;
+	if (width > maxSize || height > maxSize)
+		throw Exception(Exception::MKXPError,
+		                "Texture dimensions [%d, %d] exceed hardware capabilities",
+		                width, height);
+
+	texMakeRoom((size_t)width * height * 2);
+	for (int attempt = 0; ; ++attempt)
+	{
+		TEXFBO obj;
+		obj.tex = TEX::gen();
+		TEX::bind(obj.tex);
+		TEX::setRepeat(false);
+		TEX::setSmooth(false);
+		try
+		{
+			TEX::uploadImage16(width, height, pixels, fmt16);
+		}
+		catch (const Exception &)
+		{
+			TEX::del(obj.tex);
+			if (attempt > 0 || p->objCount == 0)
+				throw;
+			clearCache();
+			continue;
+		}
+		obj.width = width;
+		obj.height = height;
+		obj.fmt16 = fmt16;
+		++tex16LiveCount;
+		tex16LiveBytes += size_t(width) * height * 2;
+		return obj;
+	}
+}
+
 void TexPool::releaseUncached(TEXFBO &obj)
 {
 	if (obj.tex != TEX::ID(0) && obj.fbo != FBO::ID(0))

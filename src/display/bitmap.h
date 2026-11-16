@@ -141,6 +141,10 @@ public:
 
 	/* <internal> */
 	TEXFBO &getGLTypes() const;
+	/* For callers that only sample the texture on the GPU (blit sources):
+	 * a dithered 16-bit file image stays as it is (see Tex16 in
+	 * bitmap.cpp); anything else is getGLTypes(). */
+	TEXFBO &getGLTypesForSampling() const;
 	/* True only when every pixel is known to be fully transparent (all zero)
 	 * without reading the GPU: a pending clear to transparent, or memory
 	 * pixels that are all zero. False when unknown. */

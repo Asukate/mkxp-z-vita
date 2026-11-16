@@ -38,6 +38,7 @@
 #include <SDL_surface.h>
 
 #ifdef __vita__
+#include <psp2/io/stat.h>
 extern "C" void *vglGetTexDataPointerByID(unsigned int texture);
 extern "C" void vitaBeginPixelTransfer(const void *pixels);
 extern "C" void vitaEndPixelTransfer(void);
@@ -51,6 +52,7 @@ extern unsigned long long vgl_upload_barrier_us;
 
 #include "gl-util.h"
 #include "gl-meta.h"
+#include "tex16.h"
 #include "quad.h"
 #include "quadarray.h"
 #include "transform.h"
@@ -187,6 +189,87 @@ static void clearFullOverwrite(BitmapPrivate *p);
 static bool cpuSync(BitmapPrivate *p);
 static void bindDrawFallback();
 static void cpuPromote(BitmapPrivate *p);
+
+/* Dithered 16-bit file images (Vita).
+ *
+ * A decoded image file that nothing draws into is stored on the GPU as
+ * RGB565 (opaque), RGBA5551 (alpha only 0 or 255) or RGBA4444 (soft alpha),
+ * with a 4x4 Bayer dither (tex16.h): half the graphics memory of RGBA8.
+ * Such a texture (TEXFBO::fmt16) is only ever sampled: sprites, planes,
+ * windows and GPU blits read it as they read any texture. Anything that
+ * needs the real pixels gets them from the file again, never from the
+ * dithered copy:
+ * - drawing into the bitmap (text, fills, blits into it, clear, hue change)
+ *   or reading its texture memory (tilemap atlas builds, copies, large
+ *   get_pixel) turns it back into an ordinary 32-bit texture first
+ *   (tex16Promote);
+ * - CPU blits from it and small get_pixel reads use the readback copy, which
+ *   is filled from the file (tex16FillExact) while the texture stays 16-bit.
+ * Only if the file can no longer be read (changed on disk) are the dithered
+ * pixels expanded instead; that is counted as "lossy" in the statistics.
+ *
+ * Off with ux0:/data/hardrpg/tex16_off.flag; soft-alpha images stay 32-bit
+ * with ux0:/data/hardrpg/tex16_soft32.flag. Both read once per launch. */
+namespace Tex16
+{
+/* Set while Bitmap(filename) builds the texture of a decoded file. */
+static bool fileLoad = false;
+static const char *fileName = nullptr;
+static int mode = -1; /* 0 off, 1 on, 2 on but soft alpha stays 32-bit */
+static const size_t minPixels = 4096;
+struct Stats
+{
+    unsigned images[4] = {0, 0, 0, 0};    /* by format, cumulative */
+    uint64_t bytes32[4] = {0, 0, 0, 0};   /* RGBA8 size of those */
+    unsigned promoted = 0, promotedExact = 0, lossy = 0, exactReads = 0, blankPromotes = 0;
+    uint64_t promotedBytes = 0;
+    double packMs = 0, decodeMs = 0;
+};
+static Stats stats;
+static unsigned logged = 0;
+
+static int currentMode()
+{
+    if (mode < 0)
+    {
+#ifdef __vita__
+        SceIoStat st;
+        if (sceIoGetstat("ux0:/data/hardrpg/tex16_off.flag", &st) >= 0)
+            mode = 0;
+        else if (sceIoGetstat("ux0:/data/hardrpg/tex16_soft32.flag", &st) >= 0)
+            mode = 2;
+        else
+            mode = 1;
+        fprintf(stderr, "[tex16] mode=%d neon=%d\n", mode, tex16::usingNeon() ? 1 : 0);
+#else
+        mode = 0;
+#endif
+    }
+    return mode;
+}
+
+struct FileLoadScope
+{
+    bool was;
+    const char *wasName;
+    explicit FileLoadScope(const char *name) : was(fileLoad), wasName(fileName) { fileLoad = true; fileName = name; }
+    ~FileLoadScope() { fileLoad = was; fileName = wasName; }
+};
+
+/* XP's tilemap builds its atlas from the tileset's and autotiles' texture
+ * memory on the CPU, which would turn them back to 32-bit at every map
+ * load (with a second full decode): keep those 32-bit from the start. */
+static bool excluded(const char *name)
+{
+    if (!name || rgssVer != 1)
+        return false;
+    return strcasestr(name, "Tilesets/") || strcasestr(name, "Autotiles/") ||
+           strcasestr(name, "Tilesets\\") || strcasestr(name, "Autotiles\\");
+}
+} // namespace Tex16
+
+static void tex16Promote(BitmapPrivate *p, const char *why, bool discardContents = false);
+static bool tex16FillExact(BitmapPrivate *p, uint8_t *dst, size_t dstPitch, bool *exact);
 static bool bandsCurrent(BitmapPrivate *p);
 
 /* One band of a banded image (see initFromBands): a crop of the logical
@@ -599,6 +682,8 @@ struct BitmapPrivate
  * changes its mapped linear RGBA storage. Small targets keep the GPU path. */
 static bool clearMappedImage(BitmapPrivate *p, const Vec4 &color)
 {
+    if (p->gl.fmt16)
+        tex16Promote(p, "clear", !p->imageCrop.active());
     if (p->cpu || color.x || color.y || color.z || color.w || bandsCurrent(p) ||
         (!p->imageCrop.active() && size_t(p->gl.width) * p->gl.height < 1024u * 1024u))
         return false;
@@ -1038,6 +1123,8 @@ static bool bandsCurrent(BitmapPrivate *p)
 static void cpuPromote(BitmapPrivate *p)
 {
 #ifdef __vita__
+    if (p->gl.fmt16)
+        tex16Promote(p, "draw");
     if (bandsCurrent(p))
     {
         const ImageCrop logical = p->imageCrop;
@@ -1243,6 +1330,10 @@ static inline uint32_t cpuLerp(uint32_t a, uint32_t b, uint32_t f)
  * The caller has materialized any pending clear. */
 static bool readbackSurface(BitmapPrivate *p)
 {
+#ifdef __vita__
+    const bool exact16 = p->gl.fmt16 && !p->imageCrop.active() && !p->animation.enabled;
+    if (!exact16)
+#endif
     cpuPromote(p);
     if (p->surface)
     {
@@ -1265,6 +1356,14 @@ static bool readbackSurface(BitmapPrivate *p)
         readbackList.front()->dropReadback();
 
 #ifdef __vita__
+        if (exact16)
+        {
+            bool exact = false;
+            if (tex16FillExact(p, static_cast<uint8_t *>(p->surface->pixels), p->surface->pitch, &exact))
+                return true;
+            p->dropReadback();
+            return false;
+        }
         /*
          * vitaGL keeps ordinary RGBA8 texture storage in CPU-visible mapped
          * memory.  Reading that storage directly is both cheaper and safer
@@ -1716,6 +1815,172 @@ struct BitmapOpenHandler : FileSystem::OpenHandler
     }
 };
 
+/* The 32-bit pixels a dithered 16-bit image stands for, in its stored
+ * layout (gl.width x gl.height, the crop rectangle for a cropped image),
+ * written to dst. From the file when it still reads the same (exact),
+ * otherwise expanded from the 16-bit texels. */
+static bool tex16FillExact(BitmapPrivate *p, uint8_t *dst, size_t dstPitch, bool *exact)
+{
+#ifdef __vita__
+    const int w = p->gl.width, h = p->gl.height;
+    *exact = false;
+    const Uint64 t0 = SDL_GetPerformanceCounter();
+    SDL_Surface *s = 0;
+    if (!p->fileKey.empty())
+    {
+        AssetPrefetch::FileInfo file;
+        s = AssetPrefetch::takeImage(p->fileKey, &file);
+        if (s && file.size >= 0 && (file.size != p->fileSize || file.mtime != p->fileTime))
+        {
+            SDL_FreeSurface(s);
+            s = 0;
+        }
+        if (!s)
+        {
+            BitmapOpenHandler handler;
+            try { shState->fileSystem().openRead(handler, p->fileKey.c_str()); } catch (...) {}
+            if (handler.gif)
+            {
+                gif_finalise(handler.gif);
+                delete handler.gif;
+                delete[] handler.gif_data;
+            }
+            else if (handler.surface && handler.size == p->fileSize && handler.mtime == p->fileTime)
+                s = handler.surface;
+            else if (handler.surface)
+                SDL_FreeSurface(handler.surface);
+        }
+    }
+    if (s && SDL_VitaGetImageBands(s))
+    {
+        SDL_FreeSurface(s);
+        s = 0;
+    }
+    if (s)
+    {
+        SDL_VitaImageCrop dc;
+        const bool packed = SDL_VitaGetImageCrop(s, &dc);
+        if (!packed)
+            BitmapPrivate::ensureFormat(s, SDL_PIXELFORMAT_ABGR8888);
+        const uint8_t *src = 0;
+        size_t pitch = 0;
+        const ImageCrop &c = p->imageCrop;
+        if (packed)
+        {
+            if (c.active() && dc.x == c.x && dc.y == c.y && dc.width == w && dc.height == h)
+                src = static_cast<const uint8_t *>(s->pixels), pitch = size_t(w) * 4;
+        }
+        else if (s && c.active())
+        {
+            if (s->w == c.logicalWidth && s->h == c.logicalHeight)
+                src = static_cast<const uint8_t *>(s->pixels) + size_t(c.y) * s->pitch + size_t(c.x) * 4,
+                pitch = s->pitch;
+        }
+        else if (s && s->w == w && s->h == h)
+            src = static_cast<const uint8_t *>(s->pixels), pitch = s->pitch;
+        if (src)
+        {
+            for (int y = 0; y < h; ++y)
+                memcpy(dst + y * dstPitch, src + y * pitch, size_t(w) * 4);
+            *exact = true;
+        }
+        if (s)
+            SDL_FreeSurface(s);
+    }
+    if (!*exact)
+    {
+        gl.Finish();
+        const uint8_t *texels = static_cast<const uint8_t *>(vglGetTexDataPointerByID(p->gl.tex.gl));
+        if (!texels)
+            return false;
+        const size_t pitch = size_t((w + 7) & ~7) * 2;
+        for (int y = 0; y < h; ++y)
+        {
+            const uint8_t *row = texels + y * pitch;
+            uint8_t *out = dst + y * dstPitch;
+            for (int x = 0; x < w; ++x)
+                tex16::unpack(uint16_t(row[2 * x] | (row[2 * x + 1] << 8)), p->gl.fmt16, out + 4 * x);
+        }
+        Tex16::stats.lossy++;
+        if (Tex16::logged < 64)
+        {
+            ++Tex16::logged;
+            fprintf(stderr, "[tex16] lossy %dx%d %.120s (file unreadable or changed)\n", w, h, p->fileKey.c_str());
+        }
+    }
+    Tex16::stats.exactReads++;
+    Tex16::stats.decodeMs += double(SDL_GetPerformanceCounter() - t0) * 1000.0 /
+                             double(SDL_GetPerformanceFrequency());
+    return true;
+#else
+    (void)p; (void)dst; (void)dstPitch; *exact = false;
+    return false;
+#endif
+}
+
+/* Turn a dithered 16-bit image back into an ordinary 32-bit render target
+ * holding the file's pixels (or no defined pixels with discardContents, for
+ * a full clear). The bitmap's crop and file identity stay as they were. */
+static void tex16Promote(BitmapPrivate *p, const char *why, bool discardContents)
+{
+#ifdef __vita__
+    if (!p->gl.fmt16)
+        return;
+    const int w = p->gl.width, h = p->gl.height;
+    const FBO::ID bound = FBO::boundFramebufferID;
+    TEXFBO full;
+    bool exact = false;
+    if (discardContents)
+    {
+        full = shState->texPool().request(w, h);
+        Tex16::stats.blankPromotes++;
+    }
+    else
+    {
+        std::vector<uint8_t> pixels;
+        try { pixels.resize(size_t(w) * h * 4); }
+        catch (const std::bad_alloc &)
+        {
+            throw Exception(Exception::MKXPError, "Out of memory restoring a %dx%d image", w, h);
+        }
+        if (!tex16FillExact(p, pixels.data(), size_t(w) * 4, &exact))
+            throw Exception(Exception::MKXPError, "Bitmap image storage is unavailable");
+        full = shState->texPool().requestImage(w, h, pixels.data());
+    }
+    FBO::bind(bound);
+    TEXFBO old = p->gl;
+    full.selfHires = old.selfHires;
+    p->gl = full;
+    shState->texPool().releaseUncached(old);
+    Tex16::stats.promoted++;
+    if (exact)
+        Tex16::stats.promotedExact++;
+    Tex16::stats.promotedBytes += uint64_t(w) * h * 4;
+    if (Tex16::logged < 64)
+    {
+        ++Tex16::logged;
+        fprintf(stderr, "[tex16] promote %s %dx%d %s %.120s\n", why, w, h,
+                discardContents ? "blank" : exact ? "exact" : "lossy", p->fileKey.c_str());
+    }
+#else
+    (void)p; (void)why; (void)discardContents;
+#endif
+}
+
+/* Statistics line for System.vita_tex16_stats and memory probes. */
+size_t vitaTex16Stats(char *out, size_t capacity)
+{
+    const Tex16::Stats &t = Tex16::stats;
+    const int n = snprintf(out, capacity,
+        "mode=%d live16=%u live16_bytes=%u n565=%u n5551=%u n4444=%u b32_565=%llu b32_5551=%llu b32_4444=%llu "
+        "promoted=%u exact=%u blank=%u lossy=%u exact_reads=%u promoted_b32=%llu pack_ms=%.1f decode_ms=%.1f",
+        Tex16::mode, tex16LiveCount, (unsigned)tex16LiveBytes, t.images[1], t.images[2], t.images[3],
+        (unsigned long long)t.bytes32[1], (unsigned long long)t.bytes32[2], (unsigned long long)t.bytes32[3],
+        t.promoted, t.promotedExact, t.blankPromotes, t.lossy, t.exactReads,
+        (unsigned long long)t.promotedBytes, t.packMs, t.decodeMs);
+    return n > 0 ? std::min(size_t(n), capacity - 1) : 0;
+}
+
 /* Reused file images.
  *
  * RPG Maker games dispose cached images and load the same files again soon
@@ -1811,9 +2076,9 @@ bool keepReused(BitmapPrivate *p)
     if (reuseSuspended || p->fileKey.empty() || p->filePath.empty() || p->fileSize < 0 ||
         p->contentVersion != p->fileVersion || p->pendingClear || p->selfHires || p->selfLores ||
         p->megaSurface || p->animation.enabled || p->cpu || !p->bands.empty() ||
-        p->gl.tex == TEX::ID(0) || p->gl.fbo == FBO::ID(0))
+        p->gl.tex == TEX::ID(0) || (p->gl.fbo == FBO::ID(0) && !p->gl.fmt16))
         return false;
-    const size_t bytes = size_t(p->gl.width) * p->gl.height * 4;
+    const size_t bytes = size_t(p->gl.width) * p->gl.height * (p->gl.fmt16 ? 2 : 4);
     if (bytes > reuseImageMax)
         return false;
 #ifdef __vita__
@@ -1963,7 +2228,10 @@ Bitmap::Bitmap(const char *filename)
         AssetPrefetch::FileInfo file;
         if (SDL_Surface *ready = AssetPrefetch::takeImage(filename, &file))
         {
-            initFromSurface(ready, nullptr, false);
+            {
+                Tex16::FileLoadScope fileLoad(filename);
+                initFromSurface(ready, nullptr, false);
+            }
             /* The worker found the file; without that (an old kept copy),
              * find it without reading it, so this image can be kept for
              * reuse like one the game thread loaded. On the Vita a lookup
@@ -2148,7 +2416,10 @@ Bitmap::Bitmap(const char *filename)
 
     SDL_Surface *imgSurf = handler.surface;
 
-    initFromSurface(imgSurf, hiresBitmap, false);
+    {
+        Tex16::FileLoadScope fileLoad(filename);
+        initFromSurface(imgSurf, hiresBitmap, false);
+    }
     if (!hiresBitmap && !p->megaSurface)
     {
         p->fileKey = filename;
@@ -2356,6 +2627,8 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
          * Keep a sparse source sparse, including its logical dimensions.
          * Small copies retain the existing asynchronous GPU path. */
         clearRead(other.p);
+        if (other.p->gl.fmt16)
+            tex16Promote(other.p, "copy");
         if (bandsCurrent(other.p))
             cpuPromote(other.p);
         const FBO::ID bound = FBO::boundFramebufferID;
@@ -2609,8 +2882,44 @@ void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool for
         }
 #endif
         
+#ifdef __vita__
+        /* Dithered 16-bit storage for a decoded file (see Tex16). Its rows
+         * must be packed: a crop is (packImageCrop), a whole image is when
+         * the pitch is the row. */
+        uint8_t fmt16 = 0;
+        const int storeW = crop.active() ? crop.width : imgSurf->w;
+        const int storeH = crop.active() ? crop.height : imgSurf->h;
+        if (Tex16::fileLoad && !hiresBitmap && !forceMega && Tex16::currentMode() &&
+            !Tex16::excluded(Tex16::fileName) &&
+            size_t(storeW) * storeH >= Tex16::minPixels &&
+            (crop.active() || imgSurf->pitch == storeW * 4))
+        {
+            const Uint64 t0 = SDL_GetPerformanceCounter();
+            fmt16 = tex16::classify(static_cast<const uint8_t *>(imgSurf->pixels), size_t(storeW) * storeH);
+            if (fmt16 == tex16::k4444 && Tex16::currentMode() == 2)
+                fmt16 = tex16::kRgba8;
+            if (fmt16 != tex16::kRgba8)
+            {
+                /* In place: the decoded pixels are not needed after the upload. */
+                tex16::pack(static_cast<const uint8_t *>(imgSurf->pixels),
+                            static_cast<uint8_t *>(imgSurf->pixels), storeW, storeH, 0, fmt16);
+            }
+            Tex16::stats.packMs += double(SDL_GetPerformanceCounter() - t0) * 1000.0 /
+                                   double(SDL_GetPerformanceFrequency());
+        }
+#endif
         try
         {
+#ifdef __vita__
+          if (fmt16 != tex16::kRgba8)
+          {
+            tex = shState->texPool().requestImage16(storeW, storeH, imgSurf->pixels, fmt16);
+            Tex16::stats.images[fmt16]++;
+            Tex16::stats.bytes32[fmt16] += uint64_t(storeW) * storeH * 4;
+          }
+          else
+          {
+#endif
 #ifdef __vita__
             // A streamed crop already has an allocation sized to its rectangle.
             vitaBeginPixelTransfer(!crop.active() || alreadyPacked ? imgSurf->pixels : nullptr);
@@ -2620,6 +2929,7 @@ void Bitmap::initFromSurface(SDL_Surface *imgSurf, Bitmap *hiresBitmap, bool for
                                                   imgSurf->pixels);
 #ifdef __vita__
             vitaEndPixelTransfer();
+          }
 #endif
         }
         catch (const Exception &e)
@@ -3044,7 +3354,7 @@ void Bitmap::stretchBlt(IntRect destRect,
         /* Fast blit */
         // TODO: Use bitmapSmoothScaling/bitmapSmoothScalingDown configs for this.
         GLMeta::blitBegin(getGLTypes());
-        GLMeta::blitSource(source.getGLTypes());
+        GLMeta::blitSource(source.getGLTypesForSampling());
         GLMeta::blitRectangle(sourceRect, destRect, smooth);
         GLMeta::blitEnd();
     }
@@ -3914,6 +4224,7 @@ void Bitmap::radialBlur(int angle, int divisions)
     SimpleMatrixShader &shader = shState->shaders().simpleMatrix;
     shader.bind();
     
+    tex16Promote(p, "filter");
     p->bindTexture(shader, false);
     TEX::setSmooth(true);
     
@@ -4043,6 +4354,8 @@ Color Bitmap::getPixel(int x, int y) const
          * RGBA readback. Synchronize once per content version, then read its
          * CPU-visible texture storage. Small, frequently sampled windowskins
          * retain their existing readback cache. */
+        if (p->gl.fmt16)
+            tex16Promote(p, "get_pixel");
         if (p->directReadVersion != p->contentVersion)
         {
             gl.Finish();
@@ -4353,6 +4666,7 @@ void Bitmap::hueChange(int hue)
     
     FBO::bind(newTex.fbo);
     p->pushSetViewport(shader);
+    tex16Promote(p, "filter");
     p->bindTexture(shader, false);
     
     p->blitQuad(quad);
@@ -5196,6 +5510,14 @@ void Bitmap::setInitFont(Font *value)
     p->font = value;
 }
 
+TEXFBO &Bitmap::getGLTypesForSampling() const
+{
+    clearRead(p);
+    if (p->gl.fmt16 && !p->animation.enabled && !p->imageCrop.active() && !p->selfHires)
+        return p->gl;
+    return p->getGLTypes();
+}
+
 TEXFBO &Bitmap::getGLTypes() const
 {
     /* Direct texture access (tilemap atlas builds, sprite pattern sampling,
@@ -5615,6 +5937,7 @@ void Bitmap::kglInvert()
 
         FBO::bind(newTex.fbo);
         p->pushSetViewport(shader);
+        tex16Promote(p, "filter");
         p->bindTexture(shader, false);
 
         p->blitQuad(quad);
@@ -5667,6 +5990,7 @@ void Bitmap::kglCompressAlpha()
 
         FBO::bind(newTex.fbo);
         p->pushSetViewport(shader);
+        tex16Promote(p, "filter");
         p->bindTexture(shader, false);
 
         p->blitQuad(quad);
@@ -5785,6 +6109,7 @@ int Bitmap::kglShadowShaderH(int x1, int x2, int y, bool soft)
 
         FBO::bind(newTex.fbo);
         p->pushSetViewport(shader);
+        tex16Promote(p, "filter");
         p->bindTexture(shader, false);
 
         p->blitQuad(quad);
@@ -5905,6 +6230,7 @@ int Bitmap::kglShadowShaderV(int y1, int y2, int x, bool wall, bool soft)
 
         FBO::bind(newTex.fbo);
         p->pushSetViewport(shader);
+        tex16Promote(p, "filter");
         p->bindTexture(shader, false);
 
         p->blitQuad(quad);

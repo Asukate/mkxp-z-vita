@@ -39,6 +39,9 @@ public:
 	 * upload and frees the old one only after the frame), zero-fill the
 	 * first copy, and leave the framebuffer on the replaced storage. */
 	TEXFBO requestImage(int width, int height, const void *pixels);
+	/* A sampled-only dithered 16-bit image (see TEXFBO::fmt16): no
+	 * framebuffer, never cached. pixels are already packed. */
+	TEXFBO requestImage16(int width, int height, const void *pixels, uint8_t fmt16);
 	void release(TEXFBO &obj);
 	/* Frees obj now instead of caching it. */
 	void releaseUncached(TEXFBO &obj);

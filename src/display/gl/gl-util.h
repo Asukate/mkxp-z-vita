@@ -150,6 +150,20 @@ namespace TEX
 #endif
 	}
 
+	/* Dithered 16-bit storage of a decoded image (see tex16.h): fmt16 is
+	 * tex16::k565, k5551 or k4444, data the packed 16-bit pixels. */
+	static inline void uploadImage16(GLsizei width, GLsizei height, const void *data, uint8_t fmt16)
+	{
+        FrameProfile::Scope profile(FrameProfile::TextureUpload, uint64_t(width > 0 ? width : 0) * (height > 0 ? height : 0));
+		texSumNote("uploadImage16", width, height);
+		const unsigned int failures = storageFailures();
+		const GLenum format = fmt16 == 1 ? GL_RGB : GL_RGBA;
+		const GLenum type = fmt16 == 1 ? GL_UNSIGNED_SHORT_5_6_5
+		                  : fmt16 == 2 ? GL_UNSIGNED_SHORT_5_5_5_1 : GL_UNSIGNED_SHORT_4_4_4_4;
+		gl.TexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, type, data);
+		checkStorage(failures, width, height);
+	}
+
 	static inline void uploadSubImage(GLint x, GLint y, GLsizei width, GLsizei height, const void *data, GLenum format)
 	{
         FrameProfile::Scope profile(FrameProfile::TextureUpload, uint64_t(width > 0 ? width : 0) * (height > 0 ? height : 0));
@@ -313,6 +327,10 @@ typedef struct GenericBO<GL_ELEMENT_ARRAY_BUFFER> IBO;
 
 #undef DEF_GL_ID
 
+/* Live dithered 16-bit textures (TEXFBO::fmt16), see texpool.cpp. */
+extern unsigned tex16LiveCount;
+extern size_t tex16LiveBytes;
+
 /* Convenience struct wrapping a framebuffer
  * and a 2D texture as its target */
 struct TEXFBO
@@ -323,8 +341,14 @@ struct TEXFBO
 
 	TEXFBO *selfHires;
 
+	/* Nonzero: a dithered 16-bit copy of a decoded image (tex16.h format),
+	 * sampled only. It has no framebuffer (fbo 0) and is never cached by
+	 * TexPool or rendered into; Bitmap turns it back into a 32-bit texture
+	 * before anything draws into it or reads its pixels. */
+	uint8_t fmt16;
+
 	explicit TEXFBO(const char *diagnosticName = 0)
-	    : tex(0), fbo(0), width(0), height(0), selfHires(nullptr)
+	    : tex(0), fbo(0), width(0), height(0), selfHires(nullptr), fmt16(0)
 	{
 	#ifdef MKXPZ_VITA_DIAGNOSTICS
 		vitaDiagLog("MEMBER", "constructor name=%s type=TEXFBO gl_error=0x%04x",
@@ -347,6 +371,7 @@ struct TEXFBO
 		// Acquire the framebuffer first so a failed allocation leaks no texture.
 		obj.tex = TEX::ID(0);
 		obj.fbo = FBO::ID(0);
+		obj.fmt16 = 0;
 		obj.fbo = FBO::gen();
 		vitaFboDiag("init_fbo_generated", 0, obj.fbo.gl);
 		obj.tex = TEX::gen();
@@ -420,6 +445,12 @@ struct TEXFBO
 	{
 		FrameProfile::Scope profile(FrameProfile::RenderTargetAlloc);
 		vitaFboDiag("fini_begin", obj.tex.gl, obj.fbo.gl, obj.width, obj.height);
+		if (obj.fmt16 && obj.tex != TEX::ID(0))
+		{
+			--tex16LiveCount;
+			tex16LiveBytes -= size_t(obj.width) * obj.height * 2;
+			obj.fmt16 = 0;
+		}
 		FBO::del(obj.fbo);
 		TEX::del(obj.tex);
 		vitaFboDiag("fini_done", obj.tex.gl, obj.fbo.gl, obj.width, obj.height);
@@ -430,6 +461,7 @@ struct TEXFBO
 		obj.tex = TEX::ID(0);
 		obj.fbo = FBO::ID(0);
 		obj.width = obj.height = 0;
+		obj.fmt16 = 0;
 	}
 };
 
