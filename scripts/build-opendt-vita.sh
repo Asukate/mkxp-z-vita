@@ -85,7 +85,7 @@ link() {
     # std::mutex never locks (the launcher code uses threads).
     arm-vita-eabi-g++ -Wl,-q -Wl,--gc-sections -Wl,-u,pthread_cancel -o "$WS/build/opendt.elf" "${OBJECTS[@]}" "$@" \
         -Wl,--start-group "$PREFIX/lib/libphysfs.a" "$PREFIX/lib/libfreetype.a" "$PREFIX/lib/libpng16.a" \
-        "$PREFIX/lib/libz.a" "$PREFIX/lib/libbz2.a" "$NETWORK/lib/libcurl.a" "$L/libturbojpeg.a" \
+        "$PREFIX/lib/libz.a" "$PREFIX/lib/libbz2.a" "$PREFIX/lib/libiconv.a" "$NETWORK/lib/libcurl.a" "$L/libturbojpeg.a" \
         "$L/libwebp.a" "$L/libsharpyuv.a" "$L/libmbedtls.a" "$L/libmbedx509.a" "$L/libmbedcrypto.a" \
         -lvita2d -ljpeg -lSceGxm_stub -lSceDisplay_stub -lSceSysmodule_stub \
         -lSceCommonDialog_stub -lScePgf_stub -lSceCtrl_stub -lSceTouch_stub -lSceAudio_stub \

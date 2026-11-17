@@ -12,6 +12,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <fstream>
+#include <iconv.h>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -108,6 +109,23 @@ std::string scrubUtf8(const std::string &s) {
     }
   }
   return out;
+}
+// Japanese RPG Maker games write Game.ini in Shift-JIS (code page 932).
+std::string sjisText(const std::string &s) {
+  if (scrubUtf8(s) == s)
+    return s;
+  iconv_t cd = iconv_open("UTF-8", "CP932");
+  if (cd == (iconv_t)-1)
+    return scrubUtf8(s);
+  std::string out(s.size() * 3 + 4, '\0');
+  char *in = const_cast<char *>(s.data()), *o = &out[0];
+  size_t inLeft = s.size(), outLeft = out.size();
+  bool ok = iconv(cd, &in, &inLeft, &o, &outLeft) != (size_t)-1 && !inLeft;
+  iconv_close(cd);
+  if (!ok)
+    return scrubUtf8(s);
+  out.resize(out.size() - outLeft);
+  return scrubUtf8(out);
 }
 Json object() { return Json(std::initializer_list<Json::pair_type>{}); }
 Json array() { return Json(std::initializer_list<Json>{}); }
@@ -993,7 +1011,7 @@ bool game(const Node &node, Entry &result) {
   int version = gameVersion(v, fs);
   if (!version)
     return pc98Entry(node, fs, result); // a Game.ini that is not RPG Maker's
-  auto title = scrubUtf8(jsonString(v, "title", jsonString(v, "gametitle")));
+  auto title = trim(sjisText(jsonString(v, "title", jsonString(v, "gametitle"))));
   if (title.empty())
     title = basename(node.inner.empty() ? node.path() : node.inner);
   result = {title, Kind::Game, node, version};
