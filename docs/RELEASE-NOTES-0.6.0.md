@@ -97,3 +97,5 @@ the [compatibility list](COMPATIBILITY.md).
 
 - **Star it on GitHub:** a star at github.com/Asukate/mkxp-z-vita
   helps other PS Vita players find HardRPG.
+
+<!-- 6b13e12d1fc72ecb223b4785b2cea7d00d3244126e654c9552ba56c7d63e9ee3 -->
