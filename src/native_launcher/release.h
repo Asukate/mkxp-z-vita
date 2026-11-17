@@ -1,12 +1,21 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.5.3 Alpha"
-#define HARDRPG_VERSION_TAG "v0.5.3-alpha"
-#define HARDRPG_APP_VER "00.53"
-#define HARDRPG_RELEASE_UTC "2026-11-13"
+#define HARDRPG_VERSION "0.6.0 Alpha"
+#define HARDRPG_VERSION_TAG "v0.6.0-alpha"
+#define HARDRPG_APP_VER "00.60"
+#define HARDRPG_RELEASE_UTC "2026-11-18"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.5.3 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.6.0 Alpha - " HARDRPG_RELEASE_UTC,
+    "- Dante 98 and Dante 98 II games",
+    "- Cheats in the in-game menu",
+    "- Save backups: restore an older save",
+    "- New in-game menu, right stick, turbo",
+    "- Text sized as on Windows",
+    "- Orc Strike, Exit Fate map (#28 #29 #31)",
+    "- 16-bit images: half the video memory",
+    "",
+    "0.5.3 Alpha - 2026-11-13",
     "- Person of Courage starts (#27)",
     "- Mysta's Vore RPG: typing, text, speed",
     "- Faster XP animations and busy maps",

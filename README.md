@@ -10,6 +10,7 @@
   <img src="https://img.shields.io/badge/Platform-PS%20Vita-0070d1?style=for-the-badge" alt="Platform: PS Vita">
   <a href="#status"><img src="https://img.shields.io/badge/Status-Alpha-orange?style=for-the-badge" alt="Status: Alpha"></a>
   <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/RPG%20Maker-XP%20%2F%20VX%20%2F%20Ace%20%2F%202000%20%2F%202003%20%2F%20Dante%2098-5865f2?style=for-the-badge" alt="RPG Maker: XP, VX, VX Ace, 2000, 2003, Dante 98"></a>
+  <a href="https://github.com/Asukate/mkxp-z-vita/stargazers"><img src="https://img.shields.io/github/stars/Asukate/mkxp-z-vita?style=for-the-badge&logo=github&label=Star%20HardRPG&color=f5c542" alt="Star HardRPG on GitHub"></a>
 </p>
 
 <p align="center"><a href="#install">Install</a> · <a href="#add-your-games">Add games</a> · <a href="#what-hardrpg-can-do">Features</a> · <a href="#using-hardrpg">Use</a> · <a href="#per-game-settings-and-controls">Controls</a> · <a href="#artwork-game-info-and-title-music">Artwork</a> · <a href="#compatibility">Compatibility</a> · <a href="#something-went-wrong">Help</a> · <a href="#faq">FAQ</a> · <a href="#building">Build</a> · <a href="#support-hardrpg">Support</a></p>
@@ -38,8 +39,9 @@ You need a homebrew-enabled Vita. Get HardRPG from these sources:
 Then open **HardRPG** once. It creates its folders in `ux0:/data/hardrpg/`.
 
 **Updating:** VitaDB Downloader, NeoVitaDB Downloader and VitaForge show when a
-new HardRPG is out and install it for you. From GitHub, install the new `.vpk`
-over the old one. Your games, saves and settings stay either way.
+new HardRPG is out and install it for you; they can take a few hours or more
+after the GitHub release to show it. From GitHub, install the new `.vpk` over
+the old one. Your games, saves and settings stay either way.
 
 <details>
 <summary>HardRPG closes right away or shows a black screen on start</summary>
@@ -201,17 +203,19 @@ A font included in the game's own `Fonts` folder always comes first.
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.5.3 Alpha** is the current release. New in 0.5.3:
+**0.6.0 Alpha** is the current release. New in 0.6.0:
 
-- **Person of Courage:** starts (it stopped with "not a PNG" before).
-- **Mysta's Vore RPG:** name entry types, text fits its windows, slow maps run at full speed.
-- **RPG Maker XP games:** faster animations in battles and on maps; maps with many events skip characters far off screen.
-- **MIDI music:** no more short freezes when a game starts or changes songs.
-- **Arial, Times New Roman and Courier New:** text is sized as on Windows, so long lines fit.
+- **Dante 98 and Dante 98 II games:** the PC-98 RPG Makers run natively, from the game's disk image.
+- **Cheats:** gold, items, levels, god mode, teleport, switches and more, from the in-game menu.
+- **Save backups:** every save a game replaces is kept, and can be restored from the library.
+- **New in-game menu:** fills the 16:9 screen; right stick mapping and turbo buttons.
+- **Text sized as on Windows:** long lines fit their windows (Hello Charlotte, Mysta's Vore RPG).
+- **Fixes:** Orc Strike, Exit Fate's world map and a NoMethodError at start ([#28](https://github.com/Asukate/mkxp-z-vita/issues/28), [#29](https://github.com/Asukate/mkxp-z-vita/issues/29), [#31](https://github.com/Asukate/mkxp-z-vita/issues/31)).
+- **Less memory:** game pictures take half the video memory.
 
-Full list: [0.5.3 release notes](docs/RELEASE-NOTES-0.5.3.md).
+Full list: [0.6.0 release notes](docs/RELEASE-NOTES-0.6.0.md).
 
-Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
+Older versions: [0.5.3](docs/RELEASE-NOTES-0.5.3.md) · [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
 [0.5.1](docs/RELEASE-NOTES-0.5.1.md) · [0.5.0](docs/RELEASE-NOTES-0.5.0.md) ·
 [0.4.9](docs/RELEASE-NOTES-0.4.9.md) · [0.4.8](docs/RELEASE-NOTES-0.4.8.md) ·
 [0.4.7](docs/RELEASE-NOTES-0.4.7.md) · [0.4.6](docs/RELEASE-NOTES-0.4.6.md) ·
@@ -255,6 +259,9 @@ Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
 - **Touch screen and rear touch pad** as buttons: whole surface, halves or four
   corners.
 - **Tap to walk:** tap a spot on the map and your character walks there.
+- **Right stick:** mirrors the left stick, or works as a mouse pointer, or
+  each direction can be any button or key.
+- **Turbo buttons:** hold a button and it repeats, at the speed you choose.
 - An **on-screen keyboard** for games that ask you to type: tap the keyboard
   icon in the screen's border while playing. Games that ask for a name open it
   by themselves.
@@ -264,10 +271,17 @@ Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
 
 - **In-game menu:** tap the ☰ icon in the screen's border, or hold
   L + R + Start, to change controls, display, audio and speed without leaving
-  the game. The keyboard icon is right below it.
+  the game. It fills the 16:9 screen over the paused game. The keyboard icon
+  is right below it.
+- **Cheats** (XP, VX, VX Ace and Pokémon Essentials games), in the in-game
+  menu: gold, items, weapons and armor, party levels and stats, god mode and
+  healing, win or leave a battle, movement speed, teleport with saved spots,
+  switches and variables. The basic cheats work in almost every game; games
+  that change RPG Maker's own code may not support some of the others.
 - **Fast forward** (L + R), up to twice the game's speed.
 - **Volume boost** up to 400% for quiet games.
-- Display options: aspect ratio, scaling, a Sharp or smooth filter.
+- Display options: aspect ratio, scaling, a Sharp or smooth filter, and
+  image quality (16-bit pictures in half the memory, or 32-bit).
 - An **FPS and performance overlay** (frame time, CPU, memory, battery).
 
 **Safety**
@@ -276,6 +290,9 @@ Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
   map change or battle. Your own saves are never touched.
 - **Leave and resume:** with crash rescue on, leaving a game keeps your place
   for next time.
+- **Save backups:** each save a game replaces is kept outside the game
+  folder (5 versions per save by default), and can be put back from the
+  game's Saves page, even after the game was removed from the library.
 - **Safe saves:** a save cut off by a crash or power loss keeps the old save
   instead of a broken one.
 - Error reports you can read and export, to send with a bug report.
@@ -299,7 +316,7 @@ Older versions: [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
 
 | Buttons | In a game |
 | --- | --- |
-| **L + R + Start** (hold), or tap ☰ in the screen's border | In-game menu: controls, display, audio, speed, back to library |
+| **L + R + Start** (hold), or tap ☰ in the screen's border | In-game menu: controls, display, audio, speed, cheats, back to library |
 | **L + R** | Fast forward on and off |
 | **L + R + Select** (hold) | Back to the library; with crash rescue on, **Resume where you left** returns to that moment |
 
@@ -314,11 +331,15 @@ and VX Ace games (crash rescue excepted).
 Highlight a game, press **Triangle**, then **Game settings**:
 
 - **Controls:** remap the game's controls on a picture of the Vita (below).
-- **Display:** aspect ratio, scaling and filtering.
+- **Display:** aspect ratio, scaling, filtering and image quality.
 - **Audio and MIDI:** volume boost (up to 400% for games that stay quiet even
   at full Vita volume, such as Hylics), sound, MIDI reverb and chorus.
 - **Performance and speed:** an in-game overlay (FPS, frame timing, or full
-  stats with CPU, memory and battery), fast forward and crash rescue.
+  stats with CPU, memory and battery), fast forward, crash rescue and save
+  backups.
+- **Saves:** every backed up version of each save, with its map, leader,
+  level and play time; restore one (the save it replaces is kept too), back
+  up now, or put back saves missing from the game.
 - **Rename**, **Game information** and **Play**.
 - **Remove from library:** takes the game off the list, then asks whether to
   delete its files too (and, for a ZIP game, its unpacked copy). The answer
@@ -337,6 +358,10 @@ playable that were made for a PC keyboard.
   into halves or four corners, shown on the Vita's front and back. Nothing is
   drawn over the game.
 - **Tap to walk:** tap a spot on the map and your character walks there.
+- **Right stick:** mirrors the left stick by default; or a mouse pointer,
+  off, or any button or key per direction.
+- **Turbo:** Square on a button's key list turns turbo on for it; the speed
+  is set in Controls.
 - **Test inputs** shows what each button and touch does before you play.
 
 The same controls, display, volume boost and speed settings are in the in-game menu
@@ -406,11 +431,11 @@ run at the PC-98's **56 fps**.
 | Red Hood's Woods | VX Ace | ✅ Yes |
 | Shin Megami Tensei VX: The Genesis | VX | ✅ Yes |
 | N.P.C. Dreams | VX Ace | ✅ Yes |
-| Exit Fate | XP | 🟡 Plays |
+| Exit Fate | XP | 🟡 Plays (world map fixed in 0.6.0) |
 | The Music Box (Mario) | XP | 🟡 Plays, later parts untested |
 | OFF, Ib, Yume Nikki, Flow | 2000/2003 | ✅ Yes, through the built-in EasyRPG Player |
 | Peret em Heru: For the Prisoners | Dante 98 | ✅ Yes, natively (OpenDT) |
-| Corpse Party (1996, PC-98 original) | Dante 98 | 🟡 Starts and plays at full speed, later parts untested |
+| Corpse Party (1996, PC-98 original) | Dante 98 | 🟡 Plays at full speed with sound and saving, later parts untested |
 | Pokémon Uranium, Pokémon Insurgence | XP (Pokémon Essentials) | 🟡 Plays, progression untested |
 | Pokémon Infinite Fusion | XP (Pokémon Essentials) | ⛔ No: needs more memory than the Vita gives the game |
 | OMORI, Fear & Hunger, Look Outside | MV / MZ | 🛠️ Not yet: MV and MZ support is in development |
@@ -460,7 +485,8 @@ replaying the game to reach the same spot.
 | A Dante 98 game | `ux0:/data/hardrpg/saves/opendt/`, one folder per game (its disk image stays untouched) |
 
 Some games save in a folder of their own; if you can't find it, mention that
-in the report.
+in the report. Older versions of each save (save backups) are in
+`ux0:/data/hardrpg/save-backups/`, one folder per game.
 
 ### Known issues
 
@@ -540,6 +566,36 @@ games stay where they are.
 Yes. Tap to walk moves your character to the spot you tap, and the touch
 screen and rear touch pad can act as buttons or keyboard keys. Turn them on in
 **Triangle → Game settings → Controls**.
+
+**Are there cheats?**
+Yes. Open the in-game menu (**L + R + Start**, or tap ☰ in the screen's
+border) and choose **Cheats**: gold, items, weapons and armor, party levels,
+experience and stats, god mode, healing, winning or leaving a battle,
+movement speed, teleport, switches and variables. They work in XP, VX, VX Ace
+and Pokémon Essentials games. The basic ones work in almost every game; a
+game that changes RPG Maker's own code may not support some of the others,
+and HardRPG says so instead of changing anything. Nothing changes until you
+confirm, and saving in the game keeps what the cheats gave you.
+
+**I overwrote a save by mistake. Can I get it back?**
+Yes, with save backups (on by default). Each time an XP, VX, VX Ace, 2000 or
+2003 game replaces a save, HardRPG keeps the old one outside the game folder.
+Highlight the game, press **Triangle → Game settings → Saves**, pick the save and the version
+to restore. The save it replaces is kept as a backup too, so you can switch
+back. Backups of a game you removed are in **Settings → Save backups**; add
+the game again and its saves come back.
+
+**Can I play PC-98 RPG Maker (Dante 98) games?**
+Yes. Dante 98 and Dante 98 II games run natively on HardRPG's built-in OpenDT
+port, at the PC-98's full speed, with sound and saving. Put the game's disk
+image (`.hdi`, `.fdi`, `.d88` and similar) in a folder of its own in
+`games/`; there is nothing to extract. Other PC-98 disks run on the built-in
+NP2kai. See [Add your games](#add-your-games).
+
+**Can I use the right stick or turbo?**
+Yes. In **Controls**, the right stick mirrors the left stick by default, or
+works as a mouse pointer, or each direction can be any button or key. Any
+button can be a turbo button that repeats while you hold it.
 
 **Text shows boxes, overlaps or is cut off.**
 The game probably wants a Windows font it does not include. See
@@ -679,6 +735,9 @@ real PS Vita hardware. You can support the project monthly or make a one-time
 contribution. Both options let you choose your own amount.
 
 [Sponsor HardRPG on GitHub](https://github.com/sponsors/Asukate)
+
+Enjoying HardRPG? A [star on GitHub](https://github.com/Asukate/mkxp-z-vita)
+helps other PS Vita players find it, and costs nothing.
 
 ## Credits and licenses
 

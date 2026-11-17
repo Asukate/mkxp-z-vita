@@ -28,7 +28,7 @@ end, so problems later in those games are still possible.
 | BLACK SOULS II | VX Ace | ✅ Runs | Long sessions no longer run out of memory (0.4.5). Large weapon upgrade lists render correctly and no longer fail at the texture-size limit (0.4.7). Reaches its title about 5 seconds sooner, and an interrupted save keeps the old one (0.4.9). Multi-phase boss fights no longer crash (0.5.1, [#18](https://github.com/Asukate/mkxp-z-vita/issues/18)). |
 | Shin Megami Tensei VX: The Genesis | VX | ✅ Runs | Loading games, 3D dungeons and crash rescue fixed in 0.4.6. |
 | Pocket Mirror (original 2016 VX Ace edition) | VX Ace | 🟡 Partial | Startup crash fixed in 0.4.8. Opening room, movement, item pickup and inventory checked; later progression untested. Menus close in under half a second since 0.5.0 (up to 5 s before). Large pictures need much less memory, and the out-of-graphics-memory crash after some play, including in the Rose Labyrinth, is fixed (0.5.2, [#19](https://github.com/Asukate/mkxp-z-vita/issues/19)). |
-| Hello Charlotte EP1 (English v2.0) | VX Ace | ✅ Runs | Item popup TypeError fixed in 0.4.8. Played to the true ending on 0.4.8 (itch.io version, community report), 50–60 fps; bad ending untested. Some long dialogue lines are cut off by two or three letters at the right edge (known issue). |
+| Hello Charlotte EP1 (English v2.0) | VX Ace | ✅ Runs | Item popup TypeError fixed in 0.4.8. Played to the true ending on 0.4.8 (itch.io version, community report), 50–60 fps; bad ending untested. Long dialogue lines no longer lose two or three letters at the right edge: text is sized as on Windows since 0.6.0. |
 | Hello Charlotte EP2: Requiem Aeternam Deo (English, itch.io) | VX Ace | ✅ Runs | Played from start to finish on 0.4.8 (community report): about three hours with no failures or frame drops. |
 | Hello Charlotte EP3: Childhood's End (English, version unknown) | VX Ace | ✅ Runs | Played from start to finish on 0.4.8 Alpha ([community report #16](https://github.com/Asukate/mkxp-z-vita/issues/16)): no problems or noticeable frame drops reported. |
 | Ao Oni | XP | ✅ Runs | Played from start to finish. |
@@ -38,17 +38,18 @@ end, so problems later in those games are still possible.
 | LISA: The Painful | VX Ace | ✅ Runs | Map W/A/S/D for combo attacks in Controls. |
 | LISA: The Joyful | VX Ace | ✅ Runs | The archer cave runs at 60 fps since 0.5.2 (about 31 before, [#21](https://github.com/Asukate/mkxp-z-vita/issues/21)). |
 | FNaF b Final Mix | VX Ace | ✅ Runs | |
-| Red Hood's Woods | VX Ace | ✅ Runs | |
+| Red Hood's Woods | VX Ace | ✅ Runs | Japanese text as wide as on Windows since 0.6.0. |
 | Hylics | VX Ace | ✅ Runs | Faster since 0.4.5, still slow in some areas. Crystal Beach takes about 13 seconds to load. |
 | Mogeko Castle (English VX Ace edition) | VX Ace | ✅ Runs | |
 | The Endless Empty | VX Ace | ✅ Runs | |
 | VorlorN | XP | ✅ Runs | |
 | (Mario) The Music Box 1.3.1 (itch.io) | XP | 🟡 Partial | Starts since 0.4.9 (it stopped with "Unable to load scripts" before). Title, intro and the mansion checked, including a quick save and resume; later progression untested. Picture colours fixed in 0.5.0; the picture gallery takes about 28 s to open with all 222 pictures unlocked. |
-| N.P.C. Dreams | VX Ace | ✅ Runs | Faster walking and battles since 0.5.2; some frame drops remain. |
-| Exit Fate | XP | 🟡 Partial | Change Party screen crash fixed in 0.5.0 ([#15](https://github.com/Asukate/mkxp-z-vita/issues/15)), checked with a community save. Fonts, sky and sea noise, a stray box after some lines and a music stall fixed in 0.5.2 ([#22](https://github.com/Asukate/mkxp-z-vita/issues/22)–[#25](https://github.com/Asukate/mkxp-z-vita/issues/25)). |
-| Mysta's Vore RPG | XP | 🟡 Partial | Name entry, text cut off at window edges and slow maps (18–37 fps, now the game's own 36–40) fixed in 0.5.3. Later progression untested. |
+| N.P.C. Dreams | VX Ace | ✅ Runs | Faster walking and battles since 0.5.2; some frame drops remain. Map layers share one tileset copy since 0.6.0: the swamp keeps 32 MB more video memory free instead of running out. |
+| Exit Fate | XP | 🟡 Partial | Change Party screen crash fixed in 0.5.0 ([#15](https://github.com/Asukate/mkxp-z-vita/issues/15)), checked with a community save. Fonts, sky and sea noise, a stray box after some lines and a music stall fixed in 0.5.2 ([#22](https://github.com/Asukate/mkxp-z-vita/issues/22)–[#25](https://github.com/Asukate/mkxp-z-vita/issues/25)). The world map no longer turns invisible or ends the game after long sessions (0.6.0, [#31](https://github.com/Asukate/mkxp-z-vita/issues/31)). |
+| Mysta's Vore RPG | XP | 🟡 Partial | Name entry, text cut off at window edges and slow maps (18–37 fps, now the game's own 36–40) fixed in 0.5.3. Lines sized as on Windows, and the Enter that ends name entry no longer loads a save (0.6.0). Later progression untested. |
 | Person of Courage | VX | 🟡 Partial | Starts since 0.5.3 ([#27](https://github.com/Asukate/mkxp-z-vita/issues/27)); it stopped with "not a PNG" before. Opening, a busy map and a battle checked; battles pause for about 2 s at the start and at the victory music. Later progression untested. |
 | Finding Paradise (Steam) | XP | ✅ Runs | Starts since 0.5.0 ([#17](https://github.com/Asukate/mkxp-z-vita/issues/17)). Intro 39–40 fps, first town map 35–37 fps (XP games run at up to 40); later progression untested. |
+| Orc Strike (trial) | VX | 🟡 Partial | Starts and its first battle plays through since 0.6.0 ([#29](https://github.com/Asukate/mkxp-z-vita/issues/29)); it stopped with a NoMethodError before. Later progression untested. |
 | A New Game (RJ273807, Chinese translation) | VX Ace | 🟡 Partial | Starts since 0.4.9 (it stopped with "class variable access from toplevel" before). Later progression untested. |
 
 ## RPG Maker 2000 and 2003 (EasyRPG)
@@ -71,8 +72,8 @@ same in-game menu, controls, screen filters and fast forward as other games.
 
 | Game | Engine | Status | Notes |
 | --- | --- | --- | --- |
-| Peret em Heru: For the Prisoners | Dante 98 | ✅ Runs | Played on the Vita from its disk image. |
-| Corpse Party (1996) | Dante 98 | 🟡 Partial | The PC-98 original by Kenix Soft, from its `.hdi` disk image. Title and opening at full speed; later parts untested. |
+| Peret em Heru: For the Prisoners | Dante 98 | ✅ Runs | Played on the Vita from its disk image at full speed, with sound and saving. |
+| Corpse Party (1996) | Dante 98 | 🟡 Partial | The PC-98 original by Kenix Soft, from its `.hdi` disk image. Plays at full speed with sound and saving; later parts untested. |
 
 ## Pokémon Essentials
 
