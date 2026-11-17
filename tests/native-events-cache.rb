@@ -2,6 +2,7 @@
 # that instead of the scripts. The kept methods must be the ones a fresh read finds.
 module Kernel; private def rgss_main; yield if block_given?; end; end
 module HardRPGNative; end
+module Graphics; def self.update(*); end; end
 require_relative '../launcher/native_events'
 
 def check(label, ok)
