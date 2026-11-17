@@ -492,6 +492,7 @@ public:
   ReleaseNotice releaseNotice;
   std::vector<std::string> releaseReport;
   int releaseScroll = 0;
+  mutable int releaseLaidOut = 0; // lines the view laid the notes out in
   void offerRelease(const ReleaseNotice &);
   void showRelease();
   std::string controlLabel(int row) const;

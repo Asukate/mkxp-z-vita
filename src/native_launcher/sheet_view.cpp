@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <sstream>
 #include <cstdio>
 #include <ctime>
 
@@ -181,6 +182,33 @@ const Image &View::shoulder(int side, int &x, int &y) {
 
 namespace {
 // 1234567 -> "1,234,567", as the cheat rows show numbers.
+// Release notes markdown to plain text: **bold**, `code` and [text](url)
+// keep only their text.
+std::string plainMarkdown(std::string s) {
+  std::string out;
+  for (size_t i = 0; i < s.size();) {
+    if (s.compare(i, 2, "**") == 0 || s.compare(i, 2, "__") == 0) {
+      i += 2;
+    } else if (s[i] == '`') {
+      ++i;
+    } else if (s[i] == '[') {
+      auto close = s.find("](", i);
+      auto end = close == std::string::npos ? close : s.find(')', close);
+      if (end == std::string::npos) {
+        out += s[i++];
+        continue;
+      }
+      out += s.substr(i + 1, close - i - 1);
+      i = end + 1;
+    } else
+      out += s[i++];
+  }
+  return out;
+}
+std::string trimmed(const std::string &s) {
+  auto a = s.find_first_not_of(" \t"), b = s.find_last_not_of(" \t");
+  return a == std::string::npos ? "" : s.substr(a, b - a + 1);
+}
 std::string groupDigits(long long n) {
   std::string d = std::to_string(n < 0 ? -n : n), out;
   for (size_t i = 0; i < d.size(); ++i) {
@@ -209,7 +237,9 @@ void View::buildSheet(const UI &u) {
   pendingLoads = false;
   // The column the header, rows and notes use: wide over a running game.
   const bool wide = u.inGame;
-  const auto G = sheetGeom(wide);
+  // Release notes (a newer release, About) use nearly the whole 16:9 width.
+  const bool notesWide = !u.releaseReport.empty() || u.focus == Focus::About;
+  const auto G = notesWide ? SheetGeom{36, 874, sheetTop, sheetRowH} : sheetGeom(wide);
 
   // What the screen shows, filled in by state below, then drawn.
   struct Row {
@@ -223,6 +253,94 @@ void View::buildSheet(const UI &u) {
   bool menuPage = false; // the first page over a running game
   std::vector<std::string> notes, body;
   int bodyFirst = 0, bodyLines = 12;
+  // Styled body lines start with their kind: H section heading, P summary,
+  // B item title (with a dot), b item without a title, C item text, K/k the
+  // same for known issues, V a version (About), M installed/available,
+  // D and L the download line and link, S a gap.
+  bool styledBody = false;
+  const int bodyIndent = 22;
+  auto releaseLayout = [&](const ReleaseNotice &n) {
+    std::vector<std::string> out;
+    out.push_back(std::string("M") + HARDRPG_VERSION_TAG + "\x1f" + n.tag);
+    out.push_back("S");
+    bool known = false;
+    std::string item, para;
+    auto emitPara = [&] {
+      if (para.empty())
+        return;
+      for (auto &l : wrap(plainMarkdown(para), 17, G.w))
+        out.push_back("P" + l);
+      out.push_back("S");
+      para.clear();
+    };
+    auto emitItem = [&] {
+      if (item.empty())
+        return;
+      std::string head, rest = item;
+      if (rest.compare(0, 2, "**") == 0) {
+        auto end = rest.find("**", 2);
+        if (end != std::string::npos) {
+          head = plainMarkdown(rest.substr(2, end - 2));
+          rest = trimmed(rest.substr(end + 2));
+          if (!head.empty() && head.back() == ':')
+            head.pop_back();
+          // "**Orc Strike** (#29): ..." puts the issue in the title.
+          if (rest.compare(0, 2, "(#") == 0) {
+            auto close = rest.find(')');
+            if (close != std::string::npos && close < 10) {
+              head += " · " + rest.substr(1, close - 1);
+              rest = trimmed(rest.substr(close + 1));
+            }
+          }
+          if (!rest.empty() && rest[0] == ':')
+            rest = trimmed(rest.substr(1));
+          if (!rest.empty())
+            rest[0] = char(std::toupper(static_cast<unsigned char>(rest[0])));
+        }
+      }
+      auto lines = wrap(plainMarkdown(rest), 16, G.w - bodyIndent);
+      if (!head.empty())
+        out.push_back((known ? "K" : "B") + head);
+      for (size_t i = 0; i < lines.size(); ++i)
+        out.push_back((head.empty() && i == 0 ? (known ? "x" : "b") : known ? "k" : "C") + lines[i]);
+      item.clear();
+    };
+    std::stringstream in(n.body);
+    std::string line;
+    bool comment = false;
+    while (std::getline(in, line)) {
+      auto t = trimmed(line);
+      if (comment || t.compare(0, 4, "<!--") == 0) {
+        comment = t.find("-->") == std::string::npos;
+        continue;
+      }
+      if (t.empty()) {
+        emitItem();
+        emitPara();
+      } else if (t[0] == '#') {
+        emitItem();
+        emitPara();
+        auto h = trimmed(t.substr(t.find_first_not_of('#')));
+        known = upper(h).find("KNOWN") != std::string::npos;
+        if (!out.empty() && out.back() != "S")
+          out.push_back("S");
+        out.push_back("H" + h);
+      } else if (t.compare(0, 2, "- ") == 0 || t.compare(0, 2, "* ") == 0) {
+        emitItem();
+        item = t.substr(2);
+      } else if (!item.empty())
+        item += " " + t;
+      else
+        para += (para.empty() ? "" : " ") + t;
+    }
+    emitItem();
+    emitPara();
+    if (out.back() != "S")
+      out.push_back("S");
+    out.push_back(std::string("D") + tr("Download on your PC:"));
+    out.push_back("L" + n.url);
+    return out;
+  };
   std::vector<Hint> left, right;
   int topFocus = -1;
   enum Special { NoSpecial, About, ControlsTest, ControlsPick, ControlsPad, ControlsMap } special = NoSpecial;
@@ -363,9 +481,11 @@ void View::buildSheet(const UI &u) {
     section = tr("Update");
     title = "HardRPG " + u.releaseNotice.tag;
     subtitle = tr("A newer release is out");
-    body = u.releaseReport;
-    bodyFirst = u.releaseScroll;
-    bodyLines = 11;
+    body = releaseLayout(u.releaseNotice);
+    styledBody = true;
+    bodyLines = 13;
+    u.releaseLaidOut = int(body.size());
+    bodyFirst = std::min(u.releaseScroll, std::max(0, int(body.size()) - bodyLines));
     left = {hint("btn-cross-26", "Continue", Button::Cross)};
     right = {{"UP DOWN", tr("Scroll"), Button::None}};
   } else if (u.page == Page::Controls) {
@@ -853,7 +973,16 @@ void View::buildSheet(const UI &u) {
   } else if (u.focus == Focus::About) {
     special = About;
     topFocus = 0;
-    body.assign(std::begin(releaseNotes), std::end(releaseNotes));
+    for (const char *note : releaseNotes) {
+      std::string t = note;
+      if (t.empty())
+        body.push_back("S");
+      else if (t.compare(0, 2, "- ") == 0)
+        body.push_back("b" + t.substr(2));
+      else
+        body.push_back("V" + t);
+    }
+    styledBody = true;
     bodyFirst = u.aboutScroll;
     bodyLines = 9;
     left = {back};
@@ -1169,7 +1298,58 @@ void View::buildSheet(const UI &u) {
       auto &layer = rowCache[key];
       if (layer.key.empty()) {
         beginLayer(layer, key, G.w, lineH);
-        label(0, 2, text, 16, soft, 255, false, -1, G.w);
+        if (!styledBody)
+          label(0, 2, text, 16, soft, 255, false, -1, G.w);
+        else {
+          const Color amber{240, 176, 64};
+          char kind = text.empty() ? 'S' : text[0];
+          std::string t = text.empty() ? "" : text.substr(1);
+          switch (kind) {
+          case 'H':
+            label(0, 6, upper(t), 14, rubyHi, 255, true);
+            rect(measure(upper(t), 14, true) + 12, 15, G.w - measure(upper(t), 14, true) - 12, 1, white, 40);
+            break;
+          case 'V':
+            label(0, 5, t, 15, rubyHi, 255, true);
+            break;
+          case 'P':
+            label(0, 1, t, 17, white);
+            break;
+          case 'B':
+          case 'K':
+            rect(4, 9, 8, 8, kind == 'B' ? ruby : amber, 255, 4);
+            label(bodyIndent, 0, t, 18, white, 255, true);
+            break;
+          case 'b':
+          case 'x':
+            rect(4, 9, 8, 8, kind == 'b' ? ruby : amber, 255, 4);
+            label(bodyIndent, 2, t, 16, kind == 'b' ? soft : muted);
+            break;
+          case 'C':
+          case 'k':
+            label(bodyIndent, 2, t, 16, kind == 'C' ? soft : muted);
+            break;
+          case 'M': {
+            auto cut = t.find('\x1f');
+            std::string from = trf("Installed: {}", {t.substr(0, cut)}), to = trf("Available: {}", {t.substr(cut + 1)});
+            int w1 = measure(from, 15) + 24, w2 = measure(to, 15, true) + 24;
+            rect(0, 1, w1, 23, white, 22, 11);
+            label(12, 4, from, 15, muted);
+            label(w1 + 10, 4, "→", 15, faint);
+            rect(w1 + 32, 1, w2, 23, ruby, 255, 11);
+            label(w1 + 44, 4, to, 15, white, 255, true);
+            break;
+          }
+          case 'D':
+            label(0, 3, t, 15, muted);
+            break;
+          case 'L':
+            label(0, 3, t, 15, rubyHi);
+            break;
+          default:
+            break;
+          }
+        }
         endLayer();
       }
       place(layer.image, G.x, y + i * lineH);

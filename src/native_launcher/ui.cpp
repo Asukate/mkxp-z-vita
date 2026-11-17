@@ -1965,7 +1965,7 @@ void UI::action(Button b) {
     }
     if(!releaseReport.empty()) {
       if(b==Button::Circle || b==Button::Cross)releaseReport.clear();
-      if(b==Button::Up || b==Button::Down)releaseScroll=std::max(0,std::min(releaseScroll+(b==Button::Up?-1:1),std::max(0,int(releaseReport.size())-11)));
+      if(b==Button::Up || b==Button::Down)releaseScroll=std::max(0,std::min(releaseScroll+(b==Button::Up?-1:1),std::max(0,(releaseLaidOut?releaseLaidOut:int(releaseReport.size()))-(releaseLaidOut?13:11))));
       return;
     }
     if (focus == Focus::About) {
