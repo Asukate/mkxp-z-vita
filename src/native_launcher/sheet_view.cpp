@@ -268,6 +268,8 @@ void View::buildSheet(const UI &u) {
     auto emitPara = [&] {
       if (para.empty())
         return;
+      if (!out.empty() && out.back() != "S" && out.back()[0] != 'P')
+        out.push_back("S"); // a gap after a list
       for (auto &l : wrap(plainMarkdown(para), 17, G.w))
         out.push_back("P" + l);
       out.push_back("S");
