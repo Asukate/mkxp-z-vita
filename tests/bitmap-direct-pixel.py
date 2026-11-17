@@ -21,10 +21,11 @@ const void *vglGetTexDataPointerByID(unsigned id){return id>=10?bandStorage[id-1
 struct ImageBand { struct {struct {unsigned gl;} tex;} tex; ImageCrop crop; int ownTop,ownBottom; };
 struct Private {
  void *cpu=nullptr;ImageCrop imageCrop;uint32_t contentVersion=0,directReadVersion=~0u;
- struct {int width,height;struct {unsigned gl=1;} tex;} gl;
+ struct {int width,height;struct {unsigned gl=1;} tex;bool fmt16=false;} gl;
  std::vector<ImageBand> bands;
 };
 static bool bandsCurrent(Private *p){return !p->bands.empty();}
+static void tex16Promote(Private *,const char *){}
 struct Bitmap {
  Private *p;int width()const{return p->imageCrop.active()?p->imageCrop.logicalWidth:p->gl.width;}
  int height()const{return p->imageCrop.active()?p->imageCrop.logicalHeight:p->gl.height;}

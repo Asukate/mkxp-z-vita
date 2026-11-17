@@ -13,7 +13,7 @@ cpp=r'''
 #include <vector>
 #include <algorithm>
 struct Vec4{float x=0,y=0,z=0,w=0;};
-struct BitmapPrivate{void *cpu=nullptr;ImageCrop imageCrop;struct{int width,height;struct{unsigned gl=1;}tex;}gl;};
+struct BitmapPrivate{void *cpu=nullptr;ImageCrop imageCrop;struct{int width,height;struct{unsigned gl=1;}tex;bool fmt16=false;}gl;};
 static bool completed;
 static unsigned fences;
 struct{void Finish(){completed=true;++fences;}}gl;
@@ -21,6 +21,7 @@ static void *storage;
 void *vglGetTexDataPointerByID(unsigned){assert(completed);return storage;}
 static bool banded;
 static bool bandsCurrent(BitmapPrivate *){return banded;}
+static void tex16Promote(BitmapPrivate *,const char *,bool=false){}
 '''+body+r'''
 int main(){
  std::vector<unsigned> pixels(1024*1024,0xdeadbeef);storage=pixels.data();
