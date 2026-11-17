@@ -360,6 +360,57 @@ int main() {
     }
     assert(refused);
   }
-  std::cout << "Control transitions, touch filtering, key mappings, right stick, profile "
+  {
+    // Turbo: R (button 11) is mapped to Turbo. R held with Cross turns turbo
+    // on for Cross; neither reaches the game. Then Cross held alone repeats:
+    // down for 50 ms, up for 50 ms at 10 a second.
+    ControlProfile t;
+    t.enabled = true;
+    t.buttons[11] = controlTurbo;
+    ControlState ts;
+    ControlSample q;
+    q.milliseconds = 1000;
+    auto at = [&](unsigned buttons, uint64_t ms) {
+      q.buttons = buttons;
+      q.milliseconds = ms;
+      return ts.update(t, q);
+    };
+    at(0, 1000); // arms
+    auto r = at(1u << 11, 1016);
+    assert(!r.actions[controlTurbo] && !r.actions[13]);
+    r = at((1u << 11) | 1u, 1032);
+    assert(!r.actions[13] && r.turbo == 1u);
+    at(0, 1048);
+    assert(at(1, 1064).actions[13]);   // first press is down at once
+    assert(at(1, 1100).actions[13]);   // 36 ms in
+    assert(!at(1, 1120).actions[13]);  // 56 ms: up
+    assert(at(1, 1170).actions[13]);   // 106 ms: down again
+    at(0, 1180);
+    // Other buttons are not repeated.
+    at(2, 1200);
+    assert(at(2, 1260).actions[12]);
+    at(0, 1280);
+    // Turbo with Cross again turns it off.
+    at(1u << 11, 1300);
+    at((1u << 11) | 1u, 1316);
+    at(0, 1332);
+    at(1, 1348);
+    assert(at(1, 1408).actions[13]);
+    // Saved turbo buttons and rate come from the profile, and read back.
+    t.turbo = 2;
+    t.turboRate = 5;
+    at(0, 1420);
+    assert(at(2, 1440).turbo == 2u && at(2, 1460).actions[12] && !at(2, 1550).actions[12]);
+    ControlProfile back = ControlProfile::parse(t.json());
+    assert(back.turbo == 2u && back.turboRate == 5 && back.buttons[11] == controlTurbo);
+    bool refused = false;
+    try {
+      ControlProfile::parse(json5pp::parse("{\"turboRate\": 100}"));
+    } catch (const std::exception &) {
+      refused = true;
+    }
+    assert(refused);
+  }
+  std::cout << "Control transitions, touch filtering, key mappings, right stick, turbo, profile "
                "validation and release ordering passed\n";
 }

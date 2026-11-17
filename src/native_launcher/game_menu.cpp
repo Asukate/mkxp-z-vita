@@ -145,6 +145,7 @@ bool GameMenu::open(const std::string &configPath) {
       return false;
     }
     useLauncherLanguage();
+    ui->cheat = cheat;
     ui->openInGame(playing);
     std::unique_ptr<View> view(new View("app0:/font.ttf"));
     view->overlay = true;

@@ -42,7 +42,8 @@ enum class Page {
   Remove,
   Keys, // artwork source keys
   Sound,
-  Rescue // a game left a crash rescue: resume from it, start normally, discard
+  Rescue, // a game left a crash rescue: resume from it, start normally, discard
+  Cheats  // over a running game: the game's script owns these pages (see UI::cheat)
 };
 enum class BrowseMode { Games, Rtp, Folder };
 // The home screen: a centred cover carousel over the library, with an
@@ -262,7 +263,32 @@ public:
   int gameSetting = 0;
   // The last row, deleting the ZIP of an unpacked ZIP game, shows only then.
   bool canFreeZip = false;
-  int gameOptionsCount() const { return inGame ? 6 : canFreeZip ? 10 : 9; }
+  int gameOptionsCount() const { return inGame ? (cheat ? 7 : 6) : canFreeZip ? 10 : 9; }
+  // Cheats over a running game. The engine's script owns the pages and rows
+  // (launcher/cheats.rb for XP/VX/VX Ace/Essentials, launcher/cheats.js for
+  // MV/MZ): cheat sends it a button ("open", "back", "cross", "left",
+  // "right", "square") with the focused row and gets the page back as JSON
+  // (see cheats.rb). Unset when the engine has no cheats: no Cheats row.
+  std::function<bool(const char *cmd, int row, std::string &reply)> cheat;
+  struct CheatRow {
+    std::string kind, label, value, note, square; // square: what Square does, if anything
+    std::vector<std::string> noteArgs; // fill the note's {}
+    bool on = false, raw = false; // raw: game text (names), not translated
+    // A number row (lo <= hi): Cross opens the number editor on x.
+    long long x = 0, lo = 0, hi = -1;
+    bool editable() const { return kind == "number" && lo <= hi; }
+  };
+  std::vector<CheatRow> cheatRows;
+  // The number editor over a number row: the value being typed, the digit
+  // Up and Down change (0: ones), and the row it belongs to (-1: closed).
+  // Nothing reaches the game until Cross sets it.
+  int cheatEditRow = -1, cheatEditDigit = 0;
+  long long cheatEditValue = 0;
+  int cheatEditDigits() const; // how many digits the row's limit has
+  std::string cheatEditText() const; // the value, the chosen digit marked
+  std::string cheatTitle, cheatSubtitle;
+  void openCheats();
+  void cheatRequest(const char *cmd, int row);
   // The menu opened over a running game (L+R+Start or the corner icon): the
   // game's page with Resume, Controls, Display, Audio, Performance and speed
   // and Back to library. Its changes apply at once (see inGameChanged).

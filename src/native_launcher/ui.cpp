@@ -53,15 +53,15 @@ struct InputFeedback {
     s.depth = (u.focus != Focus::Home) + (u.page != Page::Home) + u.home.details +
               (u.home.panel != Home::NoPanel) + u.gameOptions + bool(u.browser) + browserDepth +
               !u.errorReport.empty() + !u.releaseReport.empty() + u.controlsAdvanced + (u.controlsPad > 0) +
-              u.controlPicking + u.controlsTesting + int(u.model.stack.size()) + u.welcome.active;
+              u.controlPicking + u.controlsTesting + int(u.model.stack.size()) + u.welcome.active + (u.cheatEditRow >= 0);
     s.place = {u.home.target, long(u.home.zone), u.home.toolbarFocus, u.home.topFocus, u.home.panelFocus,
                u.setting, u.gameSetting, u.rtpSelected, u.browserSelected, u.engineFilter, u.aboutScroll,
                u.errorScroll, u.releaseScroll, u.artRow, u.controlPickKey, u.removeStep ? long(u.removeStep) : 0,
-               u.welcome.slide, u.welcome.languageFocus};
+               u.welcome.slide, u.welcome.languageFocus, u.cheatEditDigit};
     s.values = {u.home.view, u.startView, u.home.sort, u.home.direction, u.home.favouritesOnly, u.home.unplayedOnly,
                 long(u.home.hiddenEngines), u.blurAdult, u.automaticUpdates, long(u.favourites.size()),
                 u.artPick[0], u.artPick[1], u.artPick[2], u.menuSounds, u.themeMusic, u.effectsVolume,
-                u.musicVolume, long(u.query.size()), language()};
+                u.musicVolume, long(u.query.size()), language(), long(u.cheatEditValue)};
     s.message = u.message;
     s.missingRtp = u.missingRtp;
     s.launch = u.launchRequested;
@@ -516,8 +516,9 @@ void UI::sheetTouch(int x, int y) {
     return;
   if (gameOptions && inGame && page == Page::Game) {
     // The menu over a game: its taller rows.
+    const int rowH = inGameMenuRowHeight(optionRows());
     for (int i = 0; i < optionRows(); ++i) {
-      int tx = G.x, ty = G.top + i * inGameMenuRowH, tw = G.w, th = inGameMenuRowH - 6;
+      int tx = G.x, ty = G.top + i * rowH, tw = G.w, th = rowH - 6;
       if (inside(x, y, tx, ty, tw, th)) {
         pickRow(setting, i, optionRows());
         return;
@@ -596,6 +597,161 @@ void UI::openGameMenu(size_t index) {
   focus = Focus::Settings;
   message.clear();
 }
+int UI::cheatEditDigits() const {
+  if (cheatEditRow < 0 || size_t(cheatEditRow) >= cheatRows.size())
+    return 1;
+  auto &r = cheatRows[size_t(cheatEditRow)];
+  unsigned long long top = (unsigned long long)std::max(r.hi < 0 ? -r.hi : r.hi, r.lo < 0 ? -r.lo : r.lo);
+  int digits = 1;
+  while (top >= 10) {
+    top /= 10;
+    ++digits;
+  }
+  return digits;
+}
+// "1,0[0]0": every digit up to the limit's length, with thousands commas;
+// the digit Up and Down change is in brackets.
+std::string UI::cheatEditText() const {
+  long long v = cheatEditValue < 0 ? -cheatEditValue : cheatEditValue;
+  std::string digits = std::to_string(v);
+  int count = cheatEditDigits();
+  if (int(digits.size()) < count)
+    digits.insert(0, size_t(count - int(digits.size())), '0');
+  std::string out;
+  for (int i = 0; i < int(digits.size()); ++i) {
+    int place = int(digits.size()) - 1 - i; // 0: ones
+    if (i > 0 && (place + 1) % 3 == 0)
+      out += ',';
+    if (place == cheatEditDigit)
+      out += std::string("[") + digits[size_t(i)] + "]";
+    else
+      out += digits[size_t(i)];
+  }
+  return (cheatEditValue < 0 ? "-" : "") + out;
+}
+void UI::openCheats() {
+  page = Page::Cheats;
+  cheatEditRow = -1;
+  cheatRows.clear();
+  setting = settingFirst = 0;
+  message.clear();
+  cheatRequest("open", 0);
+}
+// The script's answer (see launcher/cheats.rb): the whole page, or the rows
+// that changed, a message, and whether to leave the page or the menu.
+void UI::cheatRequest(const char *cmd, int row) {
+  cheatEditRow = -1;
+  std::string reply;
+  if (!cheat || !cheat(cmd, row, reply)) {
+    message = tr("Cheats are not available in this game right now.");
+    if (std::string(cmd) == "back" || cheatRows.empty()) {
+      page = Page::Game;
+      setting = gameSetting;
+    }
+    return;
+  }
+  Json v;
+  try {
+    v = json5pp::parse(reply);
+  } catch (...) {
+    message = tr("Cheats are not available in this game right now.");
+    return;
+  }
+  auto &o = v.as_object();
+  auto text = [&](const Json &obj, const char *key) {
+    auto &m = obj.as_object();
+    auto it = m.find(key);
+    if (it == m.end() || it->second.is_null())
+      return std::string();
+    return it->second.is_string() ? it->second.as_string() : it->second.stringify();
+  };
+  auto flag = [&](const Json &obj, const char *key) {
+    auto &m = obj.as_object();
+    auto it = m.find(key);
+    return it != m.end() && ((it->second.is_boolean() && it->second.as_boolean()) ||
+                             (it->second.is_integer() && it->second.as_integer() != 0));
+  };
+  auto toRow = [&](const Json &r) {
+    CheatRow c;
+    c.kind = text(r, "k");
+    c.label = text(r, "l");
+    c.value = text(r, "v");
+    c.note = text(r, "n");
+    c.square = text(r, "sq");
+    c.on = flag(r, "on");
+    c.raw = flag(r, "r");
+    auto &m = r.as_object();
+    auto number = [&](const char *key, long long &out) {
+      auto it = m.find(key);
+      if (it == m.end() || !it->second.is_integer())
+        return false;
+      out = it->second.as_integer();
+      return true;
+    };
+    long long x = 0, lo = 0, hi = 0;
+    if (number("x", x) && number("lo", lo) && number("hi", hi) && lo <= hi) {
+      c.x = x;
+      c.lo = lo;
+      c.hi = hi;
+    }
+    auto args = m.find("a");
+    if (args != m.end() && args->second.is_array())
+      for (auto &a : args->second.as_array())
+        c.noteArgs.push_back(a.is_string() ? a.as_string() : a.stringify());
+    return c;
+  };
+  if (flag(v, "close")) {
+    page = Page::Game;
+    setting = gameSetting;
+    settingFirst = std::max(0, setting - 6);
+    message.clear();
+    return;
+  }
+  auto rows = o.find("rows");
+  if (rows != o.end() && rows->second.is_array()) {
+    cheatRows.clear();
+    for (auto &r : rows->second.as_array())
+      cheatRows.push_back(toRow(r));
+    auto focus = o.find("focus");
+    setting = focus != o.end() && focus->second.is_integer() ? int(focus->second.as_integer()) : 0;
+    setting = std::max(0, std::min(setting, int(cheatRows.size()) - 1));
+    // Never start on a title row.
+    for (size_t i = size_t(setting); i < cheatRows.size(); ++i)
+      if (cheatRows[i].kind != "plain") {
+        setting = int(i);
+        break;
+      }
+    settingFirst = std::max(0, std::min(setting - 3, int(cheatRows.size()) - 7));
+  }
+  auto set = o.find("set");
+  if (set != o.end() && set->second.is_array())
+    for (auto &pair : set->second.as_array()) {
+      auto &p = pair.as_array();
+      if (p.size() == 2 && p[0].is_integer() && p[0].as_integer() >= 0 && size_t(p[0].as_integer()) < cheatRows.size())
+        cheatRows[size_t(p[0].as_integer())] = toRow(p[1]);
+    }
+  cheatTitle = text(v, "title");
+  cheatSubtitle = text(v, "subtitle");
+  message.clear();
+  auto m = o.find("m");
+  if (m != o.end() && m->second.is_string()) {
+    message = tr(m->second.as_string());
+    auto a = o.find("a");
+    if (a != o.end() && a->second.is_array()) {
+      size_t at = 0;
+      for (auto &arg : a->second.as_array()) {
+        at = message.find("{}", at);
+        if (at == std::string::npos)
+          break;
+        std::string s = arg.is_string() ? arg.as_string() : arg.stringify();
+        message.replace(at, 2, s);
+        at += s.size();
+      }
+    }
+  }
+  if (flag(v, "resume"))
+    inGameExit = Resume;
+}
 void UI::openInGame(const Entry &entry) {
   gameEntry = gameMenuSource = entry;
   displayValues = model.gameSettings(entry);
@@ -617,6 +773,7 @@ int UI::optionRows() const {
          : page == Page::Rescue   ? 3
          : page == Page::Audio    ? (inGame ? 1 : 4)
          : page == Page::Display  ? 4
+         : page == Page::Cheats   ? int(cheatRows.size())
                                   : 3;
 }
 void UI::openRemove() {
@@ -753,6 +910,94 @@ void UI::gameAction(Button b) {
     inGameExit = Resume;
     return;
   }
+  if (page == Page::Cheats && cheatEditRow >= 0) {
+    // The number editor: Up/Down change the marked digit, Left/Right pick
+    // another, Square jumps to the limit, Triangle flips the sign (when the
+    // row allows below zero). Cross sets the value, Circle leaves it.
+    auto &r = cheatRows[size_t(cheatEditRow)];
+    long long step = 1;
+    for (int i = 0; i < cheatEditDigit; ++i)
+      step *= 10;
+    switch (b) {
+    case Button::Up:
+    case Button::Down: {
+      long long v = cheatEditValue + (b == Button::Up ? step : -step);
+      cheatEditValue = std::max(r.lo, std::min(r.hi, v));
+      break;
+    }
+    case Button::Left:
+      cheatEditDigit = std::min(cheatEditDigit + 1, cheatEditDigits() - 1);
+      break;
+    case Button::Right:
+      cheatEditDigit = std::max(cheatEditDigit - 1, 0);
+      break;
+    case Button::Square:
+      cheatEditValue = cheatEditValue == r.hi ? std::max(r.lo, 0LL) : r.hi;
+      break;
+    case Button::Triangle:
+      if (r.lo < 0)
+        cheatEditValue = std::max(r.lo, std::min(r.hi, -cheatEditValue));
+      break;
+    case Button::Cross: {
+      int row = cheatEditRow;
+      cheatEditRow = -1;
+      cheatRequest(("set:" + std::to_string(cheatEditValue)).c_str(), row);
+      break;
+    }
+    case Button::Circle:
+      cheatEditRow = -1;
+      message.clear();
+      break;
+    default:
+      break;
+    }
+    return;
+  }
+  if (page == Page::Cheats) {
+    if (b == Button::Cross && setting >= 0 && size_t(setting) < cheatRows.size() &&
+        cheatRows[size_t(setting)].editable()) {
+      auto &r = cheatRows[size_t(setting)];
+      cheatEditRow = setting;
+      cheatEditValue = std::max(r.lo, std::min(r.hi, r.x));
+      cheatEditDigit = 0;
+      message.clear();
+      return;
+    }
+    if (b == Button::Up || b == Button::Down) {
+      // Titles and explanations ("plain" rows) are skipped: only rows that do
+      // something take the focus.
+      const int s0 = setting, f0 = settingFirst, n = optionRows();
+      for (int i = 0; i < n; ++i) {
+        const int prev = setting;
+        move(setting, settingFirst, n, 7, b == Button::Up ? -1 : 1);
+        if (setting == prev) { // at the edge: stay on the last usable row
+          setting = s0;
+          settingFirst = f0;
+          break;
+        }
+        if (setting < 0 || size_t(setting) >= cheatRows.size() || cheatRows[size_t(setting)].kind != "plain")
+          break;
+      }
+      // Keep a title just above the focus in view.
+      while (settingFirst > 0 && cheatRows[size_t(settingFirst - 1)].kind == "plain" && setting - settingFirst + 1 < 7)
+        --settingFirst;
+      message.clear();
+      return;
+    }
+    const char *cmd = b == Button::Circle   ? "back"
+                      : b == Button::Cross  ? "cross"
+                      : b == Button::Left   ? "left"
+                      : b == Button::Right  ? "right"
+                      : b == Button::Square ? "square"
+                                            : nullptr;
+    // A number row changes only through its editor (Cross).
+    if (cmd && b != Button::Circle && setting >= 0 && size_t(setting) < cheatRows.size() &&
+        cheatRows[size_t(setting)].editable())
+      return;
+    if (cmd)
+      cheatRequest(cmd, setting);
+    return;
+  }
   if (b == Button::Circle && page == Page::Rescue && rescueFromHome) {
     gameOptions = false;
     page = Page::Home;
@@ -808,6 +1053,12 @@ void UI::gameAction(Button b) {
       openPage(Page::Metrics);
       break;
     case 5:
+      if (cheat)
+        openCheats();
+      else
+        inGameExit = BackToLibrary;
+      break;
+    case 6:
       inGameExit = BackToLibrary;
       break;
     }
@@ -995,7 +1246,7 @@ int UI::controlsCount() const {
       rows += mask & 1;
     return rows;
   }
-  return controlsAdvanced ? 8 : controlsMapRows;
+  return controlsAdvanced ? 9 : controlsMapRows;
 }
 int *UI::controlTarget(int row) {
   if (controlsPad) {
@@ -1037,6 +1288,18 @@ void UI::pickControlKey(Button b) {
   }
   if (b == Button::Cross) {
     assignControl(at.value);
+    return;
+  }
+  // Square: this button repeats while held (turbo), or stops repeating.
+  if (b == Button::Square && !controlsAdvanced && !controlsPad && setting >= 1 && setting <= 12) {
+    unsigned bit = 1u << (setting - 1);
+    controls.turbo ^= bit;
+    controls.enabled = true;
+    model.saveControls(controlsEntry, controls);
+    inGameChanged = true;
+    message = trf(controls.turbo & bit ? "Turbo on for {}: holding it repeats it." : "Turbo off for {}.",
+                  {controlLabel(setting)});
+    controlPicking = false;
     return;
   }
   if (b == Button::Left || b == Button::Right) {
@@ -1102,8 +1365,8 @@ std::string UI::controlLabel(int row) const {
   }
   const char *labels[] = {"Right stick",    "Right stick up", "Right stick down",
                           "Right stick left", "Right stick right", "Stick deadzone",
-                          "Pointer speed",  "<square> Square toggles its action"};
-  return row >= 0 && row < 8 ? tr(labels[row]) : "";
+                          "Pointer speed",  "<square> Square toggles its action", "Turbo speed"};
+  return row >= 0 && row < 9 ? tr(labels[row]) : "";
 }
 std::string UI::controlValue(int row) const {
   if (controlsPad) {
@@ -1114,7 +1377,8 @@ std::string UI::controlValue(int row) const {
   }
   if (!controlsAdvanced) {
     if (row >= 1 && row <= 12)
-      return controlText(controls.buttons[row - 1]);
+      return controls.turbo & (1u << (row - 1)) ? trf("Turbo {}", {controlText(controls.buttons[row - 1])})
+                                                : controlText(controls.buttons[row - 1]);
     return tr(row == 0 ? (controls.enabled ? "On" : "Off (game's own controls)")
               : row == 13 ? (controls.tapToWalk ? "On (tap the map to walk there)" : "Off")
               : row == 14 ? frontModeNames[controls.front]
@@ -1133,6 +1397,8 @@ std::string UI::controlValue(int row) const {
     return std::to_string(controls.deadzone);
   case 6:
     return std::to_string(controls.speed);
+  case 8:
+    return trf("{} a second", {std::to_string(controls.turboRate)});
   default:
     return tr(controls.toggleRun ? "On" : "Off");
   }
@@ -1198,6 +1464,15 @@ void UI::changeControl(int step) {
     case 6:
       controls.speed = std::max(1, std::min(10, controls.speed + step));
       break;
+    case 8: {
+      static const int rates[] = {5, 8, 10, 12, 15, 20, 30};
+      int at = 2;
+      for (int i = 0; i < 7; ++i)
+        if (rates[i] == controls.turboRate)
+          at = i;
+      controls.turboRate = rates[(at + step + 7) % 7];
+      break;
+    }
     default:
       controls.toggleRun = !controls.toggleRun;
       break;

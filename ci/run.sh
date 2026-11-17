@@ -40,6 +40,9 @@ ruby tests/safe-save.rb 2>&1 | tee "$WS/logs/safe-save.log"
 ruby tests/legacy-regexp.rb 2>&1 | tee "$WS/logs/legacy-regexp.log"
 ruby tests/rgss-extensions.rb 2>&1 | tee "$WS/logs/rgss-extensions.log"
 ruby tests/sprite-fastpath.rb 2>&1 | tee "$WS/logs/sprite-fastpath.log"
+ruby tests/cheats.rb 2>&1 | tee "$WS/logs/cheats.log"
+# The MV/MZ cheats; the CI image has no Node yet, so only where it is installed.
+if command -v node >/dev/null; then node tests/cheats-js.js 2>&1 | tee "$WS/logs/cheats-js.log"; fi
 ./scripts/test-midi-host.sh "$WS/host-midi" 2>&1 | tee "$WS/logs/midi.log"
 python3 tests/openal-empty-buffer.py 2>&1 | tee "$WS/logs/openal-empty-buffer.log"
 python3 tests/performance-metrics.py 2>&1 | tee "$WS/logs/performance-metrics.log"

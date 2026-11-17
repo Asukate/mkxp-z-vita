@@ -50,6 +50,12 @@ FT_Face View::cjkFace() {
     for (auto path : {assets + "font-cjk.ttf", std::string("assets/wqymicrohei.ttf")}) {
       if (cjk)
         break;
+      // Read from the file as glyphs are needed: over a running game the
+      // heap may have no 4.5 MB block left, and then Japanese and Chinese
+      // text (switch names, game names) drew as "?".
+      if (!FT_New_Face(library, path.c_str(), 0, &cjk))
+        break;
+      cjk = nullptr;
       try {
         cjkData = readFile(path, 16u * 1024 * 1024);
       } catch (const std::exception &) {

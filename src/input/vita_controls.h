@@ -24,10 +24,14 @@ static const ControlAction controlActions[] = {
     {18, "R"},  {21, "SHIFT"},      {22, "CTRL"},       {23, "ALT"},
     {25, "F5"}, {26, "F6"},         {27, "F7"},         {28, "F8"},
     {29, "F9"}, {38, "Mouse left"}, {40, "Mouse right"},
-    {43, "Fast forward"}};
+    {43, "Fast forward"}, {44, "Turbo"}};
 // Not an RPG Maker button: the engine's fast forward (see
 // display/fast-forward.h), which L+R also switches.
 static const int controlFastForward = 43;
+// Not an RPG Maker button either: held with another button, it turns turbo
+// on or off for that button (see ControlState::update).
+static const int controlTurbo = 44;
+static const int controlActionCount = 45; // codes 0..44
 // A mapping is either an RPG Maker action (the codes above) or a keyboard
 // key, for games that read the keyboard themselves (LISA) or whose own key
 // bindings are what the player knows. A key is controlKeyBase plus its USB
@@ -52,15 +56,16 @@ static const ControlPick controlPicks[] = {
     {13, "Confirm", 0, 2.80f, 1.45f},
     {12, "Cancel", 0, 4.25f, 1.40f},
     {11, "Run", 0, 5.65f, 1.00f},
-    {14, "X=A", 0, 6.65f, 0.75f},
-    {15, "Y=S", 0, 7.40f, 0.75f},
-    {16, "Z=D", 0, 8.15f, 0.75f},
-    {17, "L=Q", 0, 8.90f, 0.75f},
-    {18, "R=W", 0, 9.65f, 0.75f},
-    {38, "Mouse L", 0, 10.40f, 1.20f},
-    {40, "Mouse R", 0, 11.60f, 1.20f},
-    {43, "Fast fwd", 0, 12.80f, 1.20f},
-    {0, "Off", 0, 14.00f, 1.00f},
+    {14, "X=A", 0, 6.65f, 0.70f},
+    {15, "Y=S", 0, 7.35f, 0.70f},
+    {16, "Z=D", 0, 8.05f, 0.70f},
+    {17, "L=Q", 0, 8.75f, 0.70f},
+    {18, "R=W", 0, 9.45f, 0.70f},
+    {38, "Mouse L", 0, 10.15f, 1.10f},
+    {40, "Mouse R", 0, 11.25f, 1.10f},
+    {43, "Fast fwd", 0, 12.35f, 1.05f},
+    {44, "Turbo", 0, 13.40f, 0.90f},
+    {0, "Off", 0, 14.30f, 0.70f},
     {1041, "Esc", 1, 0.00f, 1.50f},
     {1058, "F1", 1, 1.50f, 1.00f},
     {1059, "F2", 1, 2.50f, 1.00f},
@@ -272,6 +277,11 @@ struct ControlProfile {
     return *const_cast<ControlProfile *>(this)->zone(rear, i);
   }
   std::array<int, 12> buttons{{13, 12, 11, 14, 16, 15, 8, 2, 4, 6, 17, 18}};
+  // Buttons that repeat while held (bit i: buttons[i]), and how many
+  // presses a second they send. The Turbo action changes the set while
+  // playing; the Controls page saves it.
+  unsigned turbo = 0;
+  int turboRate = 10;
   json5pp::value json() const {
     using J = json5pp::value;
     J out(std::initializer_list<J::pair_type>{});
@@ -302,6 +312,8 @@ struct ControlProfile {
     for (int b : buttons)
       a.as_array().push_back(b);
     o["buttons"] = a;
+    o["turbo"] = int(turbo);
+    o["turboRate"] = turboRate;
     return out;
   }
   static ControlProfile parse(const json5pp::value &j) {
@@ -337,6 +349,10 @@ struct ControlProfile {
     number("front", p.front, 0, frontModes - 1);
     number("rear", p.rear, 0, rearModes - 1);
     number("speed", p.speed, 1, 10);
+    int turbo = 0;
+    number("turbo", turbo, 0, 4095);
+    p.turbo = unsigned(turbo);
+    number("turboRate", p.turboRate, 2, 30);
     number("frontLeft", p.frontLeft, 0, controlKeyBase + 255);
     number("frontRight", p.frontRight, 0, controlKeyBase + 255);
     number("rearLeft", p.rearLeft, 0, controlKeyBase + 255);
@@ -393,7 +409,9 @@ struct ControlSample {
   std::vector<ControlContact> front, rear;
 };
 struct ControlResult {
-  std::array<bool, 44> actions{};
+  std::array<bool, controlActionCount> actions{};
+  // Buttons repeating now (the saved set, changed with the Turbo action).
+  unsigned turbo = 0;
   // Keyboard keys held through a key mapping, by scancode.
   std::array<bool, 256> keys{};
   bool pointer = false;
@@ -410,6 +428,11 @@ class ControlState {
   std::vector<int> rearAccepted, rearKnown;
   // The zone each finger is in, kept while it sits in the band between two.
   std::vector<std::pair<int, int>> zoneOf[2];
+  // Turbo: the buttons repeating now, the profile's set they came from (a
+  // new set replaces them), and when each was pressed, so every press
+  // starts down. Kept across reset(): a load does not turn turbo off.
+  unsigned turboOn = 0, turboSaved = 0;
+  uint64_t turboSince[12] = {};
   // Which zone a contact presses under a layout of mask, or -1. Halves and
   // corners leave a band in the middle where a finger keeps its last zone,
   // so one resting on a line cannot flicker between two.
@@ -505,17 +528,39 @@ public:
     }
     out.pointer = p.front == 2 || p.rear == 2 || p.rightStick == RightStickPointer;
     auto press = [&](int action) {
-      if (action > 0 && action < 44)
+      if (action > 0 && action < controlActionCount)
         out.actions[action] = true;
       else if (controlIsKey(action))
         out.keys[action - controlKeyBase] = true;
     };
+    // Turbo held with another button turns turbo on or off for that
+    // button; neither reaches the game. A turbo button held down is down
+    // for the first half of each beat, up for the second.
+    if (p.turbo != turboSaved)
+      turboOn = turboSaved = p.turbo;
+    bool turboHeld = false;
     for (int i = 0; i < 12; ++i)
-      if (s.buttons & (1u << i)) {
-        if ((i != 2 || !p.toggleRun) && (i != 10 || p.rear != 2))
-          press(p.buttons[i]);
+      if ((s.buttons & (1u << i)) && p.buttons[i] == controlTurbo)
+        turboHeld = true;
+    for (int i = 0; i < 12; ++i) {
+      unsigned bit = 1u << i;
+      if (!(s.buttons & bit) || p.buttons[i] == controlTurbo)
+        continue;
+      if (!(previous & bit))
+        turboSince[i] = s.milliseconds;
+      if (turboHeld) {
+        if (!(previous & bit))
+          turboOn ^= bit;
+        continue;
       }
-    if (p.toggleRun && (s.buttons & 4) && !(previous & 4))
+      if ((turboOn & bit) && p.turboRate > 0 &&
+          (s.milliseconds - turboSince[i]) * uint64_t(p.turboRate) * 2 / 1000 % 2)
+        continue;
+      if ((i != 2 || !p.toggleRun) && (i != 10 || p.rear != 2))
+        press(p.buttons[i]);
+    }
+    out.turbo = turboOn;
+    if (p.toggleRun && !turboHeld && (s.buttons & 4) && !(previous & 4))
       run = !run;
     if (run)
       press(p.buttons[2]);

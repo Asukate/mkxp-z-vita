@@ -298,6 +298,66 @@ class NativeLauncher(unittest.TestCase):
             self.run_binary('--in-game', '0123456789abcdef', '--actions', '')
         game('', self.storage/'in-game.png')
 
+    def test_in_game_cheats_page_follows_the_script(self):
+        self.game(self.games/'Running', title='Running')
+        key = self.ui('cross,cross')['entries'][0]['config']
+        main = {'page': 'main', 'title': 'Cheats', 'subtitle': 'RPG Maker VX Ace', 'focus': 0,
+                'rows': [{'k': 'number', 'l': 'Gold', 'v': '0 G', 'x': 0, 'lo': 0, 'hi': 99999999,
+                          'n': "<cross> Type how much gold you want. Up to {}, this game's own limit.", 'a': ['99,999,999']},
+                         {'k': 'nav', 'l': 'Party'}, {'k': 'toggle', 'l': 'Door open', 'on': False, 'r': 1},
+                         {'k': 'number', 'l': 'Coins', 'v': '-5', 'x': -5, 'lo': -999, 'hi': 999},
+                         {'k': 'action', 'l': 'Spot 1', 'v': 'Empty', 'sq': 'Save spot here'}]}
+        replies = self.root/'cheat-replies.json'
+
+        def game(actions, answers, snapshot=None):
+            replies.write_text(json.dumps(answers))
+            return self.run_binary('--in-game', key, '--cheat-replies', str(replies), '--actions', actions,
+                                   *(['--snapshot', snapshot] if snapshot else []))
+        open_cheats = 'down,down,down,down,down,cross'
+        # With a cheat script the menu has seven rows: Cheats before Back to library.
+        state = game('down,down,down,down,down,down,cross', [])
+        self.assertEqual(state['inGameExit'], 2)
+        state = game(open_cheats, [main])
+        self.assertEqual((state['page'], state['cheatTitle'], state['cheatCalls']), (15, 'Cheats', ['open:0']))
+        self.assertEqual([r['l'] for r in state['cheatRows']], ['Gold', 'Party', 'Door open', 'Coins', 'Spot 1'])
+        # Cross on a number row opens the editor: nothing reaches the script
+        # until Cross sets it. Up/Down change the marked digit, Left/Right
+        # pick another; the value stays within the row's limits.
+        state = game(open_cheats + ',cross,up,up', [main])
+        self.assertEqual((state['cheatCalls'], state['cheatEditRow'], state['cheatEditValue']), (['open:0'], 0, '2'))
+        self.assertEqual(state['cheatEditText'], '00,000,00[2]')
+        state = game(open_cheats + ',cross,up,up,left,up,right,down,down,down,down', [main])
+        self.assertEqual((state['cheatEditValue'], state['cheatEditText']), ('8', '00,000,00[8]'))
+        state = game(open_cheats + ',cross,square', [main])
+        self.assertEqual(state['cheatEditValue'], '99999999')
+        gold = {'page': 'main', 'title': 'Cheats', 'm': 'Gold is now {}.', 'a': ['12'],
+                'set': [[0, dict(main['rows'][0], v='12 G', x=12)]]}
+        state = game(open_cheats + ',cross,up,up,left,up,cross', [main, gold])
+        self.assertEqual(state['cheatCalls'], ['open:0', 'set:12:0'])
+        self.assertEqual((state['cheatEditRow'], state['cheatRows'][0]['v'], state['message']), (-1, '12 G', 'Gold is now 12.'))
+        # Circle leaves the editor without a call; the page stays.
+        state = game(open_cheats + ',cross,up,circle', [main])
+        self.assertEqual((state['cheatCalls'], state['cheatEditRow'], state['page']), (['open:0'], -1, 15))
+        # Triangle flips the sign where the row allows below zero.
+        state = game(open_cheats + ',down,down,down,cross,triangle', [main])
+        self.assertEqual(state['cheatEditValue'], '5')
+        # Left, Right and Square on a number row do nothing; on other rows
+        # they go to the script with the focused row.
+        state = game(open_cheats + ',left,right,square,down,down,down,down,square', [main, main])
+        self.assertEqual(state['cheatCalls'], ['open:0', 'square:4'])
+        game(open_cheats + ',cross,up,up,left,up', [main], self.storage/'in-game-cheats-editor.png')
+        # Circle asks the script; "close" goes back to the menu on the Cheats row.
+        state = game('down,down,down,down,down,cross,circle', [main, {'close': True}])
+        self.assertEqual((state['page'], state['setting'], state['inGameExit']), (8, 5, 0))
+        # "resume" closes the menu (teleport, open the save screen...).
+        state = game(open_cheats + ',down,cross', [main, dict(main, resume=True)])
+        self.assertEqual(state['inGameExit'], 1)
+        # A failing script leaves the page with a message, never the game.
+        state = game('down,down,down,down,down,cross', [None])
+        self.assertEqual((state['page'], state['inGameExit']), (8, 0))
+        self.assertIn('not available', state['message'])
+        game('down,down,down,down,down,cross', [main], self.storage/'in-game-cheats.png')
+
     def test_details_screenshots_open_full_screen(self):
         import struct, zlib
         def png(w, h, rgb):

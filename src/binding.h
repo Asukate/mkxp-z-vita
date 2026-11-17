@@ -22,6 +22,8 @@
 #ifndef BINDING_H
 #define BINDING_H
 
+#include <string>
+
 struct ScriptBinding
 {
 	/* Starts the part where the binding takes over,
@@ -39,6 +41,13 @@ struct ScriptBinding
 	/* Instructs the binding to issue a game reset.
 	 * Same conditions as for terminate apply */
 	void (*reset) (void);
+
+	/* The in-game menu's Cheats page (launcher/cheats.rb, HardRPGCheats.request):
+	 * cmd is "open", "back", "cross", "left", "right" or "square", row the
+	 * focused row. Only while the game waits inside Graphics.update. False
+	 * when the game has no cheats to offer or the script failed; reply is
+	 * the script's JSON. */
+	bool (*cheat) (const char *cmd, int row, std::string &reply);
 };
 
 /* VTable defined in the binding source */

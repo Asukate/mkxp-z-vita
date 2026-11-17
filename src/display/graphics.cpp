@@ -1623,6 +1623,12 @@ struct GraphicsPrivate {
     /* The game waits here while the menu is open: each frame redraws the
      * paused game with the menu over it, so display changes show at once. */
     void runGameMenu() {
+        /* The script answers the Cheats page from here: the game waits in
+         * Graphics.update, on its own thread. */
+        if (scriptBinding->cheat && !gameMenu.cheat)
+            gameMenu.cheat = [](const char *cmd, int row, std::string &reply) {
+                return scriptBinding->cheat(cmd, row, reply);
+            };
         if (!gameMenu.open(threadData->config.vitaConfigPath))
             return;
         threadData->ethread->setGameMenuOpen(true);

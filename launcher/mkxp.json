@@ -28,7 +28,8 @@
     "app0:/essentials_natives.rb",
     "app0:/vxace_map_speedups.rb",
     "app0:/vita_controls.rb",
-    "app0:/crash_rescue.rb"
+    "app0:/crash_rescue.rb",
+    "app0:/cheats.rb"
   ],
   "subImageFix": false
 }

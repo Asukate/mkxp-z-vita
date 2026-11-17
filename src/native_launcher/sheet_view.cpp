@@ -178,6 +178,30 @@ const Image &View::shoulder(int side, int &x, int &y) {
   return glow;
 }
 
+namespace {
+// 1234567 -> "1,234,567", as the cheat rows show numbers.
+std::string groupDigits(long long n) {
+  std::string d = std::to_string(n < 0 ? -n : n), out;
+  for (size_t i = 0; i < d.size(); ++i) {
+    if (i > 0 && (d.size() - i) % 3 == 0)
+      out += ',';
+    out += d[i];
+  }
+  return (n < 0 ? "-" : "") + out;
+}
+// Each "{}" in text replaced by the next argument.
+std::string fillArgs(std::string text, const std::vector<std::string> &args) {
+  size_t at = 0;
+  for (auto &a : args) {
+    at = text.find("{}", at);
+    if (at == std::string::npos)
+      break;
+    text.replace(at, 2, a);
+    at += a.size();
+  }
+  return text;
+}
+} // namespace
 void View::buildSheet(const UI &u) {
   scene.clear();
   ensureStrips();
@@ -350,6 +374,8 @@ void View::buildSheet(const UI &u) {
       subtitle = trf("now does: {}", {u.controlValue(u.setting)});
       notes = {tr("Top row: RPG Maker actions (X=A: RPG Maker's X, key A on PC). Below: keys. Dimmed: in use.")};
       left = {hint("btn-cross-26", "Assign", Button::Cross), hint("btn-circle-26", "Cancel", Button::Circle)};
+      if (!u.controlsAdvanced && u.setting >= 1 && u.setting <= 12)
+        left.push_back(hint("btn-square-26", "Turbo on/off", Button::Square));
       right = {{nullptr, tr("Tap twice to assign"), Button::None}};
     } else if (u.controlsPad) {
       special = ControlsPad;
@@ -383,6 +409,9 @@ void View::buildSheet(const UI &u) {
                         "pointer, for games played with the mouse. Or map each direction below to any action or key.")
                : u.controlsAdvanced && u.setting <= 4
                    ? tr("<cross> Cross gives this direction an RPG Maker action or a keyboard key. <square> Square: same as the left stick again.")
+               : u.controlsAdvanced && u.setting == 8
+                   ? tr("How fast turbo buttons repeat. Turn turbo on for a button with <square> Square in its key "
+                        "list, or map a button to Turbo and press it with the button to repeat.")
                : tr(u.controlsAdvanced ? "Pointer options need a game that reads the mouse."
                     : u.setting >= 1 && u.setting <= 12 ? "<cross> Cross gives this button a keyboard key or an RPG Maker action."
                     : u.controls.enabled ? "Each button does what is shown. Saved for this game."
@@ -442,21 +471,90 @@ void View::buildSheet(const UI &u) {
                              "Rename", "Game information", "Play", "Remove from library", "Delete the ZIP, keep the game"};
       Row::Kind kinds[] = {Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Action, Row::Nav, Row::Primary, Row::Danger, Row::Danger};
       // Over a running game: resume, the settings that apply at once, leave.
-      const char *playing[] = {"Resume", "Controls", "Display", "Audio", "Performance and speed", "Back to library"};
+      const char *playing[] = {"Resume", "Controls", "Display", "Audio", "Performance and speed", "Cheats", "Back to library"};
       // Resume is a row like the others: only the focus is ruby.
-      Row::Kind playingKinds[] = {Row::Plain, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Plain};
-      for (int i = 0; i < u.gameOptionsCount(); ++i)
-        row(u.inGame ? playingKinds[i] : kinds[i], u.inGame ? playing[i] : names[i]);
+      Row::Kind playingKinds[] = {Row::Plain, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Plain};
+      for (int i = 0; i < u.gameOptionsCount(); ++i) {
+        // Without cheats the last row is Back to library.
+        int at = u.inGame && !u.cheat && i == 5 ? 6 : i;
+        row(u.inGame ? playingKinds[at] : kinds[i], u.inGame ? playing[at] : names[i]);
+      }
       focusRow = u.setting;
       first = u.settingFirst;
       if (u.inGame) {
         section = tr("Paused");
         menuPage = true;
-        rowH = inGameMenuRowH;
+        rowH = inGameMenuRowHeight(u.gameOptionsCount());
         notes = {tr("Changes apply at once and are saved for this game. Reopen: hold <l>+<r>+<start>, or tap the icon in the empty border.")};
         left = {hint("btn-cross-26", "Open", Button::Cross), hint("btn-circle-26", "Resume", Button::Circle)};
       } else
         left = {hint("btn-cross-26", "Open", Button::Cross), back};
+    } else if (u.page == Page::Cheats) {
+      section = tr("Cheats");
+      title = tr(u.cheatTitle.empty() ? "Cheats" : u.cheatTitle);
+      subtitle = u.cheatSubtitle;
+      const bool editing = u.cheatEditRow >= 0 && size_t(u.cheatEditRow) < u.cheatRows.size();
+      for (size_t i = 0; i < u.cheatRows.size(); ++i) {
+        auto &c = u.cheatRows[i];
+        Row::Kind kind = c.kind == "nav"       ? Row::Nav
+                         // On/off cheats say "On" or "Off": clearer than a switch graphic.
+                         : c.kind == "toggle"  ? Row::Action
+                         : c.kind == "choice"  ? Row::Choice // left/right arrows
+                         // A number row opens the editor: its value and ›, like a page.
+                         : c.kind == "number"  ? Row::Nav
+                         : c.kind == "primary" ? Row::Primary
+                         : c.kind == "danger"  ? Row::Danger
+                         : c.kind == "plain"   ? Row::Info
+                                               : Row::Action;
+        // The row being typed shows the editor's value, its digit marked.
+        // The row keeps its value while the editor panel shows the new one
+        // (a row layer per typed value would fill video memory).
+        const std::string value = c.kind == "toggle" ? (c.on ? "On" : "Off") : c.value;
+        if (c.raw) {
+          Row r;
+          r.kind = kind;
+          r.label = c.label;
+          r.value = tr(value); // "On"/"Off"; numbers pass through
+
+          r.on = c.on;
+          rows.push_back(r);
+        } else
+          row(kind, c.label, value, c.on);
+      }
+      focusRow = editing ? u.cheatEditRow : u.setting;
+      first = u.settingFirst;
+      const UI::CheatRow *focused =
+          u.setting >= 0 && size_t(u.setting) < u.cheatRows.size() ? &u.cheatRows[size_t(u.setting)] : nullptr;
+      if (editing) {
+        auto &r = u.cheatRows[size_t(u.cheatEditRow)];
+        notes = {tr("<up><down> change the lit digit, <left><right> move to another digit, <cross> sets the number.")};
+        left = {hint("btn-cross-26", "Set", Button::Cross), hint("btn-circle-26", "Cancel", Button::Circle),
+                hint("btn-square-26", "Maximum", Button::Square)};
+        if (r.lo < 0)
+          left.push_back(hint("btn-triangle-26", "Minus", Button::Triangle));
+        right = {{"UP DOWN", tr("Digit"), Button::None}, {"LEFT RIGHT", tr("Move"), Button::None}};
+      } else {
+        // A message shows over the hint bar; the note stays the row's own.
+        if (focused && !focused->note.empty())
+          notes = {fillArgs(tr(focused->note), focused->noteArgs)};
+        else
+          notes = {tr("Cheats change this game while it runs. Save in the game to keep what they gave you.")};
+        const char *use = !focused                    ? "Use"
+                          : focused->editable()       ? "Type a number"
+                          : focused->kind == "nav"    ? "Open"
+                          : focused->kind == "toggle" ? "On/off"
+                          : focused->kind == "choice" ? "Next"
+                          : focused->kind == "plain"  ? nullptr
+                                                      : "Use";
+        left.clear();
+        if (use)
+          left.push_back(hint("btn-cross-26", use, Button::Cross));
+        if (focused && !focused->square.empty())
+          left.push_back(hint("btn-square-26", focused->square.c_str(), Button::Square));
+        left.push_back(back);
+        if (focused && focused->kind == "choice")
+          right = {{"LEFT RIGHT", tr("Change"), Button::None}};
+      }
     } else if (u.page == Page::Audio) {
       title = tr(u.inGame ? "Audio" : "Audio and MIDI");
       subtitle = u.gameEntry.name;
@@ -777,6 +875,14 @@ void View::buildSheet(const UI &u) {
     place(headerLayer.image, G.x, sheetTitleY);
   }
 
+  // Each cached row is a texture. Over a running game the game owns most of
+  // video memory, so the menu keeps far fewer. Trimmed before anything
+  // this frame is placed: the scene points at these layers.
+  const size_t cacheMax = overlay ? 48 : 300;
+  if (rowCache.size() > cacheMax)
+    for (auto it = rowCache.begin(); it != rowCache.end();)
+      it = rowCache.size() > cacheMax / 2 ? rowCache.erase(it) : std::next(it);
+
   // Rows: cached text over a quad; the focused one brighter, with the ruby mark.
   int rowsShown = std::min(int(rows.size()) - first, shown);
   int box = rowH - 6;
@@ -840,6 +946,11 @@ void View::buildSheet(const UI &u) {
       } else if (r.kind == Row::Info) {
         label(right, (box - 20) / 2, r.value, 16, white, 255, false, 1, G.w - 200);
         right = std::max(180, right - std::min(G.w - 200, measure(r.value, 16)) - 20);
+      } else if (!r.value.empty()) {
+        // An action with a state, like a cheat switch (On/Off) or a saved spot.
+        int vs = wide ? 18 : 15;
+        label(right, (box - (vs + 5)) / 2, r.value, vs, wide ? soft : muted, 255, false, 1, 340);
+        right -= std::min(340, measure(r.value, vs)) + 16;
       }
       label(textX, labelY, r.label, labelSize, labelColor, 255, bold, -1, std::max(60, right - textX - 8));
       if (!r.detail.empty())
@@ -854,9 +965,6 @@ void View::buildSheet(const UI &u) {
     solidQuad(white, G.x + G.w + 10, G.top, 4, trackH, 0.1, 2);
     solidQuad(white, G.x + G.w + 10, G.top + offset, 4, thumb, 0.6, 2);
   }
-  if (rowCache.size() > 300)
-    for (auto it = rowCache.begin(); it != rowCache.end();)
-      it = rowCache.size() > 150 ? rowCache.erase(it) : std::next(it);
 
   // Long text (reports, release notes): one cached layer per line.
   int y = rows.empty() ? G.top : G.top + rowsShown * rowH + 6;
@@ -1361,6 +1469,55 @@ void View::buildSheet(const UI &u) {
   if (!rows.empty() && focusRow >= 0 && int(rows.size()) > shown)
     counter = std::to_string(focusRow + 1) + "|" + std::to_string(rows.size());
   hintBar(u, left, right, counter);
+  // The cheats number editor: a panel over the page with one box per digit,
+  // the digit Up and Down change lit, with arrows over and under it.
+  if (u.page == Page::Cheats && u.cheatEditRow >= 0 && size_t(u.cheatEditRow) < u.cheatRows.size()) {
+    auto &r = u.cheatRows[size_t(u.cheatEditRow)];
+    const int digits = u.cheatEditDigits();
+    const long long v = u.cheatEditValue < 0 ? -u.cheatEditValue : u.cheatEditValue;
+    std::string text = std::to_string(v);
+    const int used = int(text.size()); // digits that are not leading zeros
+    if (int(text.size()) < digits)
+      text.insert(0, size_t(digits - int(text.size())), '0');
+    const int box = 46, gap = 6, comma = 14, sign = r.lo < 0 ? box + gap : 0;
+    int total = sign + digits * box + (digits - 1) * gap + ((digits - 1) / 3) * comma;
+    const int pw = std::max(560, total + 80), ph = 262, px = 480 - pw / 2, py = 132;
+    solidQuad({0, 0, 0}, 0, 0, width, hintsY - 4, 0.55);
+    solidQuad({24, 24, 27}, px, py, pw, ph, 0.97, 18);
+    std::string key = "cheatedit|" + r.label + "|" + std::to_string(u.cheatEditValue) + "|" + std::to_string(u.cheatEditDigit) +
+                      "|" + std::to_string(digits) + "|" + std::to_string(r.lo) + "|" + std::to_string(r.hi);
+    auto &layer = cheatEditLayer;
+    if (beginLayer(layer, key, pw, ph)) {
+      label(pw / 2, 18, r.raw ? r.label : tr(r.label), 22, white, 255, false, 0, pw - 40);
+      int x = (pw - total) / 2;
+      const int by = 92;
+      if (r.lo < 0) {
+        rect(x, by, box, 60, {255, 255, 255}, 26, 8);
+        label(x + box / 2, by + 12, u.cheatEditValue < 0 ? "-" : "+", 30, white, 255, false, 0);
+        x += box + gap;
+      }
+      for (int i = 0; i < digits; ++i) {
+        const int place = digits - 1 - i; // 0: ones
+        const bool lit = place == u.cheatEditDigit, lead = place >= used && place > 0;
+        if (lit) {
+          rect(x, by, box, 60, ruby, 255, 8);
+          label(x + box / 2, by - 30, "\xe2\x86\x91", 20, white, 255, false, 0);
+          label(x + box / 2, by + 66, "\xe2\x86\x93", 20, white, 255, false, 0);
+        } else
+          rect(x, by, box, 60, {255, 255, 255}, 26, 8);
+        label(x + box / 2, by + 12, std::string(1, text[size_t(i)]), 30, lead && !lit ? faint : white, 255, false, 0);
+        x += box + gap;
+        if (place > 0 && place % 3 == 0) {
+          label(x + comma / 2 - gap / 2, by + 26, ",", 26, muted, 255, false, 0);
+          x += comma;
+        }
+      }
+      label(pw / 2, 186, trf("From {} to {}", {groupDigits(r.lo), groupDigits(r.hi)}), 15, muted, 255, false, 0, pw - 40);
+      label(pw / 2, 212, tr("Nothing changes until you press Set."), 15, muted, 255, false, 0, pw - 40);
+      endLayer();
+    }
+    place(layer.image, px, py);
+  }
   auto message = !u.message.empty() ? u.message : u.browser ? u.browser->error : std::string();
   if (!message.empty() && special != ControlsPad && u.page != Page::Controls) {
     if (beginLayer(messageLayer, message, width, 40)) {

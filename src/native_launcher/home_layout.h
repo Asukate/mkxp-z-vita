@@ -48,6 +48,8 @@ constexpr int wideSheetX = 16, wideSheetW = 928, wideSheetTop = 132, wideSheetRo
 // The menu over a running game (its first page): six taller rows; its help
 // is one line just above the hint bar.
 constexpr int inGameMenuRowH = 56, inGameMenuFooterY = hintsY - 26;
+// Seven rows (with Cheats) are a little shorter, so they still end above the help.
+inline int inGameMenuRowHeight(int rows) { return rows > 6 ? 49 : inGameMenuRowH; }
 inline SheetGeom sheetGeom(bool wide) {
   return wide ? SheetGeom{wideSheetX, wideSheetW, wideSheetTop, wideSheetRowH} : SheetGeom{sheetX, sheetW, sheetTop, sheetRowH};
 }

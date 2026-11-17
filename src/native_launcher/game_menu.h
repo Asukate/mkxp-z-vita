@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,6 +25,8 @@ public:
   // ux0:/data/hardrpg/config/<key>.json. False when that game is not the
   // one the launcher started last (then there is nothing to edit).
   bool open(const std::string &configPath);
+  // The engine's cheats (see UI::cheat), set before open; empty: no Cheats row.
+  std::function<bool(const char *cmd, int row, std::string &reply)> cheat;
   bool isOpen() const;
   // Reads the buttons and the front screen once and acts on them.
   void step();

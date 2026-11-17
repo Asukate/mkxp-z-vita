@@ -409,7 +409,7 @@ int main(int argc, char **argv) {
     }
     hardrpg::Paths paths;
     std::string font = "assets/liberation.ttf", sfx = "launcher/sfx", snapshot, script, actions, releaseFixture,
-                rename, search, text, inGame;
+                rename, search, text, inGame, cheatReplies;
     bool edit = false, settle = false, returning = false, quickStart = false;
     // The welcome guide shows only with "--welcome auto" (as on a first
     // start); other runs go straight to home without marking it seen.
@@ -478,6 +478,8 @@ int main(int argc, char **argv) {
         return 0;
       } else if (arg == "--in-game")
         inGame = value; // the running game's settings key, as the engine has it
+      else if (arg == "--cheat-replies")
+        cheatReplies = value; // a JSON array: the script's answers, in order
       else if (arg == "--battery")
         battery = std::stoi(value);
       else if (arg == "--rename") {
@@ -553,6 +555,24 @@ int main(int argc, char **argv) {
         return rename != "--cancel";
       };
     ui.search(search);
+    // A stand-in for the game's cheat script: answers in turn, and each
+    // request is reported back as "cmd:row".
+    std::vector<std::string> cheatAnswers, cheatCalls;
+    size_t cheatNext = 0;
+    if (!cheatReplies.empty()) {
+      auto answers = json5pp::parse(readFile(cheatReplies, 1 << 20)); // kept: the loop reads into it
+      for (auto &r : answers.as_array())
+        cheatAnswers.push_back(r.is_null() ? std::string() : r.stringify());
+      ui.cheat = [&](const char *cmd, int row, std::string &reply) {
+        cheatCalls.push_back(std::string(cmd) + ":" + std::to_string(row));
+        if (cheatNext >= cheatAnswers.size() || cheatAnswers[cheatNext].empty()) {
+          ++cheatNext;
+          return false;
+        }
+        reply = cheatAnswers[cheatNext++];
+        return true;
+      };
+    }
     if (!inGame.empty()) {
       Entry playing;
       if (!ui.model.activeGame(playing, inGame))
@@ -719,6 +739,26 @@ int main(int argc, char **argv) {
     state.as_object()["inGame"] = ui.inGame;
     state.as_object()["inGameExit"] = int(ui.inGameExit);
     state.as_object()["inGameChanged"] = ui.inGameChanged;
+    {
+      auto calls = array();
+      for (auto &c : cheatCalls)
+        calls.as_array().push_back(c);
+      state.as_object()["cheatCalls"] = calls;
+      auto rows = array();
+      for (auto &c : ui.cheatRows) {
+        auto r = object();
+        r.as_object()["k"] = c.kind;
+        r.as_object()["l"] = c.label;
+        r.as_object()["v"] = c.value;
+        r.as_object()["on"] = c.on;
+        rows.as_array().push_back(r);
+      }
+      state.as_object()["cheatRows"] = rows;
+      state.as_object()["cheatTitle"] = ui.cheatTitle;
+      state.as_object()["cheatEditRow"] = ui.cheatEditRow;
+      state.as_object()["cheatEditValue"] = std::to_string(ui.cheatEditValue); // exact, even past 2^53
+      state.as_object()["cheatEditText"] = ui.cheatEditRow >= 0 ? ui.cheatEditText() : std::string();
+    }
     state.as_object()["display"] = ui.displayValues;
     state.as_object()["releaseLines"] = int(ui.releaseReport.size());
     state.as_object()["releaseScroll"] = ui.releaseScroll;

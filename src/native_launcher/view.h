@@ -164,6 +164,9 @@ private:
   std::vector<std::string> wrap(const std::string &, int size, int width, bool display = false);
   std::map<std::string, Layer> rowCache;
   Layer headerLayer, notesLayer, bodyLayer;
+  // The cheats number editor's panel: one layer redrawn as the value
+  // changes (a cached layer per value ran the Vita out of video memory).
+  Layer cheatEditLayer;
   // The welcome guide (welcome.cpp): the screen, and one slide as a layer.
   void buildWelcome(const UI &);
   const Image &welcomeSlide(const UI &, int slide);

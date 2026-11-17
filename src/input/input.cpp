@@ -1321,7 +1321,8 @@ void Input::update()
 #ifdef __vita__
     if (vitaControlProfile().enabled) {
         for (const auto &action : hardrpg::controlActions) {
-            if (!action.code || action.code == hardrpg::controlFastForward) continue;
+            if (!action.code || action.code == hardrpg::controlFastForward ||
+                action.code == hardrpg::controlTurbo) continue;
             auto code = static_cast<ButtonCode>(action.code);
             auto &state = p->getState(code);
             auto &old = p->getOldState(code);

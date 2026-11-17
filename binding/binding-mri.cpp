@@ -62,6 +62,7 @@ extern "C" {
 #if RAPI_FULL >= 190
 #include <ruby/encoding.h>
 #endif
+#include <ruby/thread.h>
 
 #ifdef MKXPZ_VITA_DIAGNOSTICS
 #include <ruby/debug.h>
@@ -174,9 +175,10 @@ static void vitaEnableRubyDepthTrace()
 static void mriBindingExecute();
 static void mriBindingTerminate();
 static void mriBindingReset();
+static bool mriBindingCheat(const char *cmd, int row, std::string &reply);
 
 ScriptBinding scriptBindingImpl = {mriBindingExecute, mriBindingTerminate,
-    mriBindingReset};
+    mriBindingReset, mriBindingCheat};
 
 ScriptBinding *scriptBinding = &scriptBindingImpl;
 
@@ -1398,6 +1400,55 @@ static void runCustomScript(const std::string &filename) {
     int state = 0;
     evalString(newStringUTF8(scriptData.c_str(), scriptData.size()),
                newStringUTF8(filename.c_str(), filename.size()), &state);
+}
+
+/* The in-game menu's Cheats page: HardRPGCheats.request (launcher/cheats.rb)
+ * answers with the page to show. The game is paused inside Graphics.update,
+ * so its objects hold still; an error in the script is caught here and the
+ * menu says the cheats are unavailable. */
+static VALUE cheatRequest(VALUE args) {
+    VALUE mod = rb_const_get(rb_cObject, rb_intern("HardRPGCheats"));
+    return rb_funcall(mod, rb_intern("request"), 2, rb_ary_entry(args, 0), rb_ary_entry(args, 1));
+}
+
+struct CheatCall {
+    const char *cmd;
+    int row;
+    std::string *reply;
+    bool ok;
+};
+
+static void *cheatCallWithGvl(void *data) {
+    auto &call = *static_cast<CheatCall *>(data);
+    call.ok = false;
+    if (!rb_const_defined(rb_cObject, rb_intern("HardRPGCheats")))
+        return nullptr;
+    int state = 0;
+    VALUE args = rb_ary_new_from_args(2, rb_utf8_str_new_cstr(call.cmd), INT2NUM(call.row));
+    VALUE text = rb_protect(cheatRequest, args, &state);
+    if (state) {
+        rb_set_errinfo(Qnil);
+        return nullptr;
+    }
+    if (!RB_TYPE_P(text, RUBY_T_STRING))
+        return nullptr;
+    call.reply->assign(RSTRING_PTR(text), RSTRING_LEN(text));
+    call.ok = true;
+    return nullptr;
+}
+
+extern "C" int ruby_thread_has_gvl_p(void);
+
+/* The menu runs inside Graphics.update, which waits with the Ruby lock (GVL)
+ * released: Ruby may only run here after taking it back. Running the script
+ * without it froze the game once the menu closed. */
+static bool mriBindingCheat(const char *cmd, int row, std::string &reply) {
+    CheatCall call = {cmd, row, &reply, false};
+    if (ruby_thread_has_gvl_p())
+        cheatCallWithGvl(&call);
+    else
+        rb_thread_call_with_gvl(cheatCallWithGvl, &call);
+    return call.ok;
 }
 
 #ifdef __vita__
