@@ -168,7 +168,8 @@ module HardRPGSaveBackup
       size = File.size(old)
       return File.delete(old) if size > MAX_BYTES
       list = versions(dir)
-      return File.delete(old) if list.first && same?(old, File.join(dir, list.first))
+      # Already kept (a restored save is an older version, not the newest).
+      return File.delete(old) if list.any? { |v| same?(old, File.join(dir, v)) }
       saved = File.mtime(old).to_i
       ext = File.extname(old.sub(/\.hardrpg-old\z/, ''))
       name = stamp(saved) + ext

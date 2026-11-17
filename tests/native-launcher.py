@@ -712,6 +712,11 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(state['message'], 'Save restored. The one it replaced is kept as a backup.')
         self.assertEqual((ace/'Save01.rvdata2').read_bytes(), b'first one')
         self.assertFalse(list(ace.glob('*.hardrpg-*')))
+        # The game's file is now the restored version: shown with that
+        # version's own time, and not listed again as a version.
+        first = [v for v in state['saves']['slots'][0]['versions'] if v['size'] == len(b'first one')]
+        self.assertEqual(state['saves']['slots'][0]['now']['saved'], first[0]['saved'])
+        self.assertEqual([v['size'] for v in state['saves']['shown']], [len(b'overwritten by mistake')])
         # The overwritten one is still there to switch back to.
         kept = [p.read_bytes() for p in (backups/'Save01.rvdata2').iterdir() if p.suffix == '.rvdata2']
         self.assertIn(b'overwritten by mistake', kept)
@@ -779,6 +784,17 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(state['message'], '2 saves restored.')
         self.assertEqual((ace/'Save01.rvdata2').read_bytes(), b'first one')
         self.assertEqual((ace/'Save02.rvdata2').read_bytes(), b'while off')
+        # After restoring an older version, a missing save comes back as that
+        # version (what the game had last), not as the newest backup.
+        shown = self.ui(saves + ',down,cross')['saves']['shown']
+        older = [i for i, v in enumerate(shown) if v['size'] == len(b'older second')][0]
+        state = self.ui(saves + ',down,cross' + ',down' * older + ',cross,down,cross')
+        self.assertEqual((ace/'Save02.rvdata2').read_bytes(), b'older second')
+        (ace/'Save02.rvdata2').unlink()
+        state = self.ui(saves)
+        self.assertEqual(state['saves']['rows'], [1, 1, 2, 3])
+        self.ui(saves + ',down,down,down,cross,cross')
+        self.assertEqual((ace/'Save02.rvdata2').read_bytes(), b'older second')
 
         # The same game added from elsewhere gets a new key: once its own
         # copy is gone, the old backups are offered to it.

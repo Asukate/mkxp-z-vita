@@ -825,6 +825,9 @@ int main(int argc, char **argv) {
         for (auto &v : s.versions)
           versions.as_array().push_back(version(v));
         j.as_object()["versions"] = versions;
+        if (s.present)
+          j.as_object()["now"] = version(s.now);
+        j.as_object()["last"] = s.last;
         slots.as_array().push_back(j);
       }
       o["slots"] = slots;

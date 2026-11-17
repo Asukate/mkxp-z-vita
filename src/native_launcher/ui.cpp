@@ -2391,7 +2391,7 @@ void UI::savesAction(Button b) {
     int restored = 0;
     for (auto &slot : saveSlots)
       if (!slot.present && !slot.versions.empty() && !slot.target.empty()) {
-        backups.restore(backupKey, slot, slot.versions.front());
+        backups.restore(backupKey, slot, slot.versions[size_t(slot.last)]);
         ++restored;
       }
     refreshSaves();

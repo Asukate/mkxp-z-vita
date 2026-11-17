@@ -333,6 +333,8 @@ const Text table[] = {
     {"Delete all", "Borrar todo", "Apagar tudo"},
     {"Delete all backups of this game?", "¿Borrar todas las copias de este juego?", "Apagar todas as cópias deste jogo?"},
     {"{} saves · {}", "{} partidas · {}", "{} jogos salvos · {}"},
+    {"1 save · {}", "1 partida · {}", "1 jogo salvo · {}"},
+    {"1 save · newest {}", "1 partida · la última {}", "1 jogo salvo · o mais novo {}"},
     {"Restore the missing saves?", "¿Restaurar las partidas que faltan?", "Restaurar os jogos salvos que faltam?"},
     {"The newest backup of each save the game does not have goes back into the game.", "La copia más reciente de cada partida que el juego no tiene vuelve al juego.", "A cópia mais nova de cada jogo salvo que o jogo não tem volta para o jogo."},
     {"Use the saves from an earlier copy?", "¿Usar las partidas de una copia anterior?", "Usar os jogos salvos de uma cópia anterior?"},

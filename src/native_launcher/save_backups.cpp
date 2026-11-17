@@ -230,7 +230,11 @@ bool held(const std::vector<SaveVersion> &list, const std::string &file, int64_t
   for (auto &v : list)
     if (v.size == size && v.saved == saved)
       return true;
-  return !list.empty() && list.front().size == size && sameBytes(list.front().file, file);
+  // A restored file has the restore's time, so compare the bytes too.
+  for (auto &v : list)
+    if (v.size == size && sameBytes(v.file, file))
+      return true;
+  return false;
 }
 bool slotNumber(const std::string &name, int &number) {
   auto l = lower(name);
@@ -394,7 +398,20 @@ std::vector<SaveSlot> SaveBackups::slots(const std::string &key) const {
       slot.now.leader = textOf(meta, "leader");
       slot.now.level = int(numberOf(meta, "level"));
       slot.now.playtime = numberOf(meta, "playtime_s");
+      if (numberOf(meta, "restored") > 0)
+        slot.now.saved = numberOf(meta, "restored");
     }
+    // What the game had last, from current.json: its own save time, or the
+    // time of the version restored into it.
+    auto last = parseObject(readText(join(slotDir, "current.json")));
+    int64_t lastSize = numberOf(last, "size", -1), lastSaved = numberOf(last, "restored");
+    if (lastSaved <= 0)
+      lastSaved = numberOf(last, "saved");
+    for (size_t i = 0; i < slot.versions.size(); ++i)
+      if (slot.versions[i].size == lastSize && std::llabs(slot.versions[i].saved - lastSaved) <= 2) {
+        slot.last = int(i);
+        break;
+      }
     if (slot.versions.empty() && !slot.present)
       continue;
     out.push_back(slot);

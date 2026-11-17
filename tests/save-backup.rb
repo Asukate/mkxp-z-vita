@@ -83,6 +83,14 @@ Dir.mktmpdir do |root|
     save.call('Save03.rvdata2', 'after copy', base + 20_100)
     check HardRPGSaveBackup.versions(slot) == before, 'identical version kept'
 
+    # A restored older version that the game then replaces is not kept again.
+    oldest = HardRPGSaveBackup.versions(slot).last
+    File.binwrite('Save03.rvdata2', File.binread(File.join(slot, oldest)))
+    File.utime(base + 25_000, base + 25_000, 'Save03.rvdata2')
+    before = HardRPGSaveBackup.versions(slot)
+    save.call('Save03.rvdata2', 'after restore', base + 25_100)
+    check HardRPGSaveBackup.versions(slot) == before, 'restored version kept twice'
+
     # Turned off for the game: the replaced save just goes.
     File.binwrite(File.join(backups, 'game.json'), '{"enabled":false}')
     before = HardRPGSaveBackup.versions(slot)

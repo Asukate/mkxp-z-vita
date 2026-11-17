@@ -519,7 +519,8 @@ void View::buildSheet(const UI &u) {
       for (auto &b : u.backupGames) {
         row(Row::Nav, "", b.installed ? backupSize(b.bytes) : trf("Not in library \xc2\xb7 {}", {backupSize(b.bytes)}));
         rows.back().label = b.name;
-        rows.back().detail = b.installed ? trf("{} saves \xc2\xb7 newest {}", {std::to_string(b.slots), backupTime(b.newest)})
+        rows.back().detail = b.installed ? (b.slots == 1 ? trf("1 save \xc2\xb7 newest {}", {backupTime(b.newest)})
+                                                         : trf("{} saves \xc2\xb7 newest {}", {std::to_string(b.slots), backupTime(b.newest)}))
                                          : trf("Was in {}", {tail(b.folder, 70)});
       }
       row(Row::Choice, "Versions kept per save", std::to_string(u.backupKeep));
@@ -608,7 +609,9 @@ void View::buildSheet(const UI &u) {
       } else if (q == UI::ForgetGame) {
         title = tr("Delete all backups of this game?");
         yes = "Delete all";
-        notes = {trf("{} saves \xc2\xb7 {}", {std::to_string(g.slots), backupSize(g.bytes)}), tr("This cannot be undone.")};
+        notes = {g.slots == 1 ? trf("1 save \xc2\xb7 {}", {backupSize(g.bytes)})
+                             : trf("{} saves \xc2\xb7 {}", {std::to_string(g.slots), backupSize(g.bytes)}),
+                 tr("This cannot be undone.")};
       } else if (q == UI::RestoreMissing) {
         title = tr("Restore the missing saves?");
         notes = {tr("The newest backup of each save the game does not have goes back into the game.")};

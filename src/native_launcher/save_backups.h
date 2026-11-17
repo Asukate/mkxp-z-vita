@@ -25,8 +25,12 @@ struct SaveSlot {
   int number = -1;    // 3 for Save03; -1 when the name has no number
   std::string target; // where the game keeps it (full path), "" if unknown
   bool present = false; // the game has the file now
-  SaveVersion now;      // the file in the game, when present
+  SaveVersion now;      // the file in the game, when present; after a restore
+                        // its saved is the restored version's own time
   std::vector<SaveVersion> versions; // newest first
+  // The version that holds what the game had last: what "Restore missing
+  // saves" puts back (the newest by save time is not it after a restore).
+  int last = 0;
 };
 struct BackupGame {
   std::string key, name, folder;

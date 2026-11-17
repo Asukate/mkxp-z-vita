@@ -774,6 +774,8 @@ const CjkText cjkTable[] = {
     {"Delete all", "すべて削除", "全部删除"},
     {"Delete all backups of this game?", "このゲームのバックアップをすべて削除しますか？", "要删除此游戏的所有备份吗？"},
     {"{} saves · {}", "セーブ{}件 · {}", "{} 个存档 · {}"},
+    {"1 save · {}", "セーブ1件 · {}", "1 个存档 · {}"},
+    {"1 save · newest {}", "セーブ1件 · 最新 {}", "1 个存档 · 最新 {}"},
     {"Restore the missing saves?", "足りないセーブを復元しますか？", "要恢复缺少的存档吗？"},
     {"The newest backup of each save the game does not have goes back into the game.", "ゲームにないセーブは、それぞれ最新のバックアップがゲームに戻ります。", "游戏中缺少的每个存档，都会把最新的备份放回游戏。"},
     {"Use the saves from an earlier copy?", "以前のコピーのセーブを使いますか？", "要使用之前副本的存档吗？"},
