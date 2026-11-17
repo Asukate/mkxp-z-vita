@@ -687,7 +687,7 @@ class NativeLauncher(unittest.TestCase):
         saves = GAME + ',scroll:7,cross'
         # Opening a game's Saves copies in what has no backup yet.
         state = self.ui(saves)
-        self.assertEqual(state['page'], 15)
+        self.assertEqual(state['page'], 16)
         self.assertEqual(state['message'], '2 saves copied to their backups.')
         slots = state['saves']['slots']
         self.assertEqual([(x['name'], x['number'], x['present']) for x in slots],
@@ -700,13 +700,13 @@ class NativeLauncher(unittest.TestCase):
         # one is kept, the copy of the new one is not shown as a version.
         (ace/'Save01.rvdata2').write_bytes(b'overwritten by mistake')
         state = self.ui(saves + ',cross')
-        self.assertEqual(state['page'], 16)
+        self.assertEqual(state['page'], 17)
         self.assertEqual(len(state['saves']['slots'][0]['versions']), 2)
         self.assertEqual([v['size'] for v in state['saves']['shown']], [len(b'first one')])
         # Restoring an older save over a newer one asks, starting on Cancel.
         state = self.ui(saves + ',cross,cross')
-        self.assertEqual((state['page'], state['setting'], state['saves']['question']), (17, 0, 0))
-        self.assertEqual(self.ui(saves + ',cross,cross,cross')['page'], 16)
+        self.assertEqual((state['page'], state['setting'], state['saves']['question']), (18, 0, 0))
+        self.assertEqual(self.ui(saves + ',cross,cross,cross')['page'], 17)
         self.assertEqual((ace/'Save01.rvdata2').read_bytes(), b'overwritten by mistake')
         state = self.ui(saves + ',cross,cross,down,cross')
         self.assertEqual(state['message'], 'Save restored. The one it replaced is kept as a backup.')
@@ -722,9 +722,9 @@ class NativeLauncher(unittest.TestCase):
         self.assertIn(b'overwritten by mistake', kept)
         # Square deletes a version, after asking.
         before = len(self.ui(saves + ',cross')['saves']['shown'])
-        self.assertEqual(self.ui(saves + ',cross,square')['page'], 17)
+        self.assertEqual(self.ui(saves + ',cross,square')['page'], 18)
         state = self.ui(saves + ',cross,square,down,cross')
-        self.assertEqual((state['page'], state['message']), (16, 'Backup deleted.'))
+        self.assertEqual((state['page'], state['message']), (17, 'Backup deleted.'))
         self.assertEqual(len(state['saves']['shown']), before - 1)
         # A version the save hook kept, with what it knew of the game.
         slot2 = backups/'Save02.rvdata2'
@@ -761,14 +761,14 @@ class NativeLauncher(unittest.TestCase):
         # Settings, Save backups lists it as not in the library.
         listing = SETTINGS + ',down' * 11 + ',cross'
         state = self.ui(listing)
-        self.assertEqual(state['page'], 18)
+        self.assertEqual(state['page'], 19)
         self.assertEqual([(g['name'], g['installed'], g['slots']) for g in state['saves']['games']], [('Ace', False, 2)])
         # Its saves can be looked at but not restored.
         state = self.ui(listing + ',cross')
-        self.assertEqual((state['page'], state['saves']['installed']), (15, False))
+        self.assertEqual((state['page'], state['saves']['installed']), (16, False))
         self.assertEqual(state['saves']['rows'], [1, 1, 4])
         state = self.ui(listing + ',cross,cross,cross')
-        self.assertEqual((state['page'], state['message']), (16, 'Add the game to the library again to restore its saves.'))
+        self.assertEqual((state['page'], state['message']), (17, 'Add the game to the library again to restore its saves.'))
         # The versions kept per save: 5, then 10 and so on.
         state = self.ui(listing + ',down,right')
         self.assertEqual(state['saves']['keep'], 10)

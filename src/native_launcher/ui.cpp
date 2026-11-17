@@ -529,6 +529,8 @@ void UI::sheetTouch(int x, int y) {
     int r = rowAt(tall ? rtpRowH : sheetRowH, tall ? 5 : sheetRows);
     if (r >= 0)
       pickRow(setting, settingFirst + r, saveRowsCount());
+    return;
+  }
   if (gameOptions && inGame && page == Page::Game) {
     // The menu over a game: its taller rows.
     const int rowH = inGameMenuRowHeight(optionRows());
