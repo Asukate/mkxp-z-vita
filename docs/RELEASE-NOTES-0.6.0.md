@@ -51,6 +51,9 @@ Text is now sized exactly as on Windows, and games use less memory.
 - **Exit Fate world map** (#31): no longer turns invisible or ends
   the game after long sessions. Tall XP tilesets keep only the rows
   a map uses, about 4 MB instead of 20.
+- **Japanese game titles:** games that store their title in
+  Japanese (Shift-JIS) show it in the library instead of question
+  marks.
 - **Mysta's Vore RPG and other keyboard-only games:** the Enter that
   ends typing a name no longer carries into the next screen and
   loads a save.
