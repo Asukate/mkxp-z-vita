@@ -3,7 +3,7 @@
 #define HARDRPG_VERSION "0.6.0 Alpha"
 #define HARDRPG_VERSION_TAG "v0.6.0-alpha"
 #define HARDRPG_APP_VER "00.60"
-#define HARDRPG_RELEASE_UTC "2026-11-18"
+#define HARDRPG_RELEASE_UTC "2026-11-17"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
     "0.6.0 Alpha - " HARDRPG_RELEASE_UTC,
