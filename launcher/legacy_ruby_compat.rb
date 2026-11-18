@@ -1142,3 +1142,53 @@ module HardRPGLegacyRegexp
     text.gsub(/\\x(\h\h)/) { $1.hex >= 0x80 ? format('\\u{%X}', $1.hex) : "\\x#{$1}" }
   end
 end
+
+# Ruby 1.9's sprintf completed a format string that ended in a bare '%' by
+# pushing a literal '%' and raising nothing; Ruby 3.1 raises ArgumentError
+# for the incomplete specifier instead. RGSS2 and RGSS3 games ran on 1.9.
+# Get Violated By EVERY Girl You Encounter RPG draws the CG gallery's
+# collection ratio with sprintf("%3d%", n) (Bbishop), and the gallery closed
+# the game on entry with "incomplete format specifier" (issue 32). Pair that
+# one trailing '%' and answer as 1.9 did. Every other raise, including a
+# specifier cut off mid-width such as "%3", still raises as Ruby 3.1 does,
+# because 1.9 raised there too. String#% shares the parser and answers the
+# same way.
+module Kernel
+  def hardrpg_unpaired_trailing_percent?(fmt)
+    tail = fmt.match(/(%+)\z/)
+    !tail.nil? && tail[1].size.odd?
+  end
+
+  alias_method :__hardrpg_sprintf, :sprintf
+  def sprintf(fmt, *args)
+    __hardrpg_sprintf(fmt, *args)
+  rescue ArgumentError => e
+    raise unless fmt.is_a?(String) &&
+                 e.message.start_with?('incomplete format specifier') &&
+                 hardrpg_unpaired_trailing_percent?(fmt)
+    __hardrpg_sprintf(fmt[0...-1] + '%%', *args)
+  end
+
+  alias_method :__hardrpg_format, :format
+  def format(fmt, *args)
+    __hardrpg_format(fmt, *args)
+  rescue ArgumentError => e
+    raise unless fmt.is_a?(String) &&
+                 e.message.start_with?('incomplete format specifier') &&
+                 hardrpg_unpaired_trailing_percent?(fmt)
+    __hardrpg_format(fmt[0...-1] + '%%', *args)
+  end
+
+  private :sprintf, :format, :hardrpg_unpaired_trailing_percent?
+end
+
+class String
+  alias_method :__hardrpg_percent, :%
+  def %(arg)
+    __hardrpg_percent(arg)
+  rescue ArgumentError => e
+    raise unless e.message.start_with?('incomplete format specifier') &&
+                 hardrpg_unpaired_trailing_percent?(self)
+    (self[0...-1] + '%%').__hardrpg_percent(arg)
+  end
+end
