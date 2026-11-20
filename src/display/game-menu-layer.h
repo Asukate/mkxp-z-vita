@@ -55,6 +55,8 @@ class GameMenuLayer {
     hardrpg::Image buttons;
     int buttonsFor = -1;
     bool buttonsKeyboard = false, buttonsMenu = false;
+    hardrpg::Image ffBadge;
+    int ffFor = -1;
 
     static GLuint compile(GLenum type, const char *source) {
         GLuint s = glCreateShader(type);
@@ -498,5 +500,15 @@ public:
             buttonsMenu = menuLit;
         }
         drawImage(buttons, 0, 0, winW, winH);
+    }
+
+    // The fast-forward icon in the right border (or top-right corner).
+    void drawFastForward(int winW, int winH, int gameX) {
+        if (ffFor != gameX) {
+            hardrpg::drawFastForwardBadge(ffBadge, gameX);
+            ffFor = gameX;
+        }
+        const auto r = hardrpg::GameKeyboard::fastForwardRect(gameX);
+        drawImage(ffBadge, r.x - 8, r.y - 8, winW, winH);
     }
 };

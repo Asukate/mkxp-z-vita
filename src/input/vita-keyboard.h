@@ -60,6 +60,14 @@ public:
       return {8, 8, 52, 46};
     return {menu.x, menu.y + menu.h + menu.w * 22 / 64, menu.w, menu.h};
   }
+  // The fast-forward indicator in the right border (mirroring the menu
+  // button), or in the top-right corner when the game fills the width.
+  static KeyboardRect fastForwardRect(int gameX) {
+    KeyboardRect menu;
+    if (menuRect(gameX, menu))
+      return {960 - gameX + (gameX - menu.w) / 2, menu.y, menu.w, menu.h};
+    return {960 - 52 - 8, 8, 52, 46};
+  }
   // Generous touch areas: the whole border width, and half the gap
   // between the buttons above and below each one.
   static bool menuTouched(int gameX, int x, int y) {

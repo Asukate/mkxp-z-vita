@@ -1886,8 +1886,13 @@ struct GraphicsPrivate {
                                     winSize.x, winSize.y, scOffset.x, scOffset.y,
                                     scSize.x, scSize.y);
 #endif
+#if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
+        if (fastForward.active && !gameMenu.isOpen())
+            gameMenuLayer.drawFastForward(winSize.x, winSize.y, scOffset.x);
+#else
         if (fastForward.active)
             fastForwardBadge.draw(winSize.x, winSize.y);
+#endif
 #if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
         if (gameMenu.isOpen() && gameMenuView)
             gameMenuLayer.draw(*gameMenuView, winSize.x, winSize.y);

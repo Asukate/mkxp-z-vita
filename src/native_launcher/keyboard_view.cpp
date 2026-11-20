@@ -100,7 +100,8 @@ void glassEdge(Canvas &cv, float x0, float y0, float x1, float y1, float r, floa
   }
 }
 
-void strokeLines(Canvas &cv, const std::vector<std::array<float, 2>> &pts, float width, int alpha) {
+void strokeLinesColor(Canvas &cv, const std::vector<std::array<float, 2>> &pts, float width,
+                      const std::array<int, 3> &c, int alpha) {
   float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
   for (const auto &p : pts) {
     minX = std::min(minX, p[0]), minY = std::min(minY, p[1]);
@@ -114,8 +115,12 @@ void strokeLines(Canvas &cv, const std::vector<std::array<float, 2>> &pts, float
         dist = std::min(dist, segmentDistance(col + 0.5f, row + 0.5f, pts[i - 1], pts[i]));
       const float cover = std::max(0.f, std::min(1.f, width / 2 + 0.5f - dist));
       if (cover > 0)
-        blend(&cv.surface[(size_t(row) * cv.surfaceW + col) * 4], ink, int(alpha * cover + 0.5f));
+        blend(&cv.surface[(size_t(row) * cv.surfaceW + col) * 4], c, int(alpha * cover + 0.5f));
     }
+}
+
+void strokeLines(Canvas &cv, const std::vector<std::array<float, 2>> &pts, float width, int alpha) {
+  strokeLinesColor(cv, pts, width, ink, alpha);
 }
 
 // A filled outline, 4x4 samples a pixel (the shapes are small icons).
@@ -206,6 +211,16 @@ void keyIcon(Canvas &cv, const std::string &name, float cx, float cy, float s, b
         glassFill(cv, x - 1.7f * s, cy + (row - 1.7f) * s, x + 1.7f * s, cy + (row + 1.7f) * s, 0.6f * s, ink, inkAlpha);
       }
     glassFill(cv, cx - 10 * s, cy + 5.5f * s, cx + 10 * s, cy + 8.5f * s, 1.5f * s, ink, inkAlpha);
+  } else if (name == "fastforward") {
+    // Two rounded-stroke chevrons matching the bar thickness and ink of "menu"
+    // and "keyboard", with a subtle soft shadow so they read on light scenes.
+    const float thick = 4.2f * s;
+    const P c1{at(-12.5f, -10.5f), at(-2.5f, 0), at(-12.5f, 10.5f)};
+    const P c2{at(2.5f, -10.5f), at(12.5f, 0), at(2.5f, 10.5f)};
+    strokeLinesColor(cv, c1, thick + 3.0f * s, {0, 0, 0}, 95);
+    strokeLinesColor(cv, c2, thick + 3.0f * s, {0, 0, 0}, 95);
+    strokeLines(cv, c1, thick, inkAlpha);
+    strokeLines(cv, c2, thick, inkAlpha);
   }
 }
 
@@ -295,6 +310,18 @@ void drawGameButtons(Image &image, int gameX, bool keyboardOpen, bool menuLit) {
   if (hasMenu)
     button(menu, "menu", menuLit);
   button(kb, "keyboard", keyboardOpen);
+  image.touch();
+}
+
+void drawFastForwardBadge(Image &image, int gameX) {
+  const auto r = GameKeyboard::fastForwardRect(gameX);
+  const int pad = 8, w = r.w + pad * 2, h = r.h + pad * 2;
+  if (image.width != w || image.height != h)
+    image = Image::blank(w, h);
+  else
+    std::fill(image.rgba.begin(), image.rgba.end(), 0);
+  Canvas cv{image.rgba.data(), w, h};
+  keyIcon(cv, "fastforward", w / 2.f, h / 2.f, r.w / 64.f * 1.3f, false);
   image.touch();
 }
 } // namespace hardrpg

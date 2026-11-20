@@ -16,6 +16,9 @@ class GameKeyboard;
 // The menu and keyboard buttons in the left border, for a game drawn from
 // x = gameX: an image from 0,0 as wide as the buttons need.
 void drawGameButtons(Image &, int gameX, bool keyboardOpen, bool menuLit);
+// The fast-forward double chevron in the right border (or top-right corner),
+// matching the style of the menu and keyboard buttons.
+void drawFastForwardBadge(Image &, int gameX);
 class View {
 public:
   static constexpr int width = 960, height = 544;
