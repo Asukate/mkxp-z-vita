@@ -98,6 +98,59 @@ Image strip(int w, int h, const std::function<std::array<int, 4>(double)> &at) {
   }
   return img;
 }
+// Crisp anti-aliased PlayStation button icons rendered directly at any pixel
+// size from the same 24x24 vector proportions as launcher/art/icons/btn-*.svg.
+Image renderButtonIcon(const std::string &kind, int size) {
+  Image img = Image::blank(size, size);
+  const double s = size / 24.0;
+  auto segDist = [](double px, double py, double x0, double y0, double x1, double y1) {
+    const double dx = x1 - x0, dy = y1 - y0, len = dx * dx + dy * dy;
+    double t = len > 0 ? ((px - x0) * dx + (py - y0) * dy) / len : 0.0;
+    t = std::max(0.0, std::min(1.0, t));
+    return std::hypot(px - (x0 + t * dx), py - (y0 + t * dy));
+  };
+  auto clamp01 = [](double v) { return std::max(0.0, std::min(1.0, v)); };
+  for (int row = 0; row < size; ++row) {
+    const double py = (row + 0.5) / s;
+    uint8_t *d = &img.rgba[size_t(row) * size * 4];
+    for (int col = 0; col < size; ++col, d += 4) {
+      const double px = (col + 0.5) / s;
+      const double r = std::hypot(px - 12.0, py - 12.0);
+      // Dark translucent disc (r=11, alpha=0.5) and crisp translucent ring (alpha=0.45).
+      const double fill = clamp01((11.0 - r) * s + 0.5);
+      if (fill > 0)
+        over(d, 0, 0, 0, int(128 * fill + 0.5));
+      const double rim = clamp01((0.5 - std::fabs(r - 11.0)) * s + 0.5);
+      if (rim > 0) {
+        int a = int(115 * rim + 0.5);
+        over(d, a, a, a, a);
+      }
+      double dist = 1e9, halfW = 0.9;
+      if (kind == "cross") {
+        dist = std::min(segDist(px, py, 8.2, 8.2, 15.8, 15.8), segDist(px, py, 15.8, 8.2, 8.2, 15.8));
+        halfW = 1.0;
+      } else if (kind == "circle") {
+        dist = std::fabs(r - 5.0);
+        halfW = 0.95;
+      } else if (kind == "square") {
+        dist = std::min(std::min(segDist(px, py, 7.6, 7.6, 16.4, 7.6), segDist(px, py, 16.4, 7.6, 16.4, 16.4)),
+                        std::min(segDist(px, py, 16.4, 16.4, 7.6, 16.4), segDist(px, py, 7.6, 16.4, 7.6, 7.6)));
+        halfW = 0.9;
+      } else if (kind == "triangle") {
+        dist = std::min(segDist(px, py, 12.0, 7.2, 17.0, 15.9),
+                        std::min(segDist(px, py, 17.0, 15.9, 7.0, 15.9), segDist(px, py, 7.0, 15.9, 12.0, 7.2)));
+        halfW = 0.9;
+      }
+      const double cov = clamp01((halfW - dist) * s + 0.5);
+      if (cov > 0) {
+        int a = int(255 * cov + 0.5);
+        over(d, a, a, a, a);
+      }
+    }
+  }
+  img.touch();
+  return img;
+}
 } // namespace
 
 // Whether the next frame would look different. A busy loader alone is not
@@ -112,6 +165,15 @@ const Image &View::icon(const std::string &name) {
   auto found = icons.find(name);
   if (found != icons.end())
     return found->second;
+  if (name.compare(0, 4, "btn-") == 0) {
+    auto sep = name.find_last_of("-@");
+    if (sep != std::string::npos && sep > 4) {
+      std::string kind = name.substr(4, sep - 4);
+      int sz = std::atoi(name.c_str() + sep + 1);
+      if ((kind == "cross" || kind == "circle" || kind == "square" || kind == "triangle") && sz >= 8 && sz <= 128)
+        return icons.emplace(name, renderButtonIcon(kind, sz)).first->second;
+    }
+  }
   // "name:ruby" is the white icon recoloured ruby.
   auto colon = name.find(':');
   Image img = Image::load(assets + "ui/" + name.substr(0, colon) + ".png");
@@ -294,14 +356,27 @@ void View::blitScaled(const Image &img, double fx, double fy, double fw, double 
   int64_t stepX = (int64_t(img.width) << 16) / w, stepY = (int64_t(img.height) << 16) / h;
   int scale = alpha * brightness / 256; // colour multiplier out of 255
   for (int row = y0; row < y1; ++row) {
-    int sy = std::min(img.height - 1, int(((row - y) * stepY + stepY / 2) >> 16));
-    const uint8_t *src = &img.rgba[size_t(sy) * img.width * 4];
+    int64_t syf = (row - y) * stepY + stepY / 2 - 32768;
+    int sy0 = std::max(0, std::min(img.height - 1, int(syf >> 16)));
+    int sy1 = std::min(img.height - 1, sy0 + 1);
+    int wy = syf < 0 ? 0 : (sy0 == sy1 ? 0 : int((syf & 0xffff) >> 8));
+    const uint8_t *src0 = &img.rgba[size_t(sy0) * img.width * 4];
+    const uint8_t *src1 = &img.rgba[size_t(sy1) * img.width * 4];
     uint8_t *d = &surface[(size_t(row) * surfaceW + x0) * 4];
     bool cornerRow = radius && (row < y + radius || row >= y + h - radius);
-    int64_t sx = (x0 - x) * stepX + stepX / 2;
-    for (int col = x0; col < x1; ++col, d += 4, sx += stepX) {
-      const uint8_t *s = src + std::min(img.width - 1, int(sx >> 16)) * 4;
-      int a = s[3] * alpha / 255, k = scale;
+    int64_t sxf = (x0 - x) * stepX + stepX / 2 - 32768;
+    for (int col = x0; col < x1; ++col, d += 4, sxf += stepX) {
+      int sx0 = std::max(0, std::min(img.width - 1, int(sxf >> 16)));
+      int sx1 = std::min(img.width - 1, sx0 + 1);
+      int wx = sxf < 0 ? 0 : (sx0 == sx1 ? 0 : int((sxf & 0xffff) >> 8));
+      const uint8_t *p00 = src0 + sx0 * 4, *p10 = src0 + sx1 * 4;
+      const uint8_t *p01 = src1 + sx0 * 4, *p11 = src1 + sx1 * 4;
+      const int w00 = (256 - wx) * (256 - wy), w10 = wx * (256 - wy), w01 = (256 - wx) * wy, w11 = wx * wy;
+      int sr = (p00[0] * w00 + p10[0] * w10 + p01[0] * w01 + p11[0] * w11 + 32768) >> 16;
+      int sg = (p00[1] * w00 + p10[1] * w10 + p01[1] * w01 + p11[1] * w11 + 32768) >> 16;
+      int sb = (p00[2] * w00 + p10[2] * w10 + p01[2] * w01 + p11[2] * w11 + 32768) >> 16;
+      int sa = (p00[3] * w00 + p10[3] * w10 + p01[3] * w01 + p11[3] * w11 + 32768) >> 16;
+      int a = sa * alpha / 255, k = scale;
       if (cornerRow && (col < x + radius || col >= x + w - radius)) {
         int cx = col < x + radius ? x + radius : x + w - radius - 1;
         int cy = row < y + radius ? y + radius : y + h - radius - 1;
@@ -310,7 +385,7 @@ void View::blitScaled(const Image &img, double fx, double fy, double fw, double 
         k = int(k * cover);
       }
       if (a)
-        over(d, std::min(255, s[0] * k / 255), std::min(255, s[1] * k / 255), std::min(255, s[2] * k / 255), a);
+        over(d, std::min(255, sr * k / 255), std::min(255, sg * k / 255), std::min(255, sb * k / 255), a);
     }
   }
 }
@@ -370,7 +445,7 @@ void View::drawToken(const void *token, int x, int y, int size, int alpha) {
   auto &t = *static_cast<const ButtonToken *>(token);
   int line = size + size / 5; // about the height of a line of text
   if (t.icon) {
-    blitScaled(icon(t.icon), x + 1, y + (line - size - 2) / 2, size + 2, size + 2, alpha);
+    blit(icon(std::string("btn-") + t.name + "@" + std::to_string(size + 2)), x + 1, y + (line - size - 2) / 2, alpha);
     return;
   }
   int small = std::max(9, size * 2 / 3), w = tokenWidth(token, size) - 4, h = small + 8;
@@ -885,10 +960,10 @@ void View::buildHome(const UI &u) {
     if (beginLayer(buttonsLayer, std::string("buttons|") + languageCode(language()), optionsX + optionsW - playX, buttonH)) {
       int ox = optionsX - playX, iy = (buttonH - 30) / 2;
       rect(0, 0, playW, buttonH, ruby, 255, 7);
-      blitScaled(icon("btn-cross-26"), 12, iy, 30, 30);
+      blit(icon("btn-cross@30"), 12, iy);
       label(50, (buttonH - 22) / 2, tr("Play"), 20, white, 255, false, -1, playW - 56);
       rect(ox, 0, optionsW, buttonH, white, 31, 7);
-      blitScaled(icon("btn-triangle-26"), ox + 12, iy, 30, 30);
+      blit(icon("btn-triangle@30"), ox + 12, iy);
       label(ox + 50, (buttonH - 22) / 2, tr("Options"), 20, white, 255, false, -1, optionsW - 56);
       endLayer();
     }
