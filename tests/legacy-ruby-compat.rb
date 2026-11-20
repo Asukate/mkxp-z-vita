@@ -309,6 +309,34 @@ raise 'block without class variable touched' unless HardRPGToplevelClassVars.rew
 raise 'unparsable section touched' unless HardRPGToplevelClassVars.rewrite("class << X\n  @@x = (\n").nil?
 Object.remove_class_variable(:@@shot_count)
 
+# Ruby 1.8/1.9 trailing '%' and '%\n' in sprintf / format / printf / String#% (issue 32).
+require 'stringio'
+def check_sprintf(label, expected, actual)
+  raise "#{label}: expected #{expected.inspect}, got #{actual.inspect}" unless expected == actual
+end
+check_sprintf('sprintf trailing %', ' 50%', sprintf('%3d%', 50))
+check_sprintf('Kernel.sprintf trailing %', '100%', Kernel.sprintf('%3d%', 100))
+check_sprintf('format trailing %', ' 50%', format('%3d%', 50))
+check_sprintf('Kernel.format trailing %', ' 50%', Kernel.format('%3d%', 50))
+check_sprintf('String#% trailing %', ' 50%', '%3d%' % 50)
+check_sprintf('sprintf literal %', '%', sprintf('%'))
+check_sprintf('sprintf triple trailing %', ' 50%%', sprintf('%3d%%%', 50))
+check_sprintf('sprintf double trailing % untouched', ' 50%', sprintf('%3d%%', 50))
+check_sprintf('sprintf % before newline', " 50%\nok", sprintf("%3d%\nok", 50))
+check_sprintf('sprintf named hash trailing %', '7%', sprintf('%{n}%', n: 7))
+sjis_fmt = "\x82\xa0%3d%".dup.force_encoding(Encoding::SHIFT_JIS)
+check_sprintf('sprintf Shift-JIS trailing %', "\x82\xa0 50%".force_encoding(Encoding::SHIFT_JIS), sprintf(sjis_fmt, 50))
+sio = StringIO.new
+printf(sio, '%3d%', 42)
+check_sprintf('printf IO trailing %', ' 42%', sio.string)
+check_sprintf('sprintf stays private on Object', false, Object.new.respond_to?(:sprintf))
+begin
+  sprintf('%3d%q', 50)
+  raise 'invalid format specifier did not raise'
+rescue ArgumentError
+  # expected
+end
+
 if RUBY_VERSION >= '3.4'
   puts "skipped: Ruby #{RUBY_VERSION} parses with Prism; run under Ruby 3.1 (the engine's) to 3.3"
   exit

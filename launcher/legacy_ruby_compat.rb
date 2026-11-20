@@ -25,6 +25,112 @@ class Thread
   end
 end
 
+# Ruby 1.8 and 1.9.2 (RGSS1/2/3) treated a bare '%' at the end of a format
+# string or right before a newline as a literal '%'; Ruby 3.1 raises
+# ArgumentError ("incomplete format specifier" / "malformed format string").
+# Violated Max Volume RPG's CG Gallery formats the completion rate as "%3d%"
+# (issue 32). Only retry when formatting actually raises that ArgumentError, so
+# valid format calls pay nothing.
+module HardRPGLegacySprintf
+  DANGLING = /(?<!%)((?:%%)*)%(?=\z|\n)/
+
+  def self.escape_dangling(fmt)
+    return nil unless fmt.is_a?(String)
+    fixed = fmt.gsub(DANGLING, '\1%%')
+    fixed == fmt ? nil : fixed
+  rescue Encoding::CompatibilityError
+    nil
+  end
+
+  def self.retryable?(error)
+    msg = error.message
+    msg.include?('incomplete format specifier') || msg.include?('malformed format string')
+  end
+
+  module KernelSingletonMethods
+    def sprintf(fmt, *args)
+      super
+    rescue ArgumentError => e
+      raise unless HardRPGLegacySprintf.retryable?(e)
+      fixed = HardRPGLegacySprintf.escape_dangling(fmt)
+      raise unless fixed
+      super(fixed, *args)
+    end
+
+    def format(fmt, *args)
+      super
+    rescue ArgumentError => e
+      raise unless HardRPGLegacySprintf.retryable?(e)
+      fixed = HardRPGLegacySprintf.escape_dangling(fmt)
+      raise unless fixed
+      super(fixed, *args)
+    end
+
+    def printf(*args)
+      super
+    rescue ArgumentError => e
+      raise unless HardRPGLegacySprintf.retryable?(e)
+      idx = (!args.empty? && !args[0].is_a?(String) && args[0].respond_to?(:write)) ? 1 : 0
+      fixed = HardRPGLegacySprintf.escape_dangling(args[idx])
+      raise unless fixed
+      rewritten = args.dup
+      rewritten[idx] = fixed
+      super(*rewritten)
+    end
+  end
+
+  module KernelPrivateMethods
+    private
+
+    def sprintf(fmt, *args)
+      super
+    rescue ArgumentError => e
+      raise unless HardRPGLegacySprintf.retryable?(e)
+      fixed = HardRPGLegacySprintf.escape_dangling(fmt)
+      raise unless fixed
+      super(fixed, *args)
+    end
+
+    def format(fmt, *args)
+      super
+    rescue ArgumentError => e
+      raise unless HardRPGLegacySprintf.retryable?(e)
+      fixed = HardRPGLegacySprintf.escape_dangling(fmt)
+      raise unless fixed
+      super(fixed, *args)
+    end
+
+    def printf(*args)
+      super
+    rescue ArgumentError => e
+      raise unless HardRPGLegacySprintf.retryable?(e)
+      idx = (!args.empty? && !args[0].is_a?(String) && args[0].respond_to?(:write)) ? 1 : 0
+      fixed = HardRPGLegacySprintf.escape_dangling(args[idx])
+      raise unless fixed
+      rewritten = args.dup
+      rewritten[idx] = fixed
+      super(*rewritten)
+    end
+  end
+
+  module StringPercent
+    def %(arg)
+      super
+    rescue ArgumentError => e
+      raise unless HardRPGLegacySprintf.retryable?(e)
+      fixed = HardRPGLegacySprintf.escape_dangling(self)
+      raise unless fixed
+      fixed.%(arg)
+    end
+  end
+end
+unless defined?(HardRPGLegacySprintf::INSTALLED)
+  HardRPGLegacySprintf::INSTALLED = true
+  Kernel.prepend(HardRPGLegacySprintf::KernelPrivateMethods)
+  Kernel.singleton_class.prepend(HardRPGLegacySprintf::KernelSingletonMethods)
+  String.prepend(HardRPGLegacySprintf::StringPercent)
+end
+
 # Ruby 1.8 gave every object to_a, returning [self]; 1.9 removed it.
 # Shin Megami Tensei VX's state scripts call it on state ids (Integer), and
 # New Game quit on the NoMethodError. Classes with their own to_a (Array,
