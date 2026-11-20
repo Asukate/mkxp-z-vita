@@ -129,6 +129,7 @@ struct AudioStream
 	          int pitch,
 	          double offset = 0);
 	void stop();
+	void close();
 	void fadeOut(int duration);
 	void seek(double offset);
 

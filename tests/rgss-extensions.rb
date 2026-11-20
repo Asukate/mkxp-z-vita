@@ -143,6 +143,47 @@ eval("def pbSameThread(wnd); raise 'Win32 path'; end", TOPLEVEL_BINDING, 'Sectio
 HardRPGCompat.run
 check('same thread', [true, false, false], [pbSameThread(HardRPGWindow::HWND), pbSameThread(0), pbSameThread(5)])
 
+# rgss3aUtil.dll (multi-game launchers like Country Girl Keiko): LoadArchive prepends
+# the sub-game archive and folder to PhysFS, and CloseArchive unmounts them.
+MOUNTS = []
+module System
+  def self.mount(path, mountpoint = nil, reload = true, prepend = false)
+    MOUNTS << [:mount, path, mountpoint, reload, prepend]
+  end
+  def self.unmount(path, reload = true)
+    MOUNTS << [:unmount, path, reload]
+  end
+end
+Dir.mktmpdir do |dir|
+  sub = File.join(dir, 'Games', 'Game1')
+  Dir.mkdir(File.join(dir, 'Games'))
+  Dir.mkdir(sub)
+  archive = File.join(sub, 'Game.rgss3a')
+  File.binwrite(archive, "RGSSAD\0\3")
+  Dir.chdir(sub) do
+    real_sub = Dir.pwd
+    real_archive = "#{real_sub}/Game.rgss3a"
+    load_fn = Win32API.new('rgss3aUtil.dll', 'LoadArchive', %w(p), 'i')
+    close_fn = Win32API.new('rgss3aUtil.dll', 'CloseArchive', %w(v), 'v')
+    get_size = Win32API.new('rgss3aUtil.dll', 'GetDataSize', %w(p), 'i')
+    init_img = Win32API.new('rgss3aUtil.dll', 'InitImage', %w(p p p), 'i')
+    check('rgss3aUtil missing archive', 0, load_fn.call('Missing.rgss3a'))
+    check('rgss3aUtil LoadArchive', 1, load_fn.call('Game.rgss3a'))
+    check('rgss3aUtil mount order', [
+      [:mount, real_archive, nil, false, true],
+      [:mount, real_sub, nil, true, true]
+    ], MOUNTS)
+    check('rgss3aUtil GetDataSize fallback', 0, get_size.call('Data/Scripts.rvdata2'))
+    check('rgss3aUtil InitImage fallback', 0, init_img.call('Graphics/Titles1/Title', "\0" * 4, "\0" * 4))
+    MOUNTS.clear
+    close_fn.call
+    check('rgss3aUtil unmount order', [
+      [:unmount, real_sub, false],
+      [:unmount, real_archive, true]
+    ], MOUNTS)
+  end
+end
+
 scripts = ARGV[0]
 if scripts
   # Uranium: RGSS Linker initializes, FmodEx loads, BGM reaches the engine.

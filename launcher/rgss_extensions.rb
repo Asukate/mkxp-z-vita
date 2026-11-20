@@ -217,6 +217,77 @@ module HardRPGRGSSExtensions
 end
 HardRPGWin32.define('RGSS Linker', 'RGSSLinker_Initialize') { |*| 1 }
 
+# rgss3aUtil.dll (multi-game RPG Maker launchers such as Country Girl Keiko):
+# switches the active sub-game by chdir'ing into its folder and calling
+# LoadArchive("Game.rgss3a"). Prepending the sub-game folder and archive to
+# PhysFS lets load_data, Bitmap.new and Audio.* read the sub-game natively,
+# while GetDataSize/InitImage return 0 so GameLauncher falls through to them.
+module HardRPGRgss3aUtil
+  @mounted = []
+
+  def self.resolve(path)
+    clean = path.to_s.tr('\\', '/')
+    return clean if clean.start_with?('/') || clean =~ /\A[A-Za-z0-9]+:\//
+    base = Dir.pwd.to_s.sub(%r{/+\z}, '')
+    base.empty? ? clean : "#{base}/#{clean}"
+  end
+
+  def self.close
+    return 0 if @mounted.empty?
+    if defined?(Audio) && Audio.respond_to?(:__reset__)
+      begin
+        Audio.__reset__
+      rescue StandardError
+        nil
+      end
+    end
+    paths = @mounted.dup
+    @mounted.clear
+    paths.each_with_index do |path, idx|
+      begin
+        System.unmount(path, idx == paths.length - 1) if defined?(System) && System.respond_to?(:unmount)
+      rescue Exception => e
+        raise unless e.is_a?(StandardError) || (defined?(PHYSFSError) && e.is_a?(PHYSFSError))
+      end
+    end
+    0
+  end
+
+  def self.load(path)
+    close
+    archive = resolve(path)
+    return 0 unless File.file?(archive)
+    return 0 unless defined?(System) && System.respond_to?(:mount)
+    dir = File.dirname(archive)
+    mounted = []
+    begin
+      System.mount(archive, nil, false, true)
+      mounted << archive
+      if File.directory?(dir)
+        System.mount(dir, nil, true, true)
+        mounted.unshift(dir)
+      else
+        System.reload_cache if System.respond_to?(:reload_cache)
+      end
+      @mounted = mounted
+      1
+    rescue Exception => e
+      raise unless e.is_a?(StandardError) || (defined?(PHYSFSError) && e.is_a?(PHYSFSError))
+      mounted.each do |p|
+        begin
+          System.unmount(p, false)
+        rescue Exception
+          nil
+        end
+      end
+      0
+    end
+  end
+end
+HardRPGWin32.define('rgss3aUtil', 'LoadArchive') { |path, *| HardRPGRgss3aUtil.load(path) }
+HardRPGWin32.define('rgss3aUtil', 'CloseArchive') { |*| HardRPGRgss3aUtil.close }
+HardRPGWin32.define('rgss3aUtil', 'GetDataSize', 'GetData', 'InitImage', 'SetBitmap') { |*| 0 }
+
 # RGSS FmodEx (Nuri Yuri): an FMOD Ex audio backend with the RGSS Audio
 # signature. Each call goes to the engine's own Audio function, captured
 # here before a game rewrites Audio to call FmodEx.

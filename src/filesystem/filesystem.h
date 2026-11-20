@@ -40,7 +40,7 @@ public:
 	~FileSystem();
 
 	void addPath(const char *path, const char *mountpoint = 0, bool reload = false,
-                 const char *archiveRoot = 0);
+                 const char *archiveRoot = 0, bool prepend = false);
     void removePath(const char *path, bool reload = false);
 
 	/* Call these after the last 'addPath()' */

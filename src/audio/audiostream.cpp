@@ -169,6 +169,20 @@ void AudioStream::stop()
 	unlockStream();
 }
 
+void AudioStream::close()
+{
+	finiFadeOutInt();
+
+	lockStream();
+
+	noResumeStop = true;
+
+	stream.close();
+	current.filename.clear();
+
+	unlockStream();
+}
+
 void AudioStream::fadeOut(int duration)
 {
 	lockStream();

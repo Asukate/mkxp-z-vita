@@ -3242,16 +3242,23 @@ module HardRPGNative
   rescue StandardError
     false
   end
+  ORIG_METHOD_ADDED = Module.instance_method(:method_added)
+  ORIG_METHOD_REMOVED = Module.instance_method(:method_removed)
+  ORIG_METHOD_UNDEFINED = Module.instance_method(:method_undefined)
+  ORIG_APPEND_FEATURES = Module.instance_method(:append_features)
+  ORIG_PREPEND_FEATURES = Module.instance_method(:prepend_features)
+  ORIG_EXTEND_OBJECT = Module.instance_method(:extend_object)
+  ORIG_SINGLETON_METHOD_ADDED = BasicObject.instance_method(:singleton_method_added)
   HOOK = Module.new do
-    def method_added(n); HardRPGNative.bump; super; end
-    def method_removed(n); HardRPGNative.bump; super; end
-    def method_undefined(n); HardRPGNative.bump; super; end
-    def append_features(m); HardRPGNative.bump; super; end
-    def prepend_features(m); HardRPGNative.bump; super; end
-    def extend_object(o); HardRPGNative.bump; super; end
+    def method_added(n); HardRPGNative.bump; defined?(super) ? super : HardRPGNative::ORIG_METHOD_ADDED.bind_call(self, n); end
+    def method_removed(n); HardRPGNative.bump; defined?(super) ? super : HardRPGNative::ORIG_METHOD_REMOVED.bind_call(self, n); end
+    def method_undefined(n); HardRPGNative.bump; defined?(super) ? super : HardRPGNative::ORIG_METHOD_UNDEFINED.bind_call(self, n); end
+    def append_features(m); HardRPGNative.bump; defined?(super) ? super : HardRPGNative::ORIG_APPEND_FEATURES.bind_call(self, m); end
+    def prepend_features(m); HardRPGNative.bump; defined?(super) ? super : HardRPGNative::ORIG_PREPEND_FEATURES.bind_call(self, m); end
+    def extend_object(o); HardRPGNative.bump; defined?(super) ? super : HardRPGNative::ORIG_EXTEND_OBJECT.bind_call(self, o); end
   end
   OBJ_HOOK = Module.new do
-    def singleton_method_added(n); HardRPGNative.bump; super; end
+    def singleton_method_added(n); HardRPGNative.bump; defined?(super) ? super : HardRPGNative::ORIG_SINGLETON_METHOD_ADDED.bind_call(self, n); end
   end
 end
 Module.prepend(HardRPGNative::HOOK)

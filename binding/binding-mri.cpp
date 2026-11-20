@@ -927,8 +927,8 @@ RB_METHOD_GUARD_END
 RB_METHOD_GUARD(mkxpAddPath) {
     RB_UNUSED_PARAM;
     
-    VALUE path, mountpoint, reload;
-    rb_scan_args(argc, argv, "12", &path, &mountpoint, &reload);
+    VALUE path, mountpoint, reload, prepend;
+    rb_scan_args(argc, argv, "13", &path, &mountpoint, &reload, &prepend);
     SafeStringValue(path);
     if (mountpoint != Qnil) SafeStringValue(mountpoint);
     
@@ -937,8 +937,12 @@ RB_METHOD_GUARD(mkxpAddPath) {
     bool rl = true;
     if (reload != Qnil)
         rb_bool_arg(reload, &rl);
+
+    bool prep = false;
+    if (prepend != Qnil)
+        rb_bool_arg(prepend, &prep);
     
-    shState->fileSystem().addPath(RSTRING_PTR(path), mp, rl);
+    shState->fileSystem().addPath(RSTRING_PTR(path), mp, rl, 0, prep);
     
     return path;
 }

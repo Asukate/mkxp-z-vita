@@ -443,11 +443,11 @@ double Audio::bgsPos()
 void Audio::reset()
 {
     for (auto track : p->bgmTracks) {
-    	track->stop();
+    	track->close();
     }
 
-	p->bgs.stop();
-	p->me.stop();
+	p->bgs.close();
+	p->me.close();
 	p->se.stop();
 }
 

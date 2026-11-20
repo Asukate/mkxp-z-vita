@@ -263,7 +263,7 @@ static PHYSFS_Io *createSDLRWIo(const char *filename) {
   return io;
 }
 
-static int mountPath(const char *path, const char *mountpoint) {
+static int mountPath(const char *path, const char *mountpoint, int append = 1) {
 #ifdef __vita__
   /* Physical archive handles survive for the lifetime of the mount. Route
    * those through the wake-aware stream too, including RGSS archives. */
@@ -271,16 +271,16 @@ static int mountPath(const char *path, const char *mountpoint) {
   if (stat(path, &info) == 0 && S_ISREG(info.st_mode)) {
     PHYSFS_Io *io = createSDLRWIo(path);
     if (!io) return 0;
-    const int mounted = PHYSFS_mountIo(io, path, mountpoint, 1);
+    const int mounted = PHYSFS_mountIo(io, path, mountpoint, append);
     if (!mounted) io->destroy(io);
     return mounted;
   }
 #endif
-  int mounted = PHYSFS_mount(path, mountpoint, 1);
+  int mounted = PHYSFS_mount(path, mountpoint, append);
   if (!mounted) {
     PHYSFS_Io *io = createSDLRWIo(path);
     if (io) {
-      mounted = PHYSFS_mountIo(io, path, mountpoint, 1);
+      mounted = PHYSFS_mountIo(io, path, mountpoint, append);
       if (!mounted) io->destroy(io);
     }
   }
@@ -633,8 +633,8 @@ FileSystem::~FileSystem() {
     Debug() << "PhyFS failed to deinit.";
 }
 
-void FileSystem::addPath(const char *path, const char *mountpoint, bool reload, const char *archiveRoot) {
-    int state = mountPath(path, mountpoint);
+void FileSystem::addPath(const char *path, const char *mountpoint, bool reload, const char *archiveRoot, bool prepend) {
+    int state = mountPath(path, mountpoint, prepend ? 0 : 1);
     if (!state) {
         PHYSFS_ErrorCode err = PHYSFS_getLastErrorCode();
         throw Exception(Exception::PHYSFSError, "Failed to mount %s (%s)", path, PHYSFS_getErrorByCode(err));
