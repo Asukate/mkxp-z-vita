@@ -9,9 +9,10 @@
 require 'zlib' unless defined?(Zlib)
 
 module HardRPGVXAceScanCache
-  # Change it whenever a check's result for the same scripts can change (12: HardRPGJetPath took Jet's
-  # plain pathfinder), or games keep the old answer.
-  VERSION = 12
+  # Change it whenever a check's result for the same scripts can change (13: HardRPGJetPath took Jet's
+  # plain pathfinder; HardRPGOffscreenSprites supports CanariAlternate Multilayer, Star Aura, and MINTO
+  # Light guards), or games keep the old answer.
+  VERSION = 13
   MAX_GAMES = 64
 
   @data = nil
@@ -791,17 +792,32 @@ end
 module HardRPGOffscreenSprites
   # Methods a game may change and keep this on: they only choose what a visible sprite shows.
   # dispose: an update never calls it. The second line: Victor Engine Basic Module / Character
-  # Control's picture steps (pose sheets).
+  # Control's picture steps (pose sheets). The third/fourth lines: CanariAlternate Multilayer's
+  # layer-splitting and viewport helpers.
   SAFE = %w[set_character_bitmap update_src_rect update_position move_animation update_bitmap
             graphic_changed? set_tile_bitmap tileset_bitmap note dispose
-            update_character_info set_bitmap set_bitmap_name set_bitmap_position get_sign hue].freeze
-  # Known script texts of other methods that only copy the character's look onto the sprite.
+            update_character_info set_bitmap set_bitmap_name set_bitmap_position get_sign hue
+            update_tile_src_rect update_junction_sprite reset_sprite_origin dispose_junction_sprites
+            multi_viewport valid_x? valid_y? horz_divide_sprite left_divide_sprite right_divide_sprite
+            set_junction_sprite get_junction_sprite get_animation_viewport temp_viewport
+            start_animation update_animation].freeze
+  # Known script texts of other methods that only copy the character's look onto the sprite,
+  # or whose state the native park guards check.
   KNOWN = {
     # Hime's Character Sprite Zoom: original update_other, then zoom_x/zoom_y from the character.
     'update_other' => %w[2696220213:2716806441:118],
+    # CanariAlternate Multilayer + Star Aura Effect (星潟)
+    'initialize' => %w[3927437112:2930589648:167 1005275208:1823157544:118],
+    'update' => %w[2439566330:1723218754:151 3250733755:3727629176:71],
+    'start_balloon' => %w[2596273265:319625372:63],
   }.freeze
   # ...each over this default text.
-  KNOWN_BASE = { 'update_other' => '800444980:3104521863:169' }.freeze
+  KNOWN_BASE = {
+    'update_other' => '800444980:3104521863:169',
+    'initialize' => '1672252953:2481858407:109',
+    'update' => '3098554649:2917607848:107',
+    'start_balloon' => '3846192872:4009776665:239',
+  }.freeze
   # Galv's Character Animations wraps every sprite's update: the default update (native), then a step
   # that only touches the party's look and the sprite's own idle count. The native skip would leave
   # that step out too, so with it the parking is done here: a parked sprite runs only that step.
@@ -943,6 +959,21 @@ module HardRPGOffscreenSprites
       %w[Spriteset_Map#update_characters Sprite_Character#update].each do |key|
         return @status = "off (#{key} not native)" unless swapped.include?(key)
       end
+      minto_light = false
+      if Object.const_defined?(:Sprite_Character) && Object.const_defined?(:Sprite_Base)
+        sc = Object.const_get(:Sprite_Character)
+        sb = Object.const_get(:Sprite_Base)
+        sc.ancestors.each do |mod|
+          break if mod.equal?(sb)
+          next if mod.equal?(sc)
+          next unless mod.instance_methods(false).include?(:update)
+          if mod.name == 'Add_Light_Sprite' && swapped.include?('Add_Light_Sprite#update')
+            minto_light = true
+          else
+            return @status = "off (included #{mod.name}#update)"
+          end
+        end
+      end
       @status = HardRPGVXAceScanCache.fetch(:offscreen) do
         status = check_scripts(HardRPGRefreshFilter.definitions($RGSS_SCRIPTS || [], %w[Sprite_Character]))
         status == 'on' ? check_unreadable($RGSS_SCRIPTS || []) : status
@@ -952,6 +983,11 @@ module HardRPGOffscreenSprites
           HardRPGNative.set_option('park_guard_hudell', true)
           HardRPGNative.set_option('hudell_direct', hudell_direct_classes)
         end
+        if HardRPGNative.respond_to?(:swapped_digest) &&
+           HardRPGNative.swapped_digest('Sprite_Character#update') == '3250733755:3727629176:71'
+          HardRPGNative.set_option('park_guard_aura', true)
+        end
+        HardRPGNative.set_option('park_guard_minto_light', true) if minto_light
         HardRPGNative.set_option('offscreen_skip', true)
       end
       @status

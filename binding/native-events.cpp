@@ -128,12 +128,14 @@ struct Slot {
     NativeFn native;    /* SK_NATIVE */
     int superSlot;      /* SK_NATIVE: slot its `super` must reach, or -1 */
     int superAlt;       /* another slot `super` may reach instead (a script's wrapper), or -1 */
+    int superAlt2;      /* third slot `super` may reach instead (e.g. an included module), or -1 */
     int superFrom;      /* helper slot: the slot whose `super` its native method makes, or -1 */
     /* one-entry cache */
     VALUE cKlass;
     uint32_t cEpoch;
     bool cOk;
-    /* super check cache (owner is fixed) */
+    /* super check cache (per receiver class, since modules resolve super in klass.ancestors) */
+    VALUE sKlass;
     uint32_t sEpoch;
     bool sOk;
     int sWhich; /* the slot `super` reaches when sOk */
@@ -166,12 +168,17 @@ enum SlotId {
     S_GM_display_x, S_GM_display_y, S_SC_check_can_update_sprite, S_SPR_visible,
     S_H_GE_update_symbol, S_H_GE_update_mog, S_H_GC_update_symbol, S_H_GE_usm_symbol,
     S_H_GCB_rms_8dir, S_H_SC_update_mog,
-    /* CanariAlternate Multilayer, star aura effect */
+    /* CanariAlternate Multilayer, star aura effect, MOG Damage Popup, Random Add Animation, MINTO Light */
     S_SC_update_junction_sprite, S_SC_reset_sprite_origin, S_SC_dispose_junction_sprites,
     S_SC_multi_viewport, S_SC_valid_x, S_SC_valid_y, S_GM_floor_xy, S_GM_round_x, S_GM_round_y,
     S_GT_multi_viewport_accessor, S_GCB_current_floor, S_SPR_star_aura_effects_update,
     S_GC_star_aura_effect_update, S_SAE_update_aura_effect, S_SAE_aura_effect_data,
     S_SAE_aura_effect_data_delete_opacity_zero,
+    S_SC_update_tile_src_rect, S_SC_update_animation, S_GM_reset_updating_event,
+    S_GCB_update_current_floor, S_H_GCB_u_ml, S_H_SC_u_aura,
+    S_H_SB_ani_rand, S_H_SB_u_mog_dmg, S_SB_update_damage_popup, S_SB_can_create_damage,
+    S_GS_damage_popup_map, S_GCB_battler,
+    S_ALS_update, S_ALS_dispose_light, S_AGEL_get_light_data, S_AGEL_update,
     /* Game_Map */
     S_GM_adjust_x, S_GM_adjust_y, S_GM_loop_horizontal, S_GM_loop_vertical, S_GM_width, S_GM_height,
     S_GM_screen_tile_x, S_GM_screen_tile_y, S_GM_update_events,
@@ -211,6 +218,7 @@ enum SlotId {
     S_COUNT
 };
 
+static_assert(S_COUNT <= 512, "slot key shift");
 static Slot g_slots[S_COUNT];
 static IvSite g_attrSites[S_COUNT];
 static ID id_src_rect_iv;
@@ -226,10 +234,12 @@ static void slotDef(int id, const char *owner, const char *name) {
     s.expect = Qnil;
     s.superSlot = -1;
     s.superAlt = -1;
+    s.superAlt2 = -1;
     s.superFrom = -1;
+    s.sKlass = Qnil;
 }
 
-static bool superOk(Slot &s);
+static bool superOkFor(Slot &s, int id, VALUE klass, int &whichOut);
 
 static bool computeOk(Slot &s, VALUE klass) {
     if (s.kind == SK_NONE || NIL_P(s.expect))
@@ -248,7 +258,7 @@ static std::unordered_map<uint64_t, Memo> g_memo;
 static uint32_t g_checks = 0; /* slow (Ruby-level) checks done */
 
 static bool slotOkSlow(Slot &s, int id, VALUE klass) {
-    uint64_t key = ((uint64_t)klass << 8) | (uint64_t)id;
+    uint64_t key = ((uint64_t)klass << 9) | (uint64_t)id;
     auto it = g_memo.find(key);
     if (it != g_memo.end() && it->second.epoch == g_epoch)
         return it->second.ok;
@@ -257,8 +267,9 @@ static bool slotOkSlow(Slot &s, int id, VALUE klass) {
     /* A native that calls `super` (or a helper running such a native) is only used directly
      * while that `super` reaches a default/native method too. */
     int sf = s.superFrom >= 0 ? s.superFrom : id;
+    int dummy = -1;
     if (ok && s.kind == SK_NATIVE && g_slots[sf].superSlot >= 0)
-        ok = superOk(g_slots[sf]);
+        ok = superOkFor(g_slots[sf], sf, klass, dummy);
     g_memo[key] = Memo{g_epoch, ok};
     return ok;
 }
@@ -274,26 +285,53 @@ static inline bool slotOk(Slot &s, VALUE klass) {
     return ok;
 }
 
-/* Does `super` inside this slot's native method reach the default method? */
-static bool superOk(Slot &s) {
-    if (s.sEpoch == g_epoch)
+/* Does `super` inside this slot's native method reach a default/native method for receiver class `klass`? */
+struct SuperMemo {
+    uint32_t epoch;
+    bool ok;
+    int which;
+};
+static std::unordered_map<uint64_t, SuperMemo> g_superMemo;
+
+static bool superOkFor(Slot &s, int id, VALUE klass, int &whichOut) {
+    if (s.sKlass == klass && s.sEpoch == g_epoch) {
+        whichOut = s.sWhich;
         return s.sOk;
+    }
+    uint64_t key = ((uint64_t)klass << 9) | (uint64_t)id;
+    auto it = g_superMemo.find(key);
+    if (it != g_superMemo.end() && it->second.epoch == g_epoch) {
+        s.sKlass = klass;
+        s.sEpoch = g_epoch;
+        s.sOk = it->second.ok;
+        s.sWhich = it->second.which;
+        whichOut = s.sWhich;
+        return s.sOk;
+    }
     bool ok = false;
-    for (int ti : {s.superSlot, s.superAlt}) {
+    int which = -1;
+    for (int ti : {s.superSlot, s.superAlt, s.superAlt2}) {
         if (ti < 0)
             continue;
         Slot &t = g_slots[ti];
         if (t.kind == SK_NONE || NIL_P(t.expect))
             continue;
-        VALUE args[4] = {s.owner, ID2SYM(s.mid), t.owner, t.expect};
-        if (RTEST(rb_funcallv(g_module, id_super_ok, 4, args))) {
+        int subWhich = -1;
+        if (t.kind == SK_NATIVE && t.superSlot >= 0 && !superOkFor(t, ti, klass, subWhich))
+            continue;
+        VALUE args[5] = {klass, s.owner, ID2SYM(s.mid), t.owner, t.expect};
+        if (RTEST(rb_funcallv(g_module, id_super_ok, 5, args))) {
             ok = true;
-            s.sWhich = ti;
+            which = ti;
             break;
         }
     }
+    g_superMemo[key] = SuperMemo{g_epoch, ok, which};
+    s.sKlass = klass;
     s.sEpoch = g_epoch;
     s.sOk = ok;
+    s.sWhich = which;
+    whichOut = which;
     return ok;
 }
 
@@ -303,7 +341,7 @@ static bool superOk(Slot &s) {
 static std::unordered_map<uint64_t, Memo> g_altMemo;
 static std::unordered_map<uint64_t, int> g_altWhich;
 static int altSlot(int id, VALUE klass) {
-    uint64_t key = ((uint64_t)klass << 8) | (uint64_t)id;
+    uint64_t key = ((uint64_t)klass << 9) | (uint64_t)id;
     auto it = g_altMemo.find(key);
     if (it != g_altMemo.end() && it->second.epoch == g_epoch)
         return it->second.ok ? g_altWhich[key] : -1;
@@ -408,8 +446,9 @@ static inline VALUE call2(VALUE obj, int id, VALUE a, VALUE b) {
 /* `super` from inside the native method of slot `id`. */
 static VALUE callSuper(VALUE self, int id, int argc, const VALUE *argv, bool fromRuby) {
     Slot &s = g_slots[id];
-    if (superOk(s)) {
-        Slot &t = g_slots[s.sWhich];
+    int which = -1;
+    if (superOkFor(s, id, rb_class_of(self), which)) {
+        Slot &t = g_slots[which];
         t.direct++;
         switch (t.kind) {
         case SK_ENGINE:
@@ -570,15 +609,20 @@ static ID iv_real_x, iv_real_y, iv_x, iv_y, iv_jump_count, iv_jump_peak, iv_move
     cv_ani_checker, cv_ani_spr_checker, iv_symbol_encount, iv_wait_count, iv_visibility_distance,
     iv_origin_opacity, iv_opacity, iv_uninhibited_movement, iv_region_z_pos, iv_first_z_pos,
     iv_anti_lag, iv_can_update, iv_data, iv_sprites_cash_size, iv_sprites_cash, iv_star_aura_last_x,
-    iv_star_aura_last_y, iv_star_aura_effect_update, iv_star_aura_effect_keys, iv_star_aura_effect_sprites;
+    iv_star_aura_last_y, iv_star_aura_effect_update, iv_star_aura_effect_keys, iv_star_aura_effect_sprites,
+    iv_star_aura_effects_data, iv_map_group_id, iv_updating_event, iv_last_x, iv_last_y,
+    iv_random_add_animations, iv_anti_animation_continue_by_random_add_animation,
+    iv_damage_sprites, iv_battler, iv_damage, iv_damage_popup_map,
+    iv_light_sprite, iv_light_visible, iv_call_light, iv_light_id, iv_last_page_light, iv_page;
 static ID id_update_symbol_reaction, id_update_symbol_movement, id_zero, id_truncate, id_between,
     id_reset_sprite_effects, id_is_a, id_MOVE_CONTROL, id_DASH_PLUS, id_MOG_ANTI_LAG,
-    id_UPDATE_OUT_SCREEN_RANGE, id_Game_Event, id_Calt, id_LAYER_UP_TILE, id_LAYER_DOWN_TILE,
+    id_UPDATE_OUT_SCREEN_RANGE, id_Game_Event, id_Game_Player, id_Calt, id_LAYER_UP_TILE, id_LAYER_DOWN_TILE,
     id_star_aura_effect, id_star_aura_effect_update_set, id_nev_aura_tail, id_autorun, id_switch_id,
     id_list, id_each, id_each_value, id_GetKeyboardState, id_DOWN_STATE_MASK, id_Keys_To_Check,
     id_th_update, id_Keys, id_AKEY, id_zale_update, iv_r_events, iv_region_sprites, iv_dmo_screen_z,
     iv_state, iv_any_key_pressed, iv_pressed, iv_triggers, iv_released, iv_timer, iv_pose_speed,
-    iv_playing_pose, iv_pose_loop, iv_pose_sufix, id_change_pose;
+    iv_playing_pose, iv_pose_loop, iv_pose_sufix, id_change_pose, id_map_group_id, id_empty_p,
+    id_light_set;
 static ID gv_game_map, gv_data_animations, gv_game_variables, gv_game_system, gv_game_temp,
     gv_data_common_events, gv_game_switches;
 static VALUE g_spriteBase = Qnil, g_graphics = Qnil;
@@ -607,6 +651,17 @@ static VALUE gcb_stopping(VALUE self, int, const VALUE *, bool) {
     return rbool(!RTEST(call0(self, S_GCB_moving)) && !RTEST(call0(self, S_GCB_jumping)));
 }
 static VALUE gcb_dash(VALUE, int, const VALUE *, bool) { return Qfalse; }
+static VALUE g_rmsSwitchId = INT2FIX(0);
+static bool g_rmsSwitchExactTrue = false;
+static VALUE g_rmsOnDash = INT2FIX(1), g_rmsOnWalk = INT2FIX(0);
+static VALUE g_rmsOffDash = INT2FIX(1), g_rmsOffWalk = INT2FIX(0);
+static VALUE gcb_real_move_speed_sw(VALUE self, int, const VALUE *, bool) {
+    VALUE sw = call1(rb_gvar_get(gv_game_switches), S_GSW_aref, g_rmsSwitchId);
+    bool on = g_rmsSwitchExactTrue ? (sw == Qtrue) : RTEST(sw);
+    VALUE delta = RTEST(call0(self, S_GCB_dash)) ? (on ? g_rmsOnDash : g_rmsOffDash)
+                                                 : (on ? g_rmsOnWalk : g_rmsOffWalk);
+    return nAdd(IV(self, move_speed), delta);
+}
 static VALUE gcb_real_move_speed(VALUE self, int, const VALUE *, bool) {
     VALUE speed = IV(self, move_speed);
     return nAdd(speed, INT2FIX(RTEST(call0(self, S_GCB_dash)) ? 1 : 0));
@@ -2072,7 +2127,36 @@ static VALUE sc_update(VALUE self, int, const VALUE *, bool fromRuby) {
  * has no animation or balloon running or waiting: it draws nothing there. Big maps keep most of their
  * events far away (A New Game's field: 116 sprites, 8 on screen). */
 static bool g_offscreenSkip = false;
+static bool g_parkGuardAura = false;
+static bool g_parkGuardMintoLight = false;
 static VALUE g_spriteCharacterClass = Qnil;
+static VALUE g_gamePlayerClass = Qnil;
+static inline bool emptyAryFast(VALUE v) {
+    return RB_TYPE_P(v, T_ARRAY) && rb_class_of(v) == rb_cArray && RARRAY_LEN(v) == 0;
+}
+static inline bool plainHashFast(VALUE v) {
+    return RB_TYPE_P(v, T_HASH) && rb_class_of(v) == rb_cHash;
+}
+struct SingleHashEq {
+    VALUE key, val;
+    bool ok;
+};
+static int singleHashEqCb(VALUE k, VALUE v, VALUE arg) {
+    SingleHashEq *s = (SingleHashEq *)arg;
+    s->ok = (k == s->key && v == s->val);
+    return ST_STOP;
+}
+/* Check h[key] == val without invoking Kernel#hash in the common 1-entry {self => @page} case. */
+static inline bool hashHasExactPair(VALUE h, VALUE key, VALUE val) {
+    if (!plainHashFast(h))
+        return false;
+    if (RHASH_SIZE(h) == 1 && slotOk(g_slots[S_HSH_aref], rb_cHash)) {
+        SingleHashEq s{key, val, false};
+        rb_hash_foreach(h, singleHashEqCb, (VALUE)&s);
+        return s.ok;
+    }
+    return rb_hash_aref(h, key) == val;
+}
 static bool farOut(VALUE vx, VALUE vy, double w, double h) {
     if (!(FIXNUM_P(vx) || RB_FLOAT_TYPE_P(vx)) || !(FIXNUM_P(vy) || RB_FLOAT_TYPE_P(vy)))
         return false;
@@ -2141,15 +2225,54 @@ static bool parkedOffscreen(VALUE spr, double w, double h) {
         return false;
     if (!farOut(call0(spr, S_SPR_x), call0(spr, S_SPR_y), w, h))
         return false;
-    /* Far out sideways already decides it; screen_y need not run when it only reads state. */
-    VALUE sx = call0(c, S_GCB_screen_x);
-    bool sideways = false;
-    if ((FIXNUM_P(sx) || RB_FLOAT_TYPE_P(sx)) && screenYPure(c)) {
-        double x = NUM2DBL(sx);
-        sideways = x < -w || x > 2 * w;
-    }
-    if (!sideways && !farOut(sx, call0(c, S_GCB_screen_y), w, h))
+    /* Far out sideways already decides it; screen_y need not run when it only reads state.
+     * Use screenCall so Float coordinates on the Vita never allocate Ruby Float objects. */
+    Num sxN, syN;
+    VALUE sxB, syB;
+    if (!screenCall(c, true, sxN, sxB))
         return false;
+    double cx = dv(sxN);
+    bool sideways = screenYPure(c) && (cx < -w || cx > 2 * w);
+    if (!sideways) {
+        if (!screenCall(c, false, syN, syB))
+            return false;
+        double cy = dv(syN);
+        if (!(cx < -w || cx > 2 * w || cy < -h || cy > 2 * h))
+            return false;
+    }
+    /* Multilayer junction sprites, Random Add Animation, MOG Damage Popup: never park while active. */
+    if (RTEST(IV(spr, sprites_cash)))
+        return false;
+    VALUE ra = IV(spr, random_add_animations);
+    if (RTEST(ra) && !emptyAryFast(ra))
+        return false;
+    VALUE ds = IV(spr, damage_sprites);
+    if (RTEST(ds) && !emptyAryFast(ds))
+        return false;
+    VALUE cd = IV(c, damage);
+    if (RTEST(cd) && !emptyAryFast(cd))
+        return false;
+    if (RTEST(IV(c, battler)))
+        return false;
+    if (g_parkGuardAura) {
+        if (!emptyAryFast(IV(spr, star_aura_effect_keys)) ||
+            !emptyAryFast(IV(spr, star_aura_effect_sprites)) ||
+            RTEST(IV(spr, star_aura_effect_update)) ||
+            RTEST(IV(c, star_aura_effect_update)))
+            return false;
+        VALUE aed = IV(c, star_aura_effects_data);
+        if (RTEST(aed) && !emptyAryFast(aed))
+            return false;
+    }
+    if (g_parkGuardMintoLight) {
+        if (RTEST(IV(spr, light_sprite)) || IV(c, light_visible) != Qfalse)
+            return false;
+        if (NIL_P(g_gamePlayerClass) || rb_obj_is_kind_of(c, g_gamePlayerClass))
+            return false;
+        VALUE lpl = IV(c, last_page_light);
+        if (!hashHasExactPair(lpl, c, IV(c, page)))
+            return false;
+    }
     return !g_parkGuardHudell || hudellParkable(spr, c);
 }
 /* Unchanged character sprites (option steady_skip, set by vxace_map_speedups.rb HardRPGSteadySprites
@@ -2752,12 +2875,30 @@ static VALUE sc_update_junction_sprite_ml(VALUE self, int argc, const VALUE *arg
         return callOrig(self, S_SC_update_junction_sprite, argc, argv);
     SETIV(self, sprites_cash_size, INT2FIX(0));
     VALUE c = IV(self, character);
-    VALUE sx = call0(c, S_GCB_screen_x);
-    if (nLt(sx, nNeg(IV(self, cw))) || nLt(nAdd(call0(g_graphics, S_GFX_width), IV(self, cw)), sx))
-        return call0(self, S_SC_dispose_junction_sprites);
-    VALUE sy = call0(c, S_GCB_screen_y);
-    if (nLt(sy, INT2FIX(0)) || nLt(nAdd(call0(g_graphics, S_GFX_height), IV(self, ch)), sy))
-        return call0(self, S_SC_dispose_junction_sprites);
+    Num sxN, syN;
+    VALUE sxB, syB;
+    VALUE cw = IV(self, cw);
+    VALUE gw = call0(g_graphics, S_GFX_width);
+    if (screenCall(c, true, sxN, sxB) && FIXNUM_P(cw) && FIXNUM_P(gw)) {
+        double sx = dv(sxN), dcw = (double)FIX2LONG(cw), dgw = (double)FIX2LONG(gw);
+        if (sx < -dcw || dgw + dcw < sx)
+            return call0(self, S_SC_dispose_junction_sprites);
+    } else {
+        VALUE sx = sxB != Qundef ? sxB : fromNum(sxN);
+        if (nLt(sx, nNeg(cw)) || nLt(nAdd(gw, cw), sx))
+            return call0(self, S_SC_dispose_junction_sprites);
+    }
+    VALUE ch = IV(self, ch);
+    VALUE gh = call0(g_graphics, S_GFX_height);
+    if (screenCall(c, false, syN, syB) && FIXNUM_P(ch) && FIXNUM_P(gh)) {
+        double sy = dv(syN), dch = (double)FIX2LONG(ch), dgh = (double)FIX2LONG(gh);
+        if (sy < 0.0 || dgh + dch < sy)
+            return call0(self, S_SC_dispose_junction_sprites);
+    } else {
+        VALUE sy = syB != Qundef ? syB : fromNum(syN);
+        if (nLt(sy, INT2FIX(0)) || nLt(nAdd(gh, ch), sy))
+            return call0(self, S_SC_dispose_junction_sprites);
+    }
     if (!RTEST(call0(self, S_SPR_visible)))
         return call0(self, S_SC_dispose_junction_sprites);
     call0(self, S_SC_reset_sprite_origin);
@@ -2826,9 +2967,183 @@ static VALUE spr_star_aura_effects_update(VALUE self, int argc, const VALUE *arg
                  slotOk(g_slots[S_SAE_update_aura_effect], tk) &&
                  slotOk(g_slots[S_SAE_aura_effect_data_delete_opacity_zero], tk);
     /* aura_effect_data is `@star_aura_effects_data ||= []`: the first thing update_aura_effect does. */
-    if (quiet && emptyAry(call0(t, S_SAE_aura_effect_data)))
-        return sprites;
+    if (quiet) {
+        VALUE data;
+        if (slotOk(g_slots[S_SAE_aura_effect_data], tk)) {
+            g_slots[S_SAE_aura_effect_data].direct++;
+            data = IV(t, star_aura_effects_data);
+            if (!RTEST(data)) {
+                data = rb_ary_new();
+                SETIV(t, star_aura_effects_data, data);
+            }
+        } else {
+            data = call0(t, S_SAE_aura_effect_data);
+        }
+        if (emptyAry(data))
+            return sprites;
+    }
     return rb_funcall(self, id_nev_aura_tail, 1, t);
+}
+
+/* -- CanariAlternate Multilayer: map/character/sprite update loops -- */
+
+static VALUE sm_update_characters_ml(VALUE self, int, const VALUE *, bool) {
+    if (nNe(IV(self, map_group_id), rb_funcall(gameMap(), id_map_group_id, 0)))
+        call0(self, S_SM_refresh_characters);
+    VALUE list = IV(self, character_sprites);
+    if (RB_TYPE_P(list, T_ARRAY) && rb_class_of(list) == rb_cArray) {
+        bool skip = g_offscreenSkip && !NIL_P(g_spriteCharacterClass);
+        double w = 0, h = 0;
+        if (skip) {
+            VALUE gw = gfxWidth(), gh = gfxHeight();
+            skip = FIXNUM_P(gw) && FIXNUM_P(gh);
+            if (skip) { w = FIX2LONG(gw); h = FIX2LONG(gh); }
+        }
+        for (long i = 0; i < RARRAY_LEN(list); ++i) {
+            VALUE spr = RARRAY_AREF(list, i);
+            if (skip && parkedOffscreen(spr, w, h))
+                continue;
+            call0(spr, S_SC_update);
+        }
+        return list;
+    }
+    return callOrig(self, S_SM_update_characters, 0, nullptr);
+}
+static VALUE sc_update_ml(VALUE self, int, const VALUE *, bool fromRuby) {
+    callSuper(self, S_SC_update, 0, nullptr, fromRuby);
+    call0(self, S_SC_update_bitmap);
+    call0(self, S_SC_update_src_rect);
+    call0(self, S_SC_update_tile_src_rect);
+    call0(self, S_SC_update_position);
+    call0(self, S_SC_update_other);
+    call0(self, S_SC_update_junction_sprite);
+    call0(self, S_SC_update_balloon);
+    return call0(self, S_SC_setup_new_effect);
+}
+static VALUE sc_update_aura(VALUE self, int, const VALUE *, bool) {
+    call0(self, S_H_SC_u_aura);
+    return call1(self, S_SPR_star_aura_effects_update, IV(self, character));
+}
+static VALUE sc_update_tile_src_rect_ml(VALUE self, int, const VALUE *, bool) {
+    if (nEq(IV(self, tile_id), INT2FIX(0)) || !RTEST(IV(self, sprites_cash)))
+        return Qnil;
+    return callOrig(self, S_SC_update_tile_src_rect, 0, nullptr);
+}
+static VALUE sc_update_animation_ml(VALUE self, int, const VALUE *, bool) {
+    if (!RTEST(call0(self, S_SB_animation)))
+        return Qnil;
+    return callOrig(self, S_SC_update_animation, 0, nullptr);
+}
+static int updateEachEventMl(VALUE, VALUE value, VALUE map) {
+    SETIV(map, updating_event, value);
+    call0(value, S_GE_update);
+    return ST_CONTINUE;
+}
+static VALUE gm_update_events_ml(VALUE self, int, const VALUE *, bool) {
+    VALUE events = IV(self, events);
+    VALUE common = IV(self, common_events);
+    if (!(plainHashFast(events) && RB_TYPE_P(common, T_ARRAY) && rb_class_of(common) == rb_cArray))
+        return callOrig(self, S_GM_update_events, 0, nullptr);
+    rb_hash_foreach(events, updateEachEventMl, self);
+    call0(self, S_GM_reset_updating_event);
+    for (long i = 0; i < RARRAY_LEN(common); ++i)
+        rb_funcall(RARRAY_AREF(common, i), id_update, 0);
+    return common;
+}
+static VALUE gcb_update_ml(VALUE self, int, const VALUE *, bool) {
+    call0(self, S_H_GCB_u_ml);
+    VALUE x = IV(self, x), y = IV(self, y);
+    if (slotOk(g_slots[S_GCB_update_current_floor], rb_class_of(self)) &&
+        nEq(x, IV(self, last_x)) && nEq(y, IV(self, last_y))) {
+        g_slots[S_GCB_update_current_floor].direct++;
+        return Qnil;
+    }
+    return call2(self, S_GCB_update_current_floor, x, y);
+}
+
+/* -- Random Add Animation (Sprite_Base#animation?) -- */
+
+static VALUE sb_animation_rand(VALUE self, int, const VALUE *, bool) {
+    if (RTEST(call0(self, S_H_SB_ani_rand)))
+        return Qtrue;
+    if (RTEST(IV(self, anti_animation_continue_by_random_add_animation)))
+        return Qfalse;
+    VALUE ra = IV(self, random_add_animations);
+    if (emptyAry(ra))
+        return Qfalse;
+    return rbool(!RTEST(rb_funcall(ra, id_empty_p, 0)));
+}
+
+/* -- MOG Damage Popup (Sprite_Base#update / update_damage_popup) -- */
+
+static VALUE sb_update_mog_dmg(VALUE self, int, const VALUE *, bool) {
+    call0(self, S_H_SB_u_mog_dmg);
+    return call0(self, S_SB_update_damage_popup);
+}
+static VALUE sb_update_damage_popup_mog(VALUE self, int, const VALUE *, bool) {
+    VALUE ds = IV(self, damage_sprites);
+    if (NIL_P(ds))
+        return Qnil;
+    if (emptyAry(ds) && slotOk(g_slots[S_SB_can_create_damage], rb_class_of(self))) {
+        VALUE bat = IV(self, battler), ch = IV(self, character);
+        if (NIL_P(bat) && NIL_P(ch))
+            return Qnil;
+        if (NIL_P(bat) && RTEST(ch)) {
+            VALUE gs = rb_gvar_get(gv_game_system);
+            if (RTEST(gs) && !RTEST(call0(gs, S_GS_damage_popup_map)))
+                return Qnil;
+            VALUE cbat = call0(ch, S_GCB_battler);
+            VALUE dmg = RTEST(cbat) ? IV(cbat, damage) : IV(ch, damage);
+            if (NIL_P(dmg) || emptyAry(dmg))
+                return Qnil;
+        }
+    }
+    return callOrig(self, S_SB_update_damage_popup, 0, nullptr);
+}
+
+/* -- MINTO Light Script (Add_Light_Sprite / Add_Game_Event_Light) -- */
+
+static void ensureGamePlayerClass() {
+    if (NIL_P(g_gamePlayerClass) && rb_const_defined(rb_cObject, id_Game_Player)) {
+        g_gamePlayerClass = rb_const_get(rb_cObject, id_Game_Player);
+        rb_gc_register_address(&g_gamePlayerClass);
+    }
+}
+static VALUE als_update_minto(VALUE self, int, const VALUE *, bool fromRuby) {
+    callSuper(self, S_ALS_update, 0, nullptr, fromRuby);
+    VALUE c = IV(self, character);
+    if (NIL_P(c))
+        return Qnil;
+    ensureGamePlayerClass();
+    bool skipLightCheck = false;
+    if (slotOk(g_slots[S_AGEL_get_light_data], rb_class_of(c)) &&
+        !NIL_P(g_gamePlayerClass) && !rb_obj_is_kind_of(c, g_gamePlayerClass)) {
+        VALUE lpl = IV(c, last_page_light);
+        if (hashHasExactPair(lpl, c, IV(c, page)) && !NIL_P(IV(c, light_visible))) {
+            g_slots[S_AGEL_get_light_data].direct++;
+            skipLightCheck = true;
+        }
+    }
+    if (!skipLightCheck)
+        call0(c, S_AGEL_get_light_data);
+    if (IV(c, light_visible) != Qtrue) {
+        if (RTEST(IV(self, light_sprite)) || !slotOk(g_slots[S_ALS_dispose_light], rb_class_of(self)))
+            call0(self, S_ALS_dispose_light);
+        else
+            g_slots[S_ALS_dispose_light].direct++;
+        return Qnil;
+    }
+    if (IV(c, call_light) == Qtrue) {
+        SETIV(c, call_light, Qfalse);
+        rb_funcall(self, id_light_set, 1, IV(c, light_id));
+    }
+    VALUE ls = IV(self, light_sprite);
+    if (NIL_P(ls))
+        return Qnil;
+    return rb_funcall(ls, id_update, 0);
+}
+static VALUE agel_update_minto(VALUE self, int, const VALUE *, bool fromRuby) {
+    return callSuper(self, S_AGEL_update, 0, nullptr, fromRuby);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2840,22 +3155,25 @@ struct NativeDef {
     NativeFn fn;
     int superSlot;       /* slot `super` must reach, -1 none, KEEP: a wrapper keeps the slot's */
     int superAlt;        /* another slot `super` may reach instead, or -1 */
+    int superAlt2;       /* third slot `super` may reach instead, or -1 */
     int lo, hi;          /* arity */
     int helper;          /* wrapper: slot of the alias name it calls, or -1 */
     int base;            /* wrapper: slot whose native that alias points to */
 };
 enum { KEEP = -2 };
 
-#define ND(slot, var, fn, sup) {slot, var, fn, sup, -1, 0, 0, -1, -1}
-#define NDS(slot, var, fn, sup, alt) {slot, var, fn, sup, alt, 0, 0, -1, -1}
-#define NDA(slot, var, fn, sup, lo, hi) {slot, var, fn, sup, -1, lo, hi, -1, -1}
-#define NDW(slot, var, fn, helper, base) {slot, var, fn, KEEP, -1, 0, 0, helper, base}
-#define NDWA(slot, var, fn, helper, base, lo, hi) {slot, var, fn, KEEP, -1, lo, hi, helper, base}
+#define ND(slot, var, fn, sup) {slot, var, fn, sup, -1, -1, 0, 0, -1, -1}
+#define NDS(slot, var, fn, sup, alt) {slot, var, fn, sup, alt, -1, 0, 0, -1, -1}
+#define ND3(slot, var, fn, sup, alt, alt2) {slot, var, fn, sup, alt, alt2, 0, 0, -1, -1}
+#define NDA(slot, var, fn, sup, lo, hi) {slot, var, fn, sup, -1, -1, lo, hi, -1, -1}
+#define NDW(slot, var, fn, helper, base) {slot, var, fn, KEEP, -1, -1, 0, 0, helper, base}
+#define NDWA(slot, var, fn, helper, base, lo, hi) {slot, var, fn, KEEP, -1, -1, lo, hi, helper, base}
 static const NativeDef g_natives[] = {
     ND(S_GCB_moving, "", gcb_moving, -1),
     ND(S_GCB_jumping, "", gcb_jumping, -1),
     ND(S_GCB_stopping, "", gcb_stopping, -1),
     ND(S_GCB_real_move_speed, "", gcb_real_move_speed, -1),
+    ND(S_GCB_real_move_speed, "sw", gcb_real_move_speed_sw, -1),
     ND(S_GCB_distance_per_frame, "", gcb_distance_per_frame, -1),
     ND(S_GCB_dash, "", gcb_dash, -1),
     ND(S_GCB_object_character, "", gcb_object_character, -1),
@@ -2872,9 +3190,9 @@ static const NativeDef g_natives[] = {
     ND(S_GCB_update_anime_count, "", gcb_update_anime_count, -1),
     ND(S_GCB_update_anime_pattern, "", gcb_update_anime_pattern, -1),
     ND(S_GC_update_stop, "", gc_update_stop, S_GCB_update_stop),
-    /* With the symbol encounter script, `super` from Game_Event#update reaches its
-     * Game_Character#update wrapper instead of Game_CharacterBase#update. */
-    NDS(S_GE_update, "", ge_update, S_GCB_update, S_GC_update),
+    /* With the symbol encounter / MINTO light scripts, `super` from Game_Event#update reaches
+     * Game_Character#update or Add_Game_Event_Light#update instead of Game_CharacterBase#update. */
+    ND3(S_GE_update, "", ge_update, S_GCB_update, S_GC_update, S_AGEL_update),
     ND(S_GE_update_stop, "", ge_update_stop, S_GC_update_stop),
     ND(S_GE_update_self_movement, "", ge_update_self_movement, -1),
     NDA(S_GE_near_the_screen, "", ge_near_the_screen, -1, 0, 2),
@@ -2993,11 +3311,26 @@ static const NativeDef g_natives[] = {
     ND(S_SC_reset_sprite_origin, "ml", sc_reset_sprite_origin_ml, -1),
     ND(S_SC_dispose_junction_sprites, "ml", sc_dispose_junction_sprites_ml, -1),
     ND(S_SC_multi_viewport, "ml", sc_multi_viewport_ml, -1),
+    ND(S_SM_update_characters, "ml", sm_update_characters_ml, -1),
+    NDS(S_SC_update, "ml", sc_update_ml, S_SB_update, S_ALS_update),
+    ND(S_SC_update_tile_src_rect, "ml", sc_update_tile_src_rect_ml, -1),
+    ND(S_SC_update_animation, "ml", sc_update_animation_ml, -1),
+    ND(S_GM_update_events, "ml", gm_update_events_ml, -1),
+    NDW(S_GCB_update, "ml", gcb_update_ml, S_H_GCB_u_ml, S_GCB_update),
     /* star aura effect */
     NDA(S_SPR_star_aura_effects_update, "aura", spr_star_aura_effects_update, -1, 1, 1),
+    NDW(S_SC_update, "aura", sc_update_aura, S_H_SC_u_aura, S_SC_update),
+    /* Random Add Animation & MOG Damage Popup */
+    NDW(S_SB_animation, "rand_ani", sb_animation_rand, S_H_SB_ani_rand, S_SB_animation),
+    NDW(S_SB_update, "mog_dmg", sb_update_mog_dmg, S_H_SB_u_mog_dmg, S_SB_update),
+    ND(S_SB_update_damage_popup, "mog_dmg", sb_update_damage_popup_mog, -1),
+    /* MINTO Light Script */
+    ND(S_ALS_update, "minto", als_update_minto, S_SB_update),
+    NDS(S_AGEL_update, "minto", agel_update_minto, S_GCB_update, S_GC_update),
 };
 #undef ND
 #undef NDS
+#undef ND3
 #undef NDA
 #undef NDW
 #undef NDWA
@@ -3073,6 +3406,7 @@ static VALUE nev_replace(int argc, VALUE *argv, VALUE) {
         if (d.superSlot != KEEP) {
             s.superSlot = d.superSlot;
             s.superAlt = d.superAlt;
+            s.superAlt2 = d.superAlt2;
         }
         s.owner = klass;
         s.expect = instanceMethod(klass, s.mid);
@@ -3163,12 +3497,32 @@ static VALUE nev_set_option(VALUE, VALUE name, VALUE val) {
     }
     else if (n == "park_guard_hudell")
         g_parkGuardHudell = RTEST(val);
+    else if (n == "park_guard_aura")
+        g_parkGuardAura = RTEST(val);
+    else if (n == "park_guard_minto_light") {
+        g_parkGuardMintoLight = RTEST(val);
+        if (g_parkGuardMintoLight)
+            ensureGamePlayerClass();
+    }
     else if (n == "near_the_screen_margins") {
         Check_Type(val, T_ARRAY);
         if (RARRAY_LEN(val) != 2 || !FIXNUM_P(rb_ary_entry(val, 0)) || !FIXNUM_P(rb_ary_entry(val, 1)))
             rb_raise(rb_eArgError, "near_the_screen_margins wants [dx, dy]");
         g_nearDx = rb_ary_entry(val, 0);
         g_nearDy = rb_ary_entry(val, 1);
+    }
+    else if (n == "real_move_speed_switch") {
+        Check_Type(val, T_ARRAY);
+        if (RARRAY_LEN(val) != 6 || !FIXNUM_P(rb_ary_entry(val, 0)) ||
+            !FIXNUM_P(rb_ary_entry(val, 2)) || !FIXNUM_P(rb_ary_entry(val, 3)) ||
+            !FIXNUM_P(rb_ary_entry(val, 4)) || !FIXNUM_P(rb_ary_entry(val, 5)))
+            rb_raise(rb_eArgError, "real_move_speed_switch wants [id, exact, on_d, on_w, off_d, off_w]");
+        g_rmsSwitchId = rb_ary_entry(val, 0);
+        g_rmsSwitchExactTrue = RTEST(rb_ary_entry(val, 1));
+        g_rmsOnDash = rb_ary_entry(val, 2);
+        g_rmsOnWalk = rb_ary_entry(val, 3);
+        g_rmsOffDash = rb_ary_entry(val, 4);
+        g_rmsOffWalk = rb_ary_entry(val, 5);
     }
     else
         rb_raise(rb_eArgError, "unknown option %s", n.c_str());
@@ -3229,9 +3583,9 @@ module HardRPGNative
   rescue NameError
     false
   end
-  # `super` from owner#name reaches expect_owner's method `expect`.
-  def self.super_ok?(owner, name, expect_owner, expect)
-    anc = owner.ancestors
+  # `super` from owner#name on an instance of klass reaches expect_owner's method `expect`.
+  def self.super_ok?(klass, owner, name, expect_owner, expect)
+    anc = klass.ancestors
     i = anc.index(owner) or return false
     anc[(i + 1)..-1].each do |mod|
       if mod.method_defined?(name, false) || mod.private_method_defined?(name, false)
@@ -3325,6 +3679,18 @@ void nativeEventsInit(int rgssVersion) {
     I(iv_sprites_cash, "@sprites_cash"); I(iv_star_aura_last_x, "@star_aura_last_x");
     I(iv_star_aura_last_y, "@star_aura_last_y"); I(iv_star_aura_effect_update, "@star_aura_effect_update");
     I(iv_star_aura_effect_keys, "@star_aura_effect_keys"); I(iv_star_aura_effect_sprites, "@star_aura_effect_sprites");
+    I(iv_star_aura_effects_data, "@star_aura_effects_data");
+    I(iv_map_group_id, "@map_group_id"); I(iv_updating_event, "@updating_event");
+    I(iv_last_x, "@last_x"); I(iv_last_y, "@last_y");
+    I(iv_random_add_animations, "@random_add_animations");
+    I(iv_anti_animation_continue_by_random_add_animation, "@anti_animation_continue_by_random_add_animation");
+    I(iv_damage_sprites, "@damage_sprites"); I(iv_battler, "@battler");
+    I(iv_damage, "@damage"); I(iv_damage_popup_map, "@damage_popup_map");
+    I(iv_light_sprite, "@light_sprite"); I(iv_light_visible, "@light_visible");
+    I(iv_call_light, "@call_light"); I(iv_light_id, "@light_id");
+    I(iv_last_page_light, "@last_page_light"); I(iv_page, "@page");
+    I(id_Game_Player, "Game_Player"); I(id_map_group_id, "map_group_id");
+    I(id_empty_p, "empty?"); I(id_light_set, "light_set");
     I(id_Calt, "Calt"); I(id_LAYER_UP_TILE, "LAYER_UP_TILE"); I(id_LAYER_DOWN_TILE, "LAYER_DOWN_TILE");
     I(id_star_aura_effect, "star_aura_effect"); I(id_star_aura_effect_update_set, "star_aura_effect_update=");
     I(id_nev_aura_tail, "__nev_aura_tail"); I(gv_game_temp, "$game_temp");
@@ -3523,6 +3889,22 @@ void nativeEventsInit(int rgssVersion) {
     slotDef(S_SAE_update_aura_effect, "StarAuraEffect", "update_aura_effect");
     slotDef(S_SAE_aura_effect_data, "StarAuraEffect", "aura_effect_data");
     slotDef(S_SAE_aura_effect_data_delete_opacity_zero, "StarAuraEffect", "aura_effect_data_delete_opacity_zero");
+    slotDef(S_SC_update_tile_src_rect, "Sprite_Character", "update_tile_src_rect");
+    slotDef(S_SC_update_animation, "Sprite_Character", "update_animation");
+    slotDef(S_GM_reset_updating_event, "Game_Map", "reset_updating_event");
+    slotDef(S_GCB_update_current_floor, "Game_CharacterBase", "update_current_floor");
+    slotDef(S_H_GCB_u_ml, "alias", "update_Multilayer");
+    slotDef(S_H_SC_u_aura, "alias", "update_star_aura_effect");
+    slotDef(S_H_SB_ani_rand, "alias", "animation_random_add_animation?");
+    slotDef(S_H_SB_u_mog_dmg, "alias", "mog_damage_popup_sprite_update");
+    slotDef(S_SB_update_damage_popup, "Sprite_Base", "update_damage_popup");
+    slotDef(S_SB_can_create_damage, "Sprite_Base", "can_create_damage?");
+    slotDef(S_GS_damage_popup_map, "Game_System", "damage_popup_map");
+    slotDef(S_GCB_battler, "Game_CharacterBase", "battler");
+    slotDef(S_ALS_update, "Add_Light_Sprite", "update");
+    slotDef(S_ALS_dispose_light, "Add_Light_Sprite", "dispose_light");
+    slotDef(S_AGEL_get_light_data, "Add_Game_Event_Light", "get_light_data");
+    slotDef(S_AGEL_update, "Add_Game_Event_Light", "update");
     slotDef(S_SPR_set_ox, "Sprite", "ox=");
     slotDef(S_SPR_set_oy, "Sprite", "oy=");
     slotDef(S_SPR_set_viewport, "Sprite", "viewport=");

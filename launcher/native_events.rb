@@ -456,6 +456,13 @@ module HardRPGNative
     "Sprite_Character#reset_sprite_origin:3137694480:825365155:55" => "ml",
     "Sprite_Character#dispose_junction_sprites:2128924900:1886407892:205" => "ml",
     "Sprite_Character#multi_viewport:3405174318:3420395489:60" => "ml",
+    "Spriteset_Map#update_characters:2697024867:638988922:133" => "ml",
+    "Sprite_Character#update:2439566330:1723218754:151" => "ml",
+    "Sprite_Character#update_tile_src_rect:2274753871:610155811:204" => "ml",
+    "Sprite_Character#update_animation:825093117:3232507003:94" => "ml",
+    "Game_Map#update_events:1596980735:1710766630:153" => "ml",
+    "Game_CharacterBase#update:3421207656:2055869797:57" => "ml",
+    "Game_CharacterBase#update_current_floor:2676050256:3413324538:147" => "known",
     "Sprite_Character#valid_x?:3170161718:3100512405:52" => "known",
     "Sprite_Character#valid_y?:541466540:3386577138:53" => "known",
     "Game_Map#floor_xy:969204233:977108497:383" => "known",
@@ -486,9 +493,20 @@ module HardRPGNative
     "Sprite_Character#graphic_changed?:2495157378:835003697:98" => "vic",
     # star aura effect (星潟)
     "Sprite#star_aura_effects_update:2583269496:1939184202:2488" => "aura",
+    "Sprite_Character#update:3250733755:3727629176:71" => "aura",
     "StarAuraEffect#update_aura_effect:65509816:2849013802:1804" => "known",
     "StarAuraEffect#aura_effect_data:140744705:4159050543:51" => "known",
     "StarAuraEffect#aura_effect_data_delete_opacity_zero:4197886861:4049481205:119" => "known",
+    # Random Add Animation (アニメーション機能拡張) & MOG Damage Popup
+    "Sprite_Base#animation?:2677562275:3957339495:141" => "rand_ani",
+    "Sprite_Base#update:1950722321:3754825767:61" => "mog_dmg",
+    "Sprite_Base#update_damage_popup:838706781:4075108154:147" => "mog_dmg",
+    "Sprite_Base#can_create_damage?:557771896:1035988778:662" => "known",
+    # MINTO Light Script (明かりスクリプト)
+    "Add_Light_Sprite#update:514059262:1097756540:309" => "minto",
+    "Add_Light_Sprite#dispose_light:4204345396:2837851315:121" => "known",
+    "Add_Game_Event_Light#get_light_data:4022557620:3017102541:962" => "known",
+    "Add_Game_Event_Light#update:639670768:843712012:16" => "minto",
   }.freeze
 
   # Star aura effect (星潟): the part of Sprite#star_aura_effects_update after the effect keys are
@@ -575,19 +593,24 @@ module HardRPGNative
     "Game_CharacterBase#update_anime_pattern/vic" => :update_anime_pattern_ve_character_control,
     "Game_CharacterBase#update_stop/vic" => :update_stop_ve_character_control,
     "Sprite_Character#graphic_changed?/vic" => :graphic_changed_ve_character_control?,
+    "Game_CharacterBase#update/ml" => :update_Multilayer,
+    "Sprite_Character#update/aura" => :update_star_aura_effect,
+    "Sprite_Base#animation?/rand_ani" => :animation_random_add_animation?,
+    "Sprite_Base#update/mog_dmg" => :mog_damage_popup_sprite_update,
   }.freeze
 
   CLASSES = %w[Game_CharacterBase Game_Character Game_Event Game_Player Game_Map Game_Variables Game_Switches Game_Vehicle
-               Sprite_Base Sprite_Character Spriteset_Map Sprite StarAuraEffect Input.self Switch.self].freeze
+               Sprite_Base Sprite_Character Spriteset_Map Sprite StarAuraEffect Add_Light_Sprite Add_Game_Event_Light
+               Input.self Switch.self].freeze
   ATTRS = { 'Game_CharacterBase' => %i[tile_id character_name character_index pattern direction opacity blend_type
                                        bush_depth transparent animation_id balloon_id current_floor pose_sufix
-                                       idle_stance],
+                                       idle_stance battler],
             'Game_Map' => %i[display_x display_y],
             'Game_Vehicle' => %i[altitude],
             'Game_Event' => %i[can_update],
             'Game_Character' => %i[star_aura_effect_update],
             'Game_Temp' => %i[multi_viewport_accessor],
-            'Game_System' => %i[anti_lag] }.freeze
+            'Game_System' => %i[anti_lag damage_popup_map] }.freeze
   # A section is checked only when it opens one of these.
   NEEDLES = (CLASSES + ATTRS.keys).map { |c| c.sub(/\.self\z/, '') }.uniq.flat_map { |c| ["class #{c}", "module #{c}"] }.freeze
   @swapped = []
@@ -597,7 +620,7 @@ module HardRPGNative
   # next start skips reading its scripts again (BLACK SOULS II: about 2 s of every start on the Vita).
   # Only the methods of CLASSES are kept; what they mean (swapped or kept) is still decided each start.
   module SectionCache
-    VERSION = 3 # change it whenever Norm's output or CLASSES changes
+    VERSION = 4 # change it whenever Norm's output or CLASSES changes
     MAX = 4000  # sections; the ones this start used are kept first
 
     class << self
@@ -675,12 +698,17 @@ module HardRPGNative
         cname, name = key.split('#', 2)
         variant = STOCK["#{key}:#{Zlib.crc32(text)}:#{Zlib.adler32(text)}:#{text.bytesize}"]
         margins = nil
+        rms_sw = nil
         if variant.nil? && key == 'Game_Event#near_the_screen?' &&
            text =~ /\Adef near_the_screen\?\(dx = (\d+), dy = (\d+)\)\n/
           # The default body with other default margins (a wider screen): native, with those margins.
           margins = [$1.to_i, $2.to_i]
           plain = text.sub(/\A[^\n]*/, 'def near_the_screen?(dx = 12, dy = 8)')
           variant = 'margins' if STOCK["#{key}:#{Zlib.crc32(plain)}:#{Zlib.adler32(plain)}:#{plain.bytesize}"] == ''
+        elsif variant.nil? && key == 'Game_CharacterBase#real_move_speed' &&
+              text =~ /\Adef real_move_speed\nif \$game_switches\[(\d+)\]( == true)?\n@move_speed \+ \(dash\? \? (-?\d+) : (-?\d+)\)\nelse\n@move_speed \+ \(dash\? \? (-?\d+) : (-?\d+)\)\nend\z/
+          rms_sw = [$1.to_i, !$2.nil?, $3.to_i, $4.to_i, $5.to_i, $6.to_i]
+          variant = 'sw'
         end
         base = cname.sub(/\.self\z/, '')
         klass = Object.const_defined?(base) ? Object.const_get(base) : nil
@@ -702,9 +730,10 @@ module HardRPGNative
           next
         end
         if variant && defined_here && klass.public_method_defined?(name, false)
-          klass.class_eval(AURA_TAIL, __FILE__, __LINE__) if variant == 'aura'
+          klass.class_eval(AURA_TAIL, __FILE__, __LINE__) if key == 'Sprite#star_aura_effects_update' && variant == 'aura'
           if replace(klass, name.to_sym, variant, cname)
             set_option('near_the_screen_margins', margins) if variant == 'margins'
+            set_option('real_move_speed_switch', rms_sw) if variant == 'sw'
             @swapped << key
             (@swapped_digest ||= {})[key] = "#{Zlib.crc32(text)}:#{Zlib.adler32(text)}:#{text.bytesize}"
             (@variant_of ||= {})[key] = variant
