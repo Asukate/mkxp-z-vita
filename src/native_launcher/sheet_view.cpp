@@ -235,15 +235,17 @@ void View::buildSheet(const UI &u) {
   scene.clear();
   ensureStrips();
   pendingLoads = false;
-  // The column the header, rows and notes use: wide over a running game.
-  const bool wide = u.inGame;
   // Release notes (a newer release, About) use nearly the whole 16:9 width.
   const bool notesWide = !u.releaseReport.empty() || u.focus == Focus::About;
+  // Every other sheet (in-game pause menu, resume menu, settings and its
+  // submenus) shares the wider, taller pause-menu layout.
+  const bool wide = !notesWide;
   const auto G = notesWide ? SheetGeom{36, 874, sheetTop, sheetRowH} : sheetGeom(wide);
 
   // What the screen shows, filled in by state below, then drawn.
   struct Row {
     enum Kind { Nav, Choice, Toggle, Action, Primary, Danger, Info, Folder, Zip, Plain } kind = Nav;
+    enum StatusTone { ToneNone, ToneGood, ToneBad } statusTone = ToneNone;
     std::string label, value, detail;
     bool on = false;
   };
@@ -251,6 +253,7 @@ void View::buildSheet(const UI &u) {
   std::vector<Row> rows;
   int focusRow = -1, first = 0, shown = sheetRows, rowH = G.rowH;
   bool menuPage = false; // the first page over a running game
+  bool bigRows = false;  // pause-menu-sized 56 px rows (pause menu & resume menu)
   std::vector<std::string> notes, body;
   int bodyFirst = 0, bodyLines = 12;
   // Styled body lines start with their kind: H section heading, P summary,
@@ -460,14 +463,19 @@ void View::buildSheet(const UI &u) {
   auto rtpPage = [&] {
     title = tr("RTP locations");
     subtitle = tr("Shared by every game");
-    rowH = rtpRowH;
+    rowH = wide ? wideRtpRowH : rtpRowH;
     shown = rtpPackCount;
     for (int i = 0; i < rtpPackCount; ++i) {
       auto entry = u.rtpChoices.as_object().find(packs[i]);
       Row r;
       r.kind = Row::Nav;
       r.label = packLabel(packs[i]) + " RTP";
-      r.value = i < int(u.rtpStatuses.size()) ? tr(u.rtpStatuses[i]) : "";
+      std::string rawStatus = i < int(u.rtpStatuses.size()) ? u.rtpStatuses[i] : "";
+      r.value = rawStatus.empty() ? "" : tr(rawStatus);
+      if (rawStatus == "Detected")
+        r.statusTone = Row::ToneGood;
+      else if (rawStatus == "Missing" || rawStatus == "Unavailable")
+        r.statusTone = Row::ToneBad;
       r.detail = entry == u.rtpChoices.as_object().end() ? u.model.paths.at(std::string("rtp/") + packs[i]) + " " + tr("(automatic)")
                                                          : entry->second.as_string();
       r.detail = tail(r.detail, 84);
@@ -594,7 +602,7 @@ void View::buildSheet(const UI &u) {
   } else if (u.savesPage()) {
     // Save backups (save_backups.h): a game's saves, one save's versions,
     // a question before anything is replaced or deleted, and Settings' list.
-    rowH = rtpRowH;
+    rowH = wide ? wideRtpRowH : rtpRowH;
     shown = 5;
     first = u.settingFirst;
     focusRow = u.setting;
@@ -705,7 +713,7 @@ void View::buildSheet(const UI &u) {
         notes = {tr("Add the game to the library again to restore its saves.")};
       left = {hint("btn-cross-26", "Restore", Button::Cross), hint("btn-square-26", "Delete", Button::Square), back};
     } else if (u.page == Page::SaveConfirm) {
-      rowH = sheetRowH;
+      rowH = G.rowH;
       shown = sheetRows;
       first = 0;
       auto q = u.saveQuestion;
@@ -771,6 +779,7 @@ void View::buildSheet(const UI &u) {
       if (u.inGame) {
         section = tr("Paused");
         menuPage = true;
+        bigRows = true;
         rowH = inGameMenuRowHeight(u.gameOptionsCount());
         notes = {tr("Changes apply at once and are saved for this game. Reopen: hold <l>+<r>+<start>, or tap the icon in the empty border.")};
         left = {hint("btn-cross-26", "Open", Button::Cross), hint("btn-circle-26", "Resume", Button::Circle)};
@@ -891,6 +900,8 @@ void View::buildSheet(const UI &u) {
       row(Row::Primary, "Resume from the quick save");
       row(Row::Plain, "Start normally");
       row(Row::Danger, "Discard the quick save");
+      bigRows = true;
+      rowH = inGameMenuRowH;
       focusRow = u.setting;
       std::string place = r.mapName.empty() ? trf("map {}", {std::to_string(r.mapId)})
                                             : trf("map {} ({})", {std::to_string(r.mapId), r.mapName});
@@ -964,6 +975,7 @@ void View::buildSheet(const UI &u) {
         } catch (...) {
         }
       }
+      rowH = 38;
       shown = 9;
       left = {back};
     } else if (u.page == Page::Display)
@@ -1033,7 +1045,9 @@ void View::buildSheet(const UI &u) {
       row(Row::Nav, "IGDB client secret", masked(u.readKey(2)));
       row(Row::Nav, "RAWG", masked(u.readKey(3)));
       row(Row::Info, "Steam, DLsite, VNDB, itch.io", "No key needed");
+      shown = keysRowsShown;
       focusRow = u.setting;
+      first = u.settingFirst;
       if (u.setting == 0)
         notes = {tr("Each new game is looked up once, in the background, while HardRPG is open and online. "
                     "Triangle on a game looks it up again and lets you pick the pictures."),
@@ -1157,21 +1171,24 @@ void View::buildSheet(const UI &u) {
 
   // Header: a small section name over the title, the subtitle after it.
   if (special != About) {
-    std::string key = section + "|" + title + "|" + subtitle;
-    if (beginLayer(headerLayer, key, width - G.x, 76)) {
+    const int titleY = wide ? wideSheetTitleY : sheetTitleY;
+    const int titleH = wide ? 68 : 76;
+    std::string key = section + "|" + title + "|" + subtitle + "|" + std::to_string(wide);
+    if (beginLayer(headerLayer, key, width - G.x, titleH)) {
       label(0, 0, upper(section), 12, faint);
       int tw = measure(title, 30, true);
-      label(0, 16, title, 30, white, 255, true, -1, G.w + 40);
+      int ty = wide ? 14 : 16;
+      label(0, ty, title, 30, white, 255, true, -1, G.w);
       if (!subtitle.empty()) {
         int sw = measure(subtitle, 15);
-        if (tw + 18 + sw <= G.w + 40)
-          label(tw + 18, 29, subtitle, 15, muted);
+        if (tw + 18 + sw <= G.w)
+          label(tw + 18, ty + 13, subtitle, 15, muted);
         else
-          label(0, 54, subtitle, 15, muted, 255, false, -1, G.w + 40);
+          label(0, wide ? 48 : 54, subtitle, 15, muted, 255, false, -1, G.w);
       }
       endLayer();
     }
-    place(headerLayer.image, G.x, sheetTitleY);
+    place(headerLayer.image, G.x, titleY);
   }
 
   // Each cached row is a texture. Over a running game the game owns most of
@@ -1206,8 +1223,9 @@ void View::buildSheet(const UI &u) {
     }
     if (focused && r.kind != Row::Primary && !menuPage)
       solidQuad(ruby, G.x, y, wide ? 6 : 4, box, 1, wide ? 3 : 2);
-    std::string key = std::to_string(int(r.kind)) + "|" + r.label + "|" + r.value + "|" + r.detail + "|" + std::to_string(r.on) + "|" +
-                      std::to_string(box);
+    std::string key = std::to_string(int(r.kind)) + "|" + std::to_string(int(r.statusTone)) + "|" + r.label + "|" + r.value + "|" +
+                      r.detail + "|" + std::to_string(r.on) + "|" + std::to_string(box) + "|" + std::to_string(bigRows) + "|" +
+                      std::to_string(wide);
     auto &layer = rowCache[key];
     if (layer.key.empty()) {
       beginLayer(layer, key, G.w, box);
@@ -1218,9 +1236,9 @@ void View::buildSheet(const UI &u) {
         blitScaled(g, 14, (box - 24) / 2, 24, 24);
         textX = 50;
       }
-      int labelY = r.detail.empty() ? (box - (menuPage ? 29 : wide ? 25 : 22)) / 2 : 5;
+      int labelY = r.detail.empty() ? (box - (bigRows ? 29 : wide ? 25 : 22)) / 2 : 5;
       Color labelColor = r.kind == Row::Danger ? rubyHi : r.kind == Row::Info ? muted : white;
-      int labelSize = r.kind == Row::Info ? 16 : menuPage ? 24 : wide ? 21 : 18;
+      int labelSize = r.kind == Row::Info ? 16 : bigRows ? 24 : wide ? 21 : 18;
       bool bold = r.kind == Row::Primary || (wide && r.kind != Row::Info);
       int right = G.w - 16;
       if (r.kind == Row::Toggle) {
@@ -1238,9 +1256,20 @@ void View::buildSheet(const UI &u) {
         label(right, (box - 22) / 2, "\xe2\x80\xba", 20, muted, 255, false, 1);
         right -= 22;
         if (!r.value.empty()) {
-          int vs = wide ? 18 : 15;
-          label(right, (box - (vs + 5)) / 2, r.value, vs, wide ? soft : muted, 255, false, 1, 300);
-          right -= std::min(300, measure(r.value, vs)) + 16;
+          if (r.statusTone != Row::ToneNone) {
+            int vs = wide ? 17 : 15;
+            int vw = std::min(280, measure(r.value, vs, true));
+            int pw = vw + 24, ph = vs + 11, px = right - pw, py = (box - ph) / 2;
+            Color pillBg = r.statusTone == Row::ToneGood ? Color{34, 178, 102} : Color{224, 35, 63};
+            Color pillFg = r.statusTone == Row::ToneGood ? Color{102, 236, 158} : Color{255, 112, 128};
+            rect(px, py, pw, ph, pillBg, 62, ph / 2);
+            label(px + pw / 2, py + (ph - vs - 4) / 2, r.value, vs, pillFg, 255, true, 0, vw + 4);
+            right = px - 14;
+          } else {
+            int vs = wide ? 18 : 15;
+            label(right, (box - (vs + 5)) / 2, r.value, vs, wide ? soft : muted, 255, false, 1, 300);
+            right -= std::min(300, measure(r.value, vs)) + 16;
+          }
         }
       } else if (r.kind == Row::Info) {
         label(right, (box - 20) / 2, r.value, 16, white, 255, false, 1, G.w - 200);
@@ -1253,7 +1282,8 @@ void View::buildSheet(const UI &u) {
       }
       label(textX, labelY, r.label, labelSize, labelColor, 255, bold, -1, std::max(60, right - textX - 8));
       if (!r.detail.empty())
-        label(textX, labelY + 24, r.detail, 13, faint, 255, false, -1, G.w - textX - 16);
+        label(textX, labelY + (wide ? 26 : 24), r.detail, wide ? 14 : 13, faint, 255, false, -1,
+              std::max(120, right - textX - 8));
       endLayer();
     }
     place(layer.image, G.x, y);

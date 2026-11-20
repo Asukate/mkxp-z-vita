@@ -29,10 +29,33 @@ void UI::setView(int view, bool remember) {
   home.details = false;
   home.shotFocus = home.viewing = -1;
   home.position = home.target;
+  home.gridVelocity = 0;
+  home.gridLift = 1.0;
+  home.gridLiftFor = home.target;
+  followList();
+  followGrid();
   if (remember) {
     lastView = view;
     savePreferences();
   }
+}
+int UI::gridMaxScroll(int count) const {
+  int visibleH = hintsY - gridTop;
+  int rows = count / gridCols + 1;
+  return std::max(0, rows * gridRowH - visibleH + 16);
+}
+void UI::followGrid() {
+  if (!home.grid())
+    return;
+  int count = int(homeList().size());
+  int row = home.target / gridCols;
+  int topY = row * gridRowH;
+  int visibleH = hintsY - gridTop;
+  if (topY < gridScroll)
+    gridScroll = topY;
+  else if (topY + gridRowH > gridScroll + visibleH)
+    gridScroll = topY + gridRowH - visibleH;
+  gridScroll = std::max(0, std::min(gridScroll, gridMaxScroll(count)));
 }
 void UI::followList() {
   if (!home.list())
@@ -45,10 +68,19 @@ void UI::followList() {
   listScroll = std::max(0, std::min(listScroll, (total - listRows) * listRowH));
 }
 namespace {
-// Runs followList when the input handler it guards returns, however it does.
+// Runs followList/followGrid when the input handler it guards returns.
+// Grid only scrolls when the selection actually moved, so touch scrolling stays put.
 struct FollowList {
   UI &ui;
-  ~FollowList() { ui.followList(); }
+  int beforeTarget;
+  explicit FollowList(UI &u) : ui(u), beforeTarget(u.home.target) {}
+  ~FollowList() {
+    ui.followList();
+    if (ui.home.target != beforeTarget) {
+      ui.home.gridVelocity = 0;
+      ui.followGrid();
+    }
+  }
 };
 } // namespace
 
@@ -425,6 +457,8 @@ void UI::filterActivate(int row) {
     if (entryKey(model.list[list[i]]) == keep)
       home.target = int(i);
   home.position = home.target;
+  home.gridVelocity = 0;
+  followGrid();
 }
 
 namespace {
@@ -538,18 +572,19 @@ void UI::homeAction(Button b) {
     }
     return;
   }
-  // A screenshot full screen: Left and Right page, anything else closes it.
+  // A screenshot full screen: Left/Right or L/R page, anything else closes it.
   if (home.viewing >= 0) {
-    if (b == Button::Left || b == Button::Right) {
+    if (b == Button::Left || b == Button::Right || b == Button::L || b == Button::R) {
       int n = std::max(1, shotsShown);
-      home.viewing = (home.viewing + (b == Button::Left ? n - 1 : 1)) % n;
+      bool prev = b == Button::Left || b == Button::L;
+      home.viewing = (home.viewing + (prev ? n - 1 : 1)) % n;
       home.shotFocus = home.viewing;
     } else if (b == Button::Circle || b == Button::Cross || b == Button::Square)
       home.viewing = -1;
     return;
   }
   // The details panel's screenshot row: Down goes to it, Up leaves it.
-  if (home.details && home.zone == Home::Shelf && home.view == Home::Carousel) {
+  if (home.details && home.zone == Home::Shelf && !home.list()) {
     if (home.shotFocus >= 0) {
       int n = shotsShown;
       if (n <= 0)
@@ -616,7 +651,8 @@ void UI::homeAction(Button b) {
 
   // Shelf. In the list Up and Down go a row, Left and Right a page.
   bool carousel = home.view == Home::Carousel;
-  int cols = home.grid() ? gridCols : 1;
+  bool hasDetails = !home.list();
+  int cols = home.grid() && !home.details ? gridCols : 1;
   int sideStep = home.list() ? listRows : 1;
   switch (b) {
   case Button::Left:
@@ -626,11 +662,11 @@ void UI::homeAction(Button b) {
     home.target = std::min(count, home.target + sideStep);
     break;
   case Button::Down:
-    if (!carousel)
+    if (!carousel && !home.details)
       home.target = std::min(count, home.target + cols);
     break;
   case Button::Up:
-    if (!carousel && home.target >= cols)
+    if (!carousel && !home.details && home.target >= cols)
       home.target -= cols;
     else if (!home.details) {
       home.zone = Home::Toolbar;
@@ -638,16 +674,15 @@ void UI::homeAction(Button b) {
     }
     break;
   case Button::Cross:
-    // In the carousel the first press shows the game's details, the second
-    // plays it, as tapping does. The grid and the list have no details and
-    // a collection has none to show: those open at once.
-    if (carousel && home.target < count && !home.details && model.list[list[home.target]].kind != Kind::Folder)
+    // In carousel and grid the first press shows the game's details, the second
+    // plays it, as tapping does. The list and collections open at once.
+    if (hasDetails && home.target < count && !home.details && model.list[list[home.target]].kind != Kind::Folder)
       home.details = true;
     else
       launchTarget();
     break;
   case Button::Square:
-    if (carousel && home.target < count)
+    if (hasDetails && home.target < count && model.list[list[home.target]].kind != Kind::Folder)
       home.details = !home.details;
     break;
   case Button::Triangle:
@@ -802,20 +837,7 @@ void UI::homeTap(int x, int y) {
       home.target = home.position = i;
     return;
   }
-  if (home.grid()) {
-    int col = (x - gridX) / (cardW + gridGapX), row = (y - gridTop + gridScroll) / (cardH + gridLabel + gridGapY);
-    if (x < gridX || col >= gridCols || y < gridTop)
-      return;
-    int i = row * gridCols + col;
-    if (i > count)
-      return;
-    if (i == home.target)
-      homeAction(Button::Cross);
-    else
-      home.target = home.position = i;
-    return;
-  }
-  if (home.details) {
+  if (home.details && !home.list()) {
     for (int i = 0; i < shotsShown && i < 4; ++i)
       if (inside(x, y, shotHit[i][0], shotHit[i][1], shotHit[i][2], shotHit[i][3])) {
         home.shotFocus = home.viewing = i;
@@ -829,6 +851,27 @@ void UI::homeTap(int x, int y) {
       homeAction(Button::Triangle);
       return;
     }
+    if (home.grid()) {
+      auto r = card(0, 0, 1.0, 0);
+      if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
+        homeAction(Button::Cross);
+      return;
+    }
+  }
+  if (home.grid()) {
+    int col = (x - gridX) / (cardW + gridGapX), row = (y - gridTop + gridScroll) / gridRowH;
+    if (x < gridX || col >= gridCols || y < barY + barH)
+      return;
+    if (row < 0)
+      return;
+    int i = row * gridCols + col;
+    if (i > count)
+      return;
+    if (i == home.target)
+      homeAction(Button::Cross);
+    else
+      home.target = home.position = i;
+    return;
   }
   // Cards, nearest first so the focused card wins overlaps.
   int best = -1;
@@ -860,15 +903,17 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
     home.pressed = true;
     home.dragging = false;
     home.pressX = home.lastX = x;
-    home.pressY = y;
+    home.pressY = home.lastY = y;
     home.dragFrom = home.position;
     home.velocity = 0;
+    home.gridVelocity = 0;
     home.lastMove = ms;
     return false;
   }
   if (!home.pressed)
     return false;
-  bool shelfDrag = home.panel == Home::NoPanel && home.viewing < 0 && home.pressY >= barY + barH && home.pressY < hintsY;
+  bool shelfDrag = home.panel == Home::NoPanel && home.viewing < 0 && !(home.grid() && home.details) &&
+                   home.pressY >= barY + barH && home.pressY < hintsY;
   if (state == 1) {
     bool carousel = home.view == Home::Carousel;
     if (!home.dragging && shelfDrag && std::abs(x - home.pressX) > 10 && carousel)
@@ -879,12 +924,16 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
       return false;
     double dt = std::max(1u, ms - home.lastMove) / 1000.0;
     if (!carousel) {
-      // The list stops at its last row; the view clamps the grid.
+      int dy = y - home.lastY;
       int &scroll = home.list() ? listScroll : gridScroll;
-      scroll = std::max(0, scroll - (y - home.pressY));
-      if (home.list())
-        scroll = std::min(scroll, std::max(0, (count + 1 - listRows) * listRowH));
-      home.pressY = y;
+      int maxS = home.list() ? std::max(0, (count + 1 - listRows) * listRowH) : gridMaxScroll(count);
+      scroll = std::max(0, std::min(maxS, scroll - dy));
+      if (home.grid()) {
+        double v = -double(dy) / dt;
+        home.gridVelocity = home.gridVelocity * 0.4 + v * 0.6;
+      }
+      home.lastY = y;
+      home.lastMove = ms;
       return true;
     }
     double p = home.dragFrom - double(x - home.pressX) / cardGap;
@@ -914,6 +963,9 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
       if (home.target != int(std::lround(home.position)) && home.target != before)
         emit(Sound::Move);
       home.details = home.details && home.target < count;
+    } else if (home.grid()) {
+      if (std::fabs(home.gridVelocity) < 40.0 || ms - home.lastMove > 120)
+        home.gridVelocity = 0;
     }
     return true;
   }
@@ -930,7 +982,8 @@ bool UI::animating() const {
     return false;
   return home.dragging || std::fabs(home.target - home.position) > 0.002 ||
          std::fabs((home.details ? 1.0 : 0.0) - home.detailsAmount) > 0.002 ||
-         std::fabs((home.panel == Home::Filter ? 1.0 : 0.0) - home.sideAmount) > 0.002;
+         std::fabs((home.panel == Home::Filter ? 1.0 : 0.0) - home.sideAmount) > 0.002 ||
+         (home.grid() && (std::fabs(home.gridVelocity) > 8.0 || home.gridLift < 0.995 || home.gridLiftFor != home.target));
 }
 
 void UI::tick(double seconds) {
@@ -957,5 +1010,23 @@ void UI::tick(double seconds) {
   home.sideAmount += (side - home.sideAmount) * (1 - std::exp(-seconds * 16.0));
   if (std::fabs(side - home.sideAmount) < 0.002)
     home.sideAmount = side;
+  if (home.grid()) {
+    if (home.gridLiftFor != home.target) {
+      home.gridLiftFor = home.target;
+      home.gridLift = 0.0;
+    }
+    if (home.gridLift < 1.0) {
+      home.gridLift += (1.0 - home.gridLift) * (1 - std::exp(-seconds * 18.0));
+      if (home.gridLift > 0.995)
+        home.gridLift = 1.0;
+    }
+    if (std::fabs(home.gridVelocity) > 0.1) {
+      int maxS = gridMaxScroll(int(homeList().size()));
+      gridScroll = std::max(0, std::min(maxS, int(std::lround(gridScroll + home.gridVelocity * seconds))));
+      home.gridVelocity *= std::exp(-seconds * 7.0);
+      if (gridScroll == 0 || gridScroll == maxS || std::fabs(home.gridVelocity) < 8.0)
+        home.gridVelocity = 0;
+    }
+  }
 }
 } // namespace hardrpg

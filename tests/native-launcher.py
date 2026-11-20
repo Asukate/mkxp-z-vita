@@ -546,8 +546,12 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual((state['shotsShown'], state['homeShotFocus'], state['homeViewing']), (3, 0, -1))
         state = self.ui('cross,draw,down,right,cross')
         self.assertEqual((state['homeShotFocus'], state['homeViewing']), (1, 1))
-        # Left and Right page and wrap; Circle closes and keeps the details.
+        # Left/Right and L/R page and wrap; Circle closes and keeps the details.
         state = self.ui('cross,draw,down,cross,left')
+        self.assertEqual(state['homeViewing'], 2)
+        state = self.ui('cross,draw,down,cross,r')
+        self.assertEqual(state['homeViewing'], 1)
+        state = self.ui('cross,draw,down,cross,l')
         self.assertEqual(state['homeViewing'], 2)
         state = self.ui('cross,draw,down,cross,circle')
         self.assertEqual(state['homeViewing'], -1)
@@ -591,6 +595,18 @@ class NativeLauncher(unittest.TestCase):
         state=self.ui('up,left,left,left,cross,down,down,down,right')
         self.assertTrue(state['homeGrid'])
         self.assertEqual(state['homeTarget'],11)
+        # Touch dragging the grid scrolls down and stays there after redraw (no snap-back).
+        state=self.ui('vdrag:480:420:180,draw,draw')
+        self.assertTrue(state['homeGrid'])
+        self.assertGreater(state['gridScroll'],100)
+        # In the grid, Cross opens the same extended details panel as the carousel.
+        state=self.ui('cross')
+        self.assertTrue(state['homeDetails'])
+        self.assertFalse(state['launchRequested'])
+        state=self.ui('cross,cross')
+        self.assertTrue(state['launchRequested'])
+        state=self.ui('cross,circle')
+        self.assertFalse(state['homeDetails'])
         # The view is kept between starts; the button goes on to the list,
         # then back to the carousel.
         self.assertEqual(self.ui('touch:39:91')['homeView'], 2)
@@ -2120,7 +2136,7 @@ class NativeLauncher(unittest.TestCase):
         self.assertFalse(state['automaticUpdates'])
         self.assertFalse(self.ui()['automaticUpdates'])
         # The gear, then the sixth row twice, then the switch on that page.
-        state=self.ui('touch:925:31,touch:220:362,touch:220:362,touch:220:160')
+        state=self.ui('touch:925:31,touch:220:390,touch:220:390,touch:220:160')
         self.assertEqual(state['page'],7)
         self.assertTrue(state['automaticUpdates'])
         # The brand in the top bar goes home.

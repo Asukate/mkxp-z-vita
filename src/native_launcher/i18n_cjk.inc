@@ -543,6 +543,7 @@ const CjkText cjkTable[] = {
     {"Plays the highlighted game's own title music, read from its files. Nothing is downloaded.", "選んでいるゲームのタイトル曲を、そのファイルから再生します。何もダウンロードしません。", "播放选中游戏自己的标题音乐，从它的文件中读取。不会下载任何东西。"},
     {"Each game's track is found once and kept, so it starts at once next time. Put a hardrpg-theme.ogg (or .mp3 or .wav) in a game's folder to choose its music. MIDI titles stay silent.", "各ゲームの曲は一度見つけると記憶され、次からすぐ流れます。ゲームのフォルダに hardrpg-theme.ogg（.mp3 か .wav も可）を置くと曲を選べます。MIDIのタイトル曲は鳴りません。", "每个游戏的曲目只查找一次并保存，下次会立即播放。在游戏文件夹中放入 hardrpg-theme.ogg（或 .mp3、.wav）可以指定音乐。MIDI 标题音乐不会播放。"},
     {"Left and Right: more screenshots", "左右：他のスクリーンショット", "左右：更多截图"},
+    {"More screenshots", "他のスクリーンショット", "更多截图"},
     {"Up: game details", "上：ゲーム情報", "上：游戏详情"},
     {"Down: screenshots", "下：スクリーンショット", "下：截图"},
     {"D-pad: move around the picture", "十字キー：画像を移動", "方向键：移动图片"},

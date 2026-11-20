@@ -658,8 +658,9 @@ int main(int argc, char **argv) {
         else
           ui.action(button(action));
       }
-    while (ui.service()) {
-    }
+    for (int i = 0; i < 400 && (ui.rtpPending >= 0 || ui.rtpCheck || ui.service()); ++i)
+      if (!ui.service())
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     for (int frame = 0; frame < 600 && ui.animating(); ++frame)
       ui.tick(1 / 60.0);
     {
@@ -701,6 +702,7 @@ int main(int argc, char **argv) {
       o["homePanel"] = int(ui.home.panel);
       o["homeGrid"] = ui.home.grid();
       o["homeView"] = ui.home.view;
+      o["gridScroll"] = ui.gridScroll;
       o["startView"] = ui.startView;
       o["listScroll"] = ui.listScroll;
       o["homeDetails"] = ui.home.details;

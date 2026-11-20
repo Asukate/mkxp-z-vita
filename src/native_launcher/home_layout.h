@@ -18,7 +18,8 @@ constexpr int shelfX = 480, shelfY = 284, detailsShelfX = 182, detailsShelfY = 2
 constexpr double focusScale = 1.4, detailsScale = 1.25;
 constexpr int captionY = 457;
 // Grid.
-constexpr int gridCols = 5, gridGapX = 22, gridGapY = 16, gridTop = 132, gridLabel = 22;
+constexpr int gridCols = 5, gridGapX = 22, gridGapY = 18, gridTop = 150, gridLabel = 22;
+constexpr int gridRowH = cardH + gridLabel + gridGapY;
 constexpr int gridX = (960 - (gridCols * cardW + (gridCols - 1) * gridGapX)) / 2;
 // List: one row per game, names only.
 constexpr int listX = 36, listW = 960 - 2 * listX, listTop = 126, listRowH = 37, listRows = 10;
@@ -44,7 +45,8 @@ constexpr int rtpRowH = 54, browserRowH = 40, browserRows = 8;
 struct SheetGeom {
   int x, w, top, rowH;
 };
-constexpr int wideSheetX = 16, wideSheetW = 928, wideSheetTop = 132, wideSheetRowH = 48;
+constexpr int wideSheetX = 16, wideSheetW = 928, wideSheetTitleY = 64, wideSheetTop = 132, wideSheetRowH = 48;
+constexpr int wideRtpRowH = 56, keysRowsShown = 5;
 // The menu over a running game (its first page): six taller rows; its help
 // is one line just above the hint bar.
 constexpr int inGameMenuRowH = 56, inGameMenuFooterY = hintsY - 26;

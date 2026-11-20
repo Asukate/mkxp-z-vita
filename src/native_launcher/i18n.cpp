@@ -899,6 +899,7 @@ const Text table[] = {
      "(ou .mp3 ou .wav) na pasta de um jogo para escolher a música. Títulos em MIDI ficam em silêncio."},
     // Details panel screenshots.
     {"Left and Right: more screenshots", "Izquierda y derecha: más capturas", "Esquerda e direita: mais capturas"},
+    {"More screenshots", "Más capturas", "Mais capturas"},
     {"Up: game details", "Arriba: detalles del juego", "Cima: detalhes do jogo"},
     {"Down: screenshots", "Abajo: capturas", "Baixo: capturas"},
     // The controls picture.

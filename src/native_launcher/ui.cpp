@@ -380,8 +380,9 @@ void UI::scroll(int rows) {
                                         : 3;
     setting = std::max(0, std::min(setting + rows, std::max(0, count - 1)));
     settingFirst = std::max(0, std::min(settingFirst, setting));
-    if (setting >= settingFirst + 7)
-      settingFirst = setting - 6;
+    int shown = page == Page::Keys ? homeLayout::keysRowsShown : homeLayout::sheetRows;
+    if (setting >= settingFirst + shown)
+      settingFirst = setting - shown + 1;
   }
 }
 void UI::touch(int x, int y) {
@@ -462,7 +463,7 @@ void UI::sheetTouch(int x, int y) {
     return;
   }
   // The row under the finger, or -1.
-  const auto G = sheetGeom(inGame);
+  const auto G = sheetGeom(true);
   auto rowAt = [&](int rowH, int visible) {
     if (x < G.x || x >= G.x + G.w || y < G.top)
       return -1;
@@ -526,14 +527,14 @@ void UI::sheetTouch(int x, int y) {
     return;
   if (savesPage()) {
     bool tall = page != Page::SaveConfirm;
-    int r = rowAt(tall ? rtpRowH : sheetRowH, tall ? 5 : sheetRows);
+    int r = rowAt(tall ? wideRtpRowH : sheetRowH, tall ? 5 : sheetRows);
     if (r >= 0)
       pickRow(setting, settingFirst + r, saveRowsCount());
     return;
   }
-  if (gameOptions && inGame && page == Page::Game) {
-    // The menu over a game: its taller rows.
-    const int rowH = inGameMenuRowHeight(optionRows());
+  if (gameOptions && ((inGame && page == Page::Game) || page == Page::Rescue)) {
+    // The pause menu and launcher resume menu: taller 56 px rows.
+    const int rowH = page == Page::Rescue ? inGameMenuRowH : inGameMenuRowHeight(optionRows());
     for (int i = 0; i < optionRows(); ++i) {
       int tx = G.x, ty = G.top + i * rowH, tw = G.w, th = rowH - 6;
       if (inside(x, y, tx, ty, tw, th)) {
@@ -544,7 +545,8 @@ void UI::sheetTouch(int x, int y) {
     return;
   }
   bool rtp = page == Page::Rtp;
-  int r = rowAt(rtp ? rtpRowH : sheetRowH, rtp ? rtpPackCount : sheetRows);
+  int visible = rtp ? rtpPackCount : page == Page::Keys ? keysRowsShown : sheetRows;
+  int r = rowAt(rtp ? wideRtpRowH : sheetRowH, visible);
   if (r < 0)
     return;
   if (gameOptions) {
@@ -2031,12 +2033,12 @@ void UI::action(Button b) {
              page == Page::Errors    ? errors.size()
              : page == Page::Folders ? 1 + gameFolders.size()
              : page == Page::Home    ? settingsRows()
-               : page == Page::Keys    ? keysRows
+             : page == Page::Keys    ? keysRows
              : page == Page::Sound   ? soundRows
              : page == Page::Metrics ? metricsRows()
              : page == Page::Display ? 4
                                      : 3,
-             7, step);
+             page == Page::Keys ? homeLayout::keysRowsShown : homeLayout::sheetRows, step);
       message.clear();
       return;
     }

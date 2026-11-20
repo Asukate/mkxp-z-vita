@@ -531,7 +531,7 @@ void View::buildHome(const UI &u) {
   int target = std::min(u.home.target, count);
   const Entry *current = target < count ? &u.model.list[list[target]] : nullptr;
   bool settled = std::fabs(u.home.position - u.home.target) < 0.05 && !u.home.dragging;
-  double details = u.home.view != Home::Carousel ? 0 : u.home.detailsAmount, side = u.home.sideAmount;
+  double details = u.home.list() ? 0 : u.home.detailsAmount, side = u.home.sideAmount;
   auto quad = [&](const Image *img, double x, double y, double w, double h, double alpha = 1, double bright = 1, double radius = 0) {
     Quad q;
     q.image = img;
@@ -557,7 +557,8 @@ void View::buildHome(const UI &u) {
   // art covers the whole screen.
   size_t inkAt = scene.size();
   solid(ink, 0, 0, width, height, 1);
-  std::string wantHero = u.home.view != Home::Carousel || !current ? "" : u.entryKey(*current);
+  bool showHero = u.home.view == Home::Carousel || (u.home.grid() && u.home.details);
+  std::string wantHero = !showHero || !current ? "" : u.entryKey(*current);
   if (!simple && settled && wantHero != heroKey) {
     const Image *next = nullptr;
     bool ready = true;
@@ -591,9 +592,11 @@ void View::buildHome(const UI &u) {
     quad(&glow, 0, 0, width, height * 0.75, 1 - (heroShown ? fade : 0));
   if (heroShown)
     quad(heroShown, 0, 0, width, height, fade);
-  if (u.home.grid())
-    solid(ink, 0, 0, width, height, 0.82);
-  else if (simple) {
+  if (u.home.grid()) {
+    solid(ink, 0, 0, width, height, 0.82 * (1 - details));
+    if (details > 0.004)
+      quad(&scrimH, 0, 0, width, height, details);
+  } else if (simple) {
     // Nothing: the plain colour and the glow are the whole background.
   } else {
     quad(&scrimV, 0, 0, width, height, 1 - details);
@@ -671,21 +674,48 @@ void View::buildHome(const UI &u) {
       layerQuad(captionLayer, cx - captionLayer.image.width / 2.0, captionY, fadeOut);
     }
   } else {
-    // Grid: five columns, the selected card lifted, names underneath.
-    int rowH = cardH + gridLabel + gridGapY, visibleH = hintsY - gridTop;
-    int want = (target / gridCols) * rowH - visibleH / 2 + rowH / 2;
-    int maxScroll = std::max(0, (count / gridCols + 1) * rowH - visibleH);
-    if (!u.home.pressed)
-      u.gridScroll = std::max(0, std::min(want, maxScroll));
-    const int clipTop = barY + barH + 4, clipBottom = hintsY - 6;
-    for (int i = 0; i <= count; ++i) {
-      int x = gridX + (i % gridCols) * (cardW + gridGapX), y = gridTop + (i / gridCols) * rowH - u.gridScroll;
-      if (y + cardH + gridLabel < clipTop || y > clipBottom)
-        continue;
-      bool sel = i == target;
-      double grow = sel ? 1.06 : 1.0;
-      double w = cardW * grow, h = cardH * grow, gx = x - (w - cardW) / 2, gy = y - (h - cardH) / 2;
+    // Grid: five columns; unselected cards sit back, the selected card rises
+    // above its neighbours with deep 3D shadows and a luminous highlight rim.
+    int maxScroll = u.gridMaxScroll(count);
+    u.gridScroll = std::max(0, std::min(u.gridScroll, maxScroll));
+    const int clipTop = barY + barH, clipBottom = hintsY - 4;
+    const double gridAlpha = 1.0 - details;
+    auto drawCard = [&](int i, bool sel) {
+      int x = gridX + (i % gridCols) * (cardW + gridGapX), y = gridTop + (i / gridCols) * gridRowH - u.gridScroll;
+      if (!sel && (gridAlpha <= 0.004 || y + cardH + gridLabel < clipTop || y > clipBottom))
+        return;
+      if (sel && details <= 0.004 && (y + cardH + gridLabel + 24 < clipTop || y - 36 > clipBottom))
+        return;
+      double lift = sel ? u.home.gridLift : 0.0;
+      double grow = 1.0 + 0.15 * lift;
+      double liftY = 10.0 * lift;
+      double w = cardW * grow, h = cardH * grow;
+      double gx = x - (w - cardW) / 2.0, gy = y - (h - cardH) / 2.0 - liftY;
+      double cardAlpha = sel ? 1.0 : gridAlpha;
+      if (sel && details > 0.001) {
+        auto dr = card(0, 0, 1.0, 0);
+        gx += (dr.x - gx) * details;
+        gy += (dr.y - gy) * details;
+        w += (dr.w - w) * details;
+        h += (dr.h - h) * details;
+      }
       size_t first = scene.size();
+      if (sel) {
+        // Layered 3D cast shadows expanding downward as the card lifts off the grid.
+        double sFade = lift * (1.0 - details);
+        if (sFade > 0.004) {
+          solid({0, 0, 0}, gx - 12 * lift, gy + 18 * lift, w + 24 * lift, h + 14 * lift, 0.28 * sFade, 18);
+          solid({0, 0, 0}, gx - 5 * lift, gy + 13 * lift, w + 10 * lift, h + 8 * lift, 0.44 * sFade, 13);
+          solid({0, 0, 0}, gx + 2, gy + 8 * lift, w - 4, h + 4 * lift, 0.36 * sFade, 10);
+          // Luminous ruby elevation glow + crisp highlight frame.
+          solid(ruby, gx - 5, gy - 5, w + 10, h + 10, 0.26 * sFade, 13);
+          solid(rubyHi, gx - 2.5, gy - 2.5, w + 5, h + 5, 0.94 * sFade, 10);
+        }
+        if (details > 0.004)
+          solid({0, 0, 0}, gx + 4, gy + h - 4, w - 8, 10, 0.28 * details, 5);
+      } else {
+        solid({0, 0, 0}, gx + 3, gy + h - 3, w - 6, 8, 0.24 * cardAlpha, 5);
+      }
       if (i == count) {
         if (beginLayer(addLayer, std::string("add|") + languageCode(language()), 216, 120)) {
           rect(81, 0, 54, 54, white, 26, 27);
@@ -693,40 +723,61 @@ void View::buildHome(const UI &u) {
           label(108, 70, tr("Add games"), 17, {207, 207, 211}, 255, false, 0, 210);
           endLayer();
         }
-        solid(white, gx, gy, w, h, 0.05, 8);
-        quad(&addLayer.image, gx + (w - 216 * w / 216) / 2, gy + h / 2 - 40, w, 120 * w / 216);
+        solid(white, gx, gy, w, h, (sel ? 0.11 : 0.05) * cardAlpha, 8);
+        double k = w / 216.0;
+        quad(&addLayer.image, gx, gy + h / 2 - 40 * k, 216 * k, 120 * k, cardAlpha);
       } else {
         auto &e = u.model.list[list[i]];
         auto &a = artFor(u, e, std::abs(i - target));
         if (a.cover.empty())
-          solid({28, 28, 31}, gx, gy, w, h, 1, 8);
+          solid({28, 28, 31}, gx, gy, w, h, cardAlpha, 8);
         else
-          quad(&a.cover, gx, gy, w, h, 1, sel ? 1 : 0.85, 8);
+          quad(&a.cover, gx, gy, w, h, cardAlpha, sel ? 1.0 : 0.72, 8);
+        if (sel && lift * (1.0 - details) > 0.01)
+          solid(white, gx + 6, gy + 1, w - 12, 2, 0.34 * lift * (1.0 - details), 1);
         // Each name is a small cached label: selected (white, ruby rule) or not.
-        bool fav = u.favourites.count(u.entryKey(e));
-        std::string key = e.name + "|" + std::to_string(fav);
-        if (a.labelKey != key) {
-          a.labelKey = key;
-          for (int s = 0; s < 2; ++s) {
-            Layer l;
-            beginLayer(l, key, cardW, gridLabel + 6);
-            if (fav)
-              blitScaled(icon("star-24:ruby"), 0, 3, 13, 13);
-            label(fav ? 16 : 0, 2, e.name, 13, s ? white : muted, 255, false, -1, cardW - (fav ? 16 : 0));
-            if (s)
-              rect(0, gridLabel + 2, 30, 2, ruby, 255);
-            endLayer();
-            (s ? a.labelSelected : a.label) = std::move(l.image);
+        if (gridAlpha > 0.01) {
+          bool fav = u.favourites.count(u.entryKey(e));
+          std::string key = e.name + "|" + std::to_string(fav);
+          if (a.labelKey != key) {
+            a.labelKey = key;
+            for (int s = 0; s < 2; ++s) {
+              Layer l;
+              beginLayer(l, key, cardW, gridLabel + 6);
+              if (fav)
+                blitScaled(icon("star-24:ruby"), 0, 3, 13, 13);
+              label(fav ? 16 : 0, 2, e.name, 13, s ? white : muted, 255, s != 0, -1, cardW - (fav ? 16 : 0));
+              if (s)
+                rect(0, gridLabel + 2, 34, 2, ruby, 255);
+              endLayer();
+              (s ? a.labelSelected : a.label) = std::move(l.image);
+            }
           }
+          const Image &lbl = sel ? a.labelSelected : a.label;
+          double ly = sel ? gy + h + 5 : double(y + cardH + 4);
+          double lx = sel ? gx + (w - lbl.width) / 2.0 : double(x);
+          quad(&lbl, lx, ly, lbl.width, lbl.height, gridAlpha);
         }
-        const Image &lbl = sel ? a.labelSelected : a.label;
-        quad(&lbl, x, y + cardH + 4, lbl.width, lbl.height);
       }
-      for (size_t k = first; k < scene.size(); ++k) {
-        scene[k].clipTop = clipTop;
-        scene[k].clipBottom = clipBottom;
-      }
+      if (!(sel && details > 0.01))
+        for (size_t k = first; k < scene.size(); ++k) {
+          scene[k].clipTop = clipTop;
+          scene[k].clipBottom = clipBottom;
+        }
+    };
+    for (int i = 0; i <= count; ++i)
+      if (i != target)
+        drawCard(i, false);
+    if (maxScroll > 0 && gridAlpha > 0.01) {
+      double trackH = clipBottom - clipTop - 16;
+      double totalH = (count / gridCols + 1) * gridRowH + 16;
+      double thumbH = std::max(28.0, trackH * (hintsY - gridTop) / std::max(1.0, totalH));
+      double thumbY = clipTop + 8 + (trackH - thumbH) * u.gridScroll / std::max(1, maxScroll);
+      solid(white, width - 14, clipTop + 8, 3, trackH, 0.09 * gridAlpha, 1);
+      solid(white, width - 14, thumbY, 3, thumbH, 0.45 * gridAlpha, 1);
     }
+    if (target >= 0 && target <= count)
+      drawCard(target, true);
   }
 
   // Details panel, sliding in from the right over the darkened art.
@@ -1342,7 +1393,7 @@ void View::homeHints(const UI &u, const std::vector<size_t> &list) {
   } else if (u.home.viewing >= 0) {
     left = {{"btn-circle-26", tr("Close"), Button::Circle}};
     if (u.shotsShown > 1)
-      right = {{nullptr, tr("Left and Right: more screenshots"), Button::None}};
+      right = {{"L R", tr("More screenshots"), Button::R}};
     hintBar(u, left, right, std::to_string(u.home.viewing + 1) + "|" + std::to_string(std::max(1, u.shotsShown)));
     return;
   } else if (u.home.details && u.home.shotFocus >= 0) {
@@ -1352,7 +1403,7 @@ void View::homeHints(const UI &u, const std::vector<size_t> &list) {
     left = {{"btn-cross-26", tr("Play"), Button::Cross}, {"btn-circle-26", tr("Back"), Button::Circle}, {"btn-triangle-26", tr("Options"), Button::Triangle}};
     right = {{nullptr, tr(u.shotsShown ? "Down: screenshots" : "Other games"), Button::None}};
   } else {
-    left = {{"btn-cross-26", tr(add ? "Add games" : u.home.view != Home::Carousel ? "Play" : "Details"), Button::Cross}};
+    left = {{"btn-cross-26", tr(add ? "Add games" : u.home.list() ? "Play" : "Details"), Button::Cross}};
     if (!add)
       left.push_back({"btn-triangle-26", tr("Options"), Button::Triangle});
     right = {{"L R", tr("Engine"), Button::R}, {"SELECT", tr("Search"), Button::Select}};

@@ -80,9 +80,12 @@ struct Home {
   int toolbarFocus = 0, topFocus = 0;
   // Front touch: a press becomes a drag after 10 px; flings keep momentum.
   bool pressed = false, dragging = false;
-  int pressX = 0, pressY = 0, lastX = 0;
-  double dragFrom = 0, velocity = 0;
+  int pressX = 0, pressY = 0, lastX = 0, lastY = 0;
+  double dragFrom = 0, velocity = 0, gridVelocity = 0;
   uint32_t lastMove = 0;
+  // Grid selection elevation: rises from 0 to 1 when the focused card changes.
+  double gridLift = 1.0;
+  int gridLiftFor = 0;
 };
 // A control mapping's name in the launcher's language.
 inline std::string controlText(int code) {
@@ -230,8 +233,10 @@ public:
   void setView(int view, bool remember);
   // The settings row's choices, in order: last used, then each view.
   void changeStartView(int step);
-  // Scrolls the list so its selection shows, after any input that moved it.
+  // Scrolls the list or grid so its selection shows, after input that moved it.
   void followList();
+  void followGrid();
+  int gridMaxScroll(int count) const;
   // Engine tab boxes, left edge and width, as last drawn.
   // Drawn engine tabs: left edge, width and engine, for touch.
   struct TabHit {

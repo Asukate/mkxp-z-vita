@@ -522,7 +522,7 @@ public:
         touchX = x;
         touchY = dragY = y;
         dragged = false;
-      } else if (touchX >= 184 && std::abs(y - dragY) >= 24) {
+      } else if (std::abs(y - dragY) >= 24) {
         dragged = true;
         ui.scroll((dragY - y) / 24);
         dragY = y;
