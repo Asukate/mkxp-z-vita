@@ -52,6 +52,8 @@
 /* Forget the game's image cache references (never disposes); Ruby
  * safe points only. Returns the number of entries released. */
 long vitaReleaseGameImageCache();
+bool vitaOutOfMemory(const Exception &error);
+void vitaReclaimImageMemory(const char *label);
 #endif
 
 #ifdef RUBY_API_VERSION_MAJOR

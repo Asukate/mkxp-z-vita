@@ -27,6 +27,7 @@
 #include "binding-types.h"
 #include "exception.h"
 #ifdef __vita__
+#include "vita_error_report.h"
 #include "vita_startup_timer.h"
 #endif
 
@@ -1216,6 +1217,53 @@ RB_METHOD_GUARD(graphicsTransition)
     
     TransitionArgs args = {duration, filename, vague};
     
+#ifdef __vita__
+    bool retry = false;
+    try {
+#if RAPI_MAJOR >= 2
+        drop_gvl_guard([](void *args) -> void* {
+            TransitionArgs &a = *((TransitionArgs*)args);
+            GFX_GUARD_EXC( shState->graphics().transition(a.duration,
+                                                          a.filename,
+                                                          a.vague
+                                                         ); );
+            return 0;
+        }, &args, 0, 0);
+#else
+        GFX_GUARD_EXC( shState->graphics().transition(duration, filename, vague); )
+#endif
+    } catch (const Exception &error) {
+        if (!filename[0] || !vitaOutOfMemory(error))
+            throw;
+        retry = true;
+    }
+    if (retry) {
+        vitaErrorImageStart();
+        vitaErrorMemoryEvent("before-gc-retry", filename);
+        vitaReclaimImageMemory(filename);
+        rb_get_args(argc, argv, "|izi", &duration, &filename, &vague RB_ARG_END);
+        args = {duration, filename, vague};
+        vitaErrorMemoryEvent("after-gc-before-retry", filename);
+        try {
+#if RAPI_MAJOR >= 2
+            drop_gvl_guard([](void *args) -> void* {
+                TransitionArgs &a = *((TransitionArgs*)args);
+                GFX_GUARD_EXC( shState->graphics().transition(a.duration,
+                                                              a.filename,
+                                                              a.vague
+                                                             ); );
+                return 0;
+            }, &args, 0, 0);
+#else
+            GFX_GUARD_EXC( shState->graphics().transition(duration, filename, vague); )
+#endif
+        } catch (const Exception &) {
+            vitaErrorMemoryEvent("retry-failed", filename);
+            throw;
+        }
+        vitaErrorMemoryEvent("retry-succeeded", filename);
+    }
+#else
 #if RAPI_MAJOR >= 2
     drop_gvl_guard([](void *args) -> void* {
         TransitionArgs &a = *((TransitionArgs*)args);
@@ -1227,6 +1275,7 @@ RB_METHOD_GUARD(graphicsTransition)
     }, &args, 0, 0);
 #else
     GFX_GUARD_EXC( shState->graphics().transition(duration, filename, vague); )
+#endif
 #endif
     
     return Qnil;

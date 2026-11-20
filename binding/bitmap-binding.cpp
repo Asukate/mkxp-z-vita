@@ -32,6 +32,7 @@
 #include "texpool.h"
 #endif
 #include <cmath>
+#include <cctype>
 #include <vector>
 
 #if RAPI_FULL > 187
@@ -47,10 +48,23 @@ static const char *objAsStringPtr(VALUE obj) {
 
 #ifdef __vita__
 // The image decoder reports SDLError; texture storage reports MKXPError.
-static bool vitaOutOfMemory(const Exception &error) {
-    return (error.type == Exception::SDLError ||
-            error.type == Exception::MKXPError) &&
-           error.msg.find(": out of memory ") != std::string::npos;
+bool vitaOutOfMemory(const Exception &error) {
+    if (error.type != Exception::SDLError &&
+        error.type != Exception::MKXPError)
+        return false;
+    static const char needle[] = "out of memory";
+    const std::string &msg = error.msg;
+    if (msg.size() < sizeof(needle) - 1)
+        return false;
+    for (size_t i = 0; i + sizeof(needle) - 1 <= msg.size(); ++i) {
+        size_t j = 0;
+        while (j < sizeof(needle) - 1 &&
+               std::tolower(static_cast<unsigned char>(msg[i + j])) == needle[j])
+            ++j;
+        if (j == sizeof(needle) - 1)
+            return true;
+    }
+    return false;
 }
 
 // Cached textures have no active bitmap owner, bitmaps a game dropped
@@ -58,7 +72,7 @@ static bool vitaOutOfMemory(const Exception &error) {
 // game's own image cache holds everything it ever loaded. Reclaim all
 // three. Collect with the VM lock held, outside the graphics lock and catch;
 // the explicit Ruby method also collects when a game disables auto GC.
-static void vitaReclaimImageMemory(const char *label) {
+void vitaReclaimImageMemory(const char *label) {
     vitaErrorMemoryEvent("before-cache-reclaim", label);
     // Images freed here must not be kept for reuse (Bitmap "Reused file images").
     GFX_GUARD_EXC(Bitmap::suspendImageReuse(true); shState->texPool().clearCache(); Bitmap::reclaimMemory();)
@@ -1049,7 +1063,32 @@ RB_METHOD_GUARD(bitmapInitializeCopy) {
     Bitmap *orig = getPrivateData<Bitmap>(origObj);
     Bitmap *b = 0;
     
+#ifdef __vita__
+    bool retry = false;
+    try {
+        GFX_GUARD_EXC(b = new Bitmap(*orig);)
+    } catch (const Exception &error) {
+        if (!vitaOutOfMemory(error))
+            throw;
+        retry = true;
+    }
+    if (retry) {
+        vitaErrorImageStart();
+        vitaErrorMemoryEvent("before-gc-retry", "Bitmap#clone");
+        vitaReclaimImageMemory("Bitmap#clone");
+        orig = getPrivateData<Bitmap>(origObj);
+        vitaErrorMemoryEvent("after-gc-before-retry", "Bitmap#clone");
+        try {
+            GFX_GUARD_EXC(b = new Bitmap(*orig);)
+        } catch (const Exception &) {
+            vitaErrorMemoryEvent("retry-failed", "Bitmap#clone");
+            throw;
+        }
+        vitaErrorMemoryEvent("retry-succeeded", "Bitmap#clone");
+    }
+#else
     GFX_GUARD_EXC(b = new Bitmap(*orig););
+#endif
     
     bitmapInitProps(b, self);
     b->setFont(orig->getFont());

@@ -29,17 +29,32 @@
 
 namespace AssetPrefetch {
 namespace {
+#ifdef __vita__
+extern "C" uint32_t vitaPixelBlockBytes(void);
+// Keep decoded prefetch surfaces well under the 56 MB kernel pixel-block budget
+// so live CPU bitmaps, readbacks, and image decodes do not spill onto the newlib
+// C heap and fragment it.
+constexpr size_t imageBudget = 12u << 20, soundBudget = 16u << 20;
+constexpr size_t keepBudget = 8u << 20;
+constexpr size_t keepImageMax = 2u << 20;
+constexpr size_t requestBudget = 8u << 20;
+constexpr size_t vitaBlockCeiling = 32u << 20;
+inline bool blockBudgetHigh() { return vitaPixelBlockBytes() >= vitaBlockCeiling; }
+#else
 constexpr size_t imageBudget = 24u << 20, soundBudget = 16u << 20;
+constexpr size_t keepBudget = 24u << 20;
+constexpr size_t keepImageMax = 24u << 20;
+constexpr size_t requestBudget = 12u << 20;
+inline bool blockBudgetHigh() { return false; }
+#endif
 // Decoded copies of expensive images the game already loaded: games (and
 // their cache scripts) often dispose an image and load it again later.
 // RPG Maker VX Ace's own Window_Base#draw_face disposes the face sheet after
 // every draw, so status windows decode faces (about 20 ms each on the Vita)
 // on every redraw; those must be kept too.
-constexpr size_t keepBudget = 24u << 20;
 constexpr double keepMs = 8.0;
 // Files the game asked for ahead of use (request()): at most this much decoded
 // data waits, and what is not taken within requestLifeMs is let go.
-constexpr size_t requestBudget = 12u << 20;
 constexpr Uint32 requestLifeMs = 20000;
 constexpr size_t requestQueueMax = 64;
 constexpr size_t historyMax = 400;
@@ -459,7 +474,8 @@ void serveRequests(State &s) {
       e = s.requests.front();
       s.requests.pop_front();
       k = key(e.name);
-      if (readyLocked(s, e.kind, k) || s.requestedBytes >= requestBudget)
+      if (readyLocked(s, e.kind, k) || s.requestedBytes >= requestBudget ||
+          (e.kind == 'I' && blockBudgetHigh()))
         continue;
       s.busy = k;
     }
@@ -486,7 +502,8 @@ int runPlan(State &s) {
       bool serve = false;
       {
         Lock hold(s.lock);
-        if (s.stopping || !(e.kind == 'I' ? s.imageBytes >= imageBudget : s.soundBytes >= soundBudget))
+        if (s.stopping || s.released ||
+            !(e.kind == 'I' ? (s.imageBytes >= imageBudget || blockBudgetHigh()) : s.soundBytes >= soundBudget))
           break;
         if (s.requests.empty())
           SDL_CondWaitTimeout(s.changed, s.lock, 1000);
@@ -640,7 +657,7 @@ SDL_Surface *takeImage(const std::string &name, FileInfo *file) {
       // Keep the original of an expensive one for the next load; the game
       // gets a copy. A requested one is not copied (that is a large memcpy
       // on the game thread): the engine keeps its texture when disposed.
-      if (ms >= keepMs && !requested)
+      if (ms >= keepMs && !requested && !blockBudgetHigh() && bytesOf(surface) <= keepImageMax)
         if (SDL_Surface *copy = copyOf(surface)) {
           keepLocked(*state, k, surface, ms, info);
           surface = copy;
@@ -685,7 +702,8 @@ bool takeSound(const std::string &name, Sound &out) {
 }
 
 void keepImage(const std::string &name, SDL_Surface *surface, double ms, const FileInfo &file) {
-  if (!state || ms < keepMs || !surface || surface->format->format != SDL_PIXELFORMAT_ABGR8888)
+  if (!state || ms < keepMs || !surface || surface->format->format != SDL_PIXELFORMAT_ABGR8888 ||
+      blockBudgetHigh() || bytesOf(surface) > keepImageMax)
     return;
   {
     Lock hold(state->lock);
@@ -694,11 +712,38 @@ void keepImage(const std::string &name, SDL_Surface *surface, double ms, const F
   }
   if (SDL_Surface *copy = copyOf(surface)) {
     Lock hold(state->lock);
-    if (state->released)
+    if (state->released || blockBudgetHigh())
       SDL_FreeSurface(copy);
     else
       keepLocked(*state, key(name), copy, ms, file);
   }
+}
+
+void trimImages() {
+  if (!state)
+    return;
+  {
+    Lock hold(state->lock);
+    if (state->images.empty() && state->kept.empty())
+      return;
+    for (auto &i : state->images)
+      SDL_FreeSurface(i.second.surface);
+    state->images.clear();
+    state->imageBytes = 0;
+    for (auto &i : state->kept)
+      SDL_FreeSurface(i.surface);
+    state->kept.clear();
+    state->keptBytes = 0;
+    for (auto it = state->requested.begin(); it != state->requested.end();) {
+      if (!it->first.empty() && it->first[0] == 'I') {
+        state->requestedBytes -= it->second.bytes;
+        it = state->requested.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+  SDL_CondBroadcast(state->changed);
 }
 
 void releaseMemory() {

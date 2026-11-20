@@ -1031,7 +1031,7 @@ void Sprite::draw()
                 Debug() << "BUG: High-res Sprite pattern not implemented";
             }
 
-            shader.setPattern(p->pattern->getGLTypes().tex, Vec2(p->pattern->width(), p->pattern->height()));
+            shader.setPattern(p->pattern->getGLTypesForSampling().tex, Vec2(p->pattern->width(), p->pattern->height()));
             shader.setPatternBlendType(p->patternBlendType);
             shader.setPatternTile(p->patternTile);
             shader.setPatternZoom(p->patternZoom);

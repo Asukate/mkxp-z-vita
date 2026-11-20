@@ -832,10 +832,29 @@ static const size_t cpuBitmapBudget = 56u * 1024 * 1024;
 static std::list<BitmapPrivate *> cpuBitmapList;
 static unsigned cpuFrame = 0;
 /* The part of cpuBitmapBytes that sits in the C heap: the SDL layer gives
- * buffers of 128 KiB and more a kernel memory block of their own. */
+ * buffers of 128 KiB and more a kernel memory block of their own until the
+ * kernel pixel-block budget is full, after which larger surfaces also land on
+ * the newlib C heap (VITA_SURFACE_POOL_PIXELS is unset). Track actual C-heap
+ * residency so frameTick() still drains spilled large bitmaps. */
 static size_t cpuHeapBytes = 0;
 static const size_t cpuHeapResident = 128u * 1024;
-static inline size_t cpuHeapShare(size_t bytes) { return bytes < cpuHeapResident ? bytes : 0; }
+#ifdef __vita__
+static constexpr uint32_t kVitaSurfacePoolPixels = 0x40000000u;
+static inline size_t cpuSurfaceHeapBytes(const SDL_Surface *s)
+{
+    if (!s)
+        return 0;
+    return (s->flags & kVitaSurfacePoolPixels) ? 0 : (size_t)s->w * s->h * 4;
+}
+#else
+static inline size_t cpuSurfaceHeapBytes(const SDL_Surface *s)
+{
+    if (!s)
+        return 0;
+    const size_t bytes = (size_t)s->w * s->h * 4;
+    return bytes < cpuHeapResident ? bytes : 0;
+}
+#endif
 
 /* Read-back copies of GPU bitmaps (get_pixel, blit sources), oldest first.
  * They can always be made again, so they are held to a budget and dropped
@@ -894,7 +913,7 @@ void BitmapPrivate::releaseCpuPixels()
     if (!cpu)
         return;
     cpuBitmapBytes -= (size_t)cpu->w * cpu->h * 4;
-    cpuHeapBytes -= cpuHeapShare((size_t)cpu->w * cpu->h * 4);
+    cpuHeapBytes -= cpuSurfaceHeapBytes(cpu);
     cpuBitmapList.erase(cpuIter);
     SDL_FreeSurface(cpu);
     cpu = 0;
@@ -1945,15 +1964,38 @@ static void tex16Promote(BitmapPrivate *p, const char *why, bool discardContents
     }
     else
     {
-        std::vector<uint8_t> pixels;
-        try { pixels.resize(size_t(w) * h * 4); }
-        catch (const std::bad_alloc &)
+        full = shState->texPool().request(w, h);
+        try
         {
-            throw Exception(Exception::MKXPError, "Out of memory restoring a %dx%d image", w, h);
+            gl.Finish();
+            uint8_t *dst = static_cast<uint8_t *>(vglGetTexDataPointerByID(full.tex.gl));
+            if (dst)
+            {
+                const size_t pitch = size_t((w + 7) & ~7) * 4;
+                if (!tex16FillExact(p, dst, pitch, &exact))
+                    throw Exception(Exception::MKXPError, "Bitmap image storage is unavailable");
+            }
+            else
+            {
+                std::vector<uint8_t> pixels;
+                try { pixels.resize(size_t(w) * h * 4); }
+                catch (const std::bad_alloc &)
+                {
+                    throw Exception(Exception::MKXPError,
+                                    "Bitmap %dx%d: out of memory restoring 16-bit image", w, h);
+                }
+                if (!tex16FillExact(p, pixels.data(), size_t(w) * 4, &exact))
+                    throw Exception(Exception::MKXPError, "Bitmap image storage is unavailable");
+                TEXFBO::uploadImage(full, w, h, pixels.data(), GL_RGBA);
+                relinkAfterUpload(full);
+            }
         }
-        if (!tex16FillExact(p, pixels.data(), size_t(w) * 4, &exact))
-            throw Exception(Exception::MKXPError, "Bitmap image storage is unavailable");
-        full = shState->texPool().requestImage(w, h, pixels.data());
+        catch (...)
+        {
+            shState->texPool().releaseUncached(full);
+            FBO::bind(bound);
+            throw;
+        }
     }
     FBO::bind(bound);
     TEXFBO old = p->gl;
@@ -2477,7 +2519,7 @@ Bitmap::Bitmap(int width, int height, bool isHires)
         {
             p = composed;
             cpuBitmapBytes += (size_t)width * height * 4;
-            cpuHeapBytes += cpuHeapShare((size_t)width * height * 4);
+            cpuHeapBytes += cpuSurfaceHeapBytes(composed->cpu);
             p->cpuIter = cpuBitmapList.insert(cpuBitmapList.end(), p);
             p->cpuStamp = cpuFrame;
             p->gl.width = width;
@@ -2583,13 +2625,16 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
 
     p = new BitmapPrivate(this);
 
-    /* A copy of a loaded image starts CPU-composed from the image's pixels in memory (read back
-     * once and kept while the image is unchanged). Scripts that copy a light or a face every
+    /* A copy of a small loaded image starts CPU-composed from the image's pixels in memory (read
+     * back once and kept while the image is unchanged). Scripts that copy a light or a face every
      * frame, draw on the copy and blit it into a CPU-composed bitmap no longer wait for the GPU
-     * to read each new copy back (Khas's lantern: a glFinish per frame). */
+     * to read each new copy back (Khas's lantern: a glFinish per frame). Larger images (animation
+     * sheets, fullscreen pictures) copy directly on the GPU so they do not bloat readback or CPU
+     * bitmap memory. */
     SDL_Surface *loaded = 0;
     if (!other.isAnimated() && !other.p->cpu && frame == -2 && !other.hasHires() &&
         !other.megaSurface() && !other.p->selfLores && other.p->gl.tex != TEX::ID(0) &&
+        size_t(other.width()) * other.height() <= 512u * 512u &&
         cpuBitmapEligible(other.width(), other.height()))
         loaded = cpuSourcePixels(other, other.p);
 
@@ -2607,7 +2652,7 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
                 memcpy((uint8_t *)p->cpu->pixels + (size_t)y * p->cpu->pitch,
                        (const uint8_t *)from->pixels + (size_t)y * from->pitch, (size_t)from->w * 4);
             cpuBitmapBytes += (size_t)from->w * from->h * 4;
-            cpuHeapBytes += cpuHeapShare((size_t)from->w * from->h * 4);
+            cpuHeapBytes += cpuSurfaceHeapBytes(p->cpu);
             p->cpuIter = cpuBitmapList.insert(cpuBitmapList.end(), p);
             p->cpuStamp = cpuFrame;
             p->gl.width = from->w;
@@ -2627,6 +2672,38 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
     }
 
 #ifdef __vita__
+    if (!other.isAnimated() && !other.hasHires() && other.p->gl.fmt16)
+    {
+        /* Copy a dithered 16-bit image directly into a 32-bit target without
+         * promoting the cached source or allocating a heap copy buffer. */
+        clearRead(other.p);
+        const FBO::ID bound = FBO::boundFramebufferID;
+        try
+        {
+            p->gl = shState->texPool().request(other.p->gl.width, other.p->gl.height);
+            gl.Finish();
+            uint8_t *dst = static_cast<uint8_t *>(vglGetTexDataPointerByID(p->gl.tex.gl));
+            if (!dst)
+                throw Exception(Exception::MKXPError, "Bitmap copy target storage is unavailable");
+            const size_t pitch = size_t((other.p->gl.width + 7) & ~7) * 4;
+            bool exact = false;
+            if (!tex16FillExact(other.p, dst, pitch, &exact))
+                throw Exception(Exception::MKXPError, "Bitmap copy source storage is unavailable");
+            p->imageCrop = other.p->imageCrop;
+            p->addTaintedArea(rect());
+        }
+        catch (...)
+        {
+            if (p->gl.tex != TEX::ID(0))
+                shState->texPool().releaseUncached(p->gl);
+            FBO::bind(bound);
+            delete p;
+            throw;
+        }
+        FBO::bind(bound);
+        return;
+    }
+
     if (!other.isAnimated() && !other.hasHires() &&
         size_t(other.width()) * other.height() >= 1024u * 1024u)
     {
@@ -2635,8 +2712,6 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
          * Keep a sparse source sparse, including its logical dimensions.
          * Small copies retain the existing asynchronous GPU path. */
         clearRead(other.p);
-        if (other.p->gl.fmt16)
-            tex16Promote(other.p, "copy");
         if (bandsCurrent(other.p))
             cpuPromote(other.p);
         const FBO::ID bound = FBO::boundFramebufferID;
@@ -2682,7 +2757,7 @@ Bitmap::Bitmap(const Bitmap &other, int frame)
         clearRead(other.p);
         // Blit just the current frame of the other animated bitmap
         if (!other.isAnimated() || frame == -1) {
-            GLMeta::blitSource(other.getGLTypes(), SameScale);
+            GLMeta::blitSource(other.getGLTypesForSampling(), SameScale);
         }
         else {
             auto &frames = other.getFrames();
@@ -5749,7 +5824,7 @@ int Bitmap::addFrame(Bitmap &source, int position)
         /* Source frame pixels observed by the copy pass; materialize. */
         clearRead(source.p);
         GLMeta::blitBegin(newframe, false, SameScale);
-        GLMeta::blitSource(source.getGLTypes(), SameScale);
+        GLMeta::blitSource(source.getGLTypesForSampling(), SameScale);
         GLMeta::blitRectangle(rect(), rect());
         GLMeta::blitEnd();
     }
@@ -6429,17 +6504,24 @@ void Bitmap::frameTick()
     ++cpuFrame;
     if (!(cpuFrame & 7))
         trimReusedForKernel();
-    if (cpuHeapBytes <= 12u * 1024 * 1024)
+    const bool heapHigh = cpuHeapBytes > 12u * 1024 * 1024;
+    const bool totalHigh = cpuBitmapBytes > 24u * 1024 * 1024;
+    if (!heapHigh && !totalHigh)
         return;
     int promoted = 0;
-    for (int looked = 0; looked < 24 && promoted < 3 && !cpuBitmapList.empty(); ++looked)
+    const int limit = heapHigh ? 3 : 1;
+    for (int looked = 0; looked < 24 && promoted < limit && !cpuBitmapList.empty(); ++looked)
     {
         BitmapPrivate *oldest = cpuBitmapList.front();
         const size_t bytes = (size_t)oldest->cpu->w * oldest->cpu->h * 4;
-        /* Large, still being written, never shown, or changed since the last
-         * upload: nothing to gain now; look again after the others. */
-        if (bytes >= cpuHeapResident || cpuFrame - oldest->cpuStamp <= 300 ||
-            oldest->gl.tex == TEX::ID(0) || oldest->cpuDirty)
+        const bool onHeap = cpuSurfaceHeapBytes(oldest->cpu) != 0;
+        /* Keep active or never-shown bitmaps on CPU. Large kernel-block bitmaps
+         * (>= 1 MiB) are skipped to avoid upload hitches during battles unless
+         * they actually spilled onto the newlib C heap. */
+        if (cpuOversized(oldest) || cpuFrame - oldest->cpuStamp <= 300 ||
+            oldest->gl.tex == TEX::ID(0) || oldest->cpuDirty ||
+            (!onHeap && (!totalHigh || bytes >= 1024u * 1024u)) ||
+            (onHeap && bytes >= 1024u * 1024u && cpuFrame - oldest->cpuStamp <= 600))
         {
             cpuBitmapList.splice(cpuBitmapList.end(), cpuBitmapList, oldest->cpuIter);
             continue;
@@ -6448,6 +6530,8 @@ void Bitmap::frameTick()
         {
             cpuPromote(oldest);
             ++promoted;
+            if (bytes >= cpuHeapResident)
+                break;
         }
         catch (const Exception &)
         {

@@ -11,6 +11,7 @@ end = source.index('\nvoid bitmapInitProps(', start)
 function = source[start:end]
 test = r'''
 #include <cassert>
+#include <cctype>
 #include <cstring>
 #include "src/util/exception.h"
 using VALUE = unsigned long;
@@ -138,6 +139,12 @@ int main() {
     reset(2, Exception::MKXPError, texture);
     try { delete vitaBitmapOfSize(544, 416); assert(false); }
     catch (const Exception &e) { assert(e.type == Exception::MKXPError); }
+    assert(calls == 2 && collections == 1 && cacheClears == 1 && !graphicsLocked);
+    reset(1, Exception::MKXPError, "Out of memory restoring a 640x480 image");
+    delete bitmapFromFile(1, &filename);
+    assert(calls == 2 && collections == 1 && cacheClears == 1 && !graphicsLocked);
+    reset(1, Exception::MKXPError, "Bitmap 640x480: out of memory restoring 16-bit image");
+    delete bitmapFromFile(1, &filename);
     assert(calls == 2 && collections == 1 && cacheClears == 1 && !graphicsLocked);
     reset(1, Exception::MKXPError, "Texture dimensions [9000, 9000] exceed hardware capabilities");
     try { delete vitaBitmapOfSize(9000, 9000); assert(false); }

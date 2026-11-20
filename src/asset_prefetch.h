@@ -60,6 +60,9 @@ void noteSound(const std::string &name, double ms);
 // Memory is short: free everything prepared or kept (it can all be loaded
 // again) and prepare nothing more this session. Any thread.
 void releaseMemory();
+// Pixel-block pressure: free prepared and kept images to return kernel pixel
+// blocks without permanently stopping prefetching. Any thread.
+void trimImages();
 
 // Held by the game thread while it loads a file itself. The worker reads its
 // files in pieces and waits between them while one is held: the memory card

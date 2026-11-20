@@ -2808,17 +2808,22 @@ void Graphics::transition(int duration, const char *filename, int vague) {
     Vec2i transSize(p->scResLores.x, p->scResLores.y);
 
     if (transMap) {
-        TransShader &shader = transShader;
-        shader.bind();
-        shader.applyViewportProj();
-        shader.setFrozenScene(p->frozenScene.tex);
-        shader.setCurrentScene(currentScene.tex);
-        if (transMap->hasHires()) {
-            Debug() << "BUG: High-res Graphics transMap not implemented";
+        try {
+            TransShader &shader = transShader;
+            shader.bind();
+            shader.applyViewportProj();
+            shader.setFrozenScene(p->frozenScene.tex);
+            shader.setCurrentScene(currentScene.tex);
+            if (transMap->hasHires()) {
+                Debug() << "BUG: High-res Graphics transMap not implemented";
+            }
+            shader.setTransMap(transMap->getGLTypesForSampling().tex);
+            shader.setVague(vague / 256.0f);
+            shader.setTexSize(transSize);
+        } catch (...) {
+            delete transMap;
+            throw;
         }
-        shader.setTransMap(transMap->getGLTypes().tex);
-        shader.setVague(vague / 256.0f);
-        shader.setTexSize(transSize);
     } else {
         SimpleTransShader &shader = simpleShader;
         shader.bind();

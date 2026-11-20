@@ -32,7 +32,9 @@
 #include <string.h>
 
 #ifdef __vita__
+#include "asset_prefetch.h"
 #include "vita_error_report.h"
+#include <malloc.h>
 
 /* The game's image cache (VX/VX Ace `Cache`, XP `RPG::Cache`) keeps every
  * picture, face, battler and tileset it ever loaded, as live Bitmaps the
@@ -181,13 +183,29 @@ void vitaGpuPressureSafePoint(const char *phase)
    * every few seconds: each release that left the pools low doubles the
    * wait, up to 80 s; pools well above the floor reset it. */
   static uint64_t deepIntervalUs = 10000000;
+  static size_t heapUsedAfterDeep = 0;
   const bool skipped = Bitmap::takeReclaimRequest();
+  if (phase[0] == 'b' || (phase[0] == 'g' && !(frames & 7))) {
+    if (vitaPixelBlockBytes() >= 40u * 1024 * 1024)
+      AssetPrefetch::trimImages();
+  }
   if (skipped || (phase[0] == 'g' && !(frames & 7))) {
     const size_t poolFree = vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
+    const bool blockPressure = vitaPixelBlockBytes() >= 46u * 1024 * 1024;
+    bool heapPressure = false;
+    if (!(frames & 63)) {
+      const struct mallinfo heap = mallinfo();
+      const size_t used = static_cast<size_t>(heap.uordblks);
+      if (used < heapUsedAfterDeep)
+        heapUsedAfterDeep = used;
+      heapPressure = used >= 76u * 1024 * 1024 &&
+                     (lastDeepUs == 0 || used >= heapUsedAfterDeep + 8u * 1024 * 1024);
+    }
     const uint64_t nowUs = sceKernelGetProcessTimeWide();
-    if (poolFree >= cacheFloor + step)
+    if (poolFree >= cacheFloor + step && !blockPressure && !heapPressure)
       deepIntervalUs = 10000000;
-    if (skipped || (poolFree < cacheFloor && nowUs - lastDeepUs >= deepIntervalUs)) {
+    if (skipped || ((poolFree < cacheFloor || blockPressure || heapPressure) &&
+                    nowUs - lastDeepUs >= deepIntervalUs)) {
       if (!skipped && lastDeepUs && deepIntervalUs < 80000000)
         deepIntervalUs *= 2;
       collecting = true;
@@ -197,6 +215,7 @@ void vitaGpuPressureSafePoint(const char *phase)
       collecting = false;
       lastDeepUs = lastUs = sceKernelGetProcessTimeWide();
       ceiling = vglMemFree(VGL_MEM_VRAM) + vglMemFree(VGL_MEM_RAM);
+      heapUsedAfterDeep = static_cast<size_t>(mallinfo().uordblks);
       creations = 0;
       if (state) rb_jump_tag(state);
       return;
