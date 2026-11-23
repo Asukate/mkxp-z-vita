@@ -93,10 +93,37 @@ module HardRPGNative
       3088 => [[:Light_DSource, :draw, 28], [:Light_DSource, :set_shadow, 24]]
     }.freeze
 
+    # Khas in a single section that draws the lantern inside Spriteset_Map#update_lights (no add-on
+    # section). Matched method by method, comments and spacing ignored, so a copy with other comments
+    # or settings matches too. Cat in the Box (issue 35) uses it. The static methods are the
+    # ones the compositor replays (update_lights, draw_light, a light's position and opacity) and
+    # dispose_lights, which it wraps.
+    METHODS = {
+      'Spriteset_Map#update_lights' => '3498832130:3578453162:627',
+      'Spriteset_Map#dispose_lights' => '1240862033:554454630:208',
+      'Game_Event#draw_light' => '1535663071:276382947:218',
+      'Light_SSource#sx' => '1275953137:2811236567:48',
+      'Light_SSource#sy' => '2613270026:2815758554:48',
+      'Light_SSource#opacity' => '636711234:1445991266:60'
+    }.freeze
+    METHOD_ATTRS = { 'Light_SSource' => %w[bitmap w h range] }.freeze
+    # The lantern part of that update_lights, as dynamic_light_row replays it.
+    METHOD_DYNAMIC = {
+      'Light_DSource#get_graphic' => '2472387997:431363096:53',
+      'Light_DSource#sx' => '3291180567:71504547:53',
+      'Light_DSource#sy' => '4190761544:76681894:53',
+      'Light_DSource#x' => '503210172:533204315:41',
+      'Light_DSource#y' => '862381618:536677725:41',
+      'Light_SSource#opacity' => '636711234:1445991266:60'
+    }.freeze
+
     def self.observe(fname, source)
       return unless defined?(Bitmap) && Bitmap.method_defined?(:__hardrpg_compose_opaque)
       match = SECTIONS[source.bytesize]
-      return unless match && Zlib.crc32(source) == match[0] && Zlib.adler32(source) == match[1]
+      unless match && Zlib.crc32(source) == match[0] && Zlib.adler32(source) == match[1]
+        observe_methods(fname, source) if source.include?('def update_lights') && source.include?('Light_DSource')
+        return
+      end
       @sections ||= {}
       found = lambda do |list|
         list.map do |klass, name, line|
@@ -108,13 +135,58 @@ module HardRPGNative
       (@dynamic ||= {})[source.bytesize] = found.(DYNAMIC[source.bytesize])
     end
 
+    # The method each "Class#name" in table names, when this section defines it at the text
+    # matched; nil when any differs or is missing.
+    def self.section_methods(fname, parsed, table)
+      table.map do |key, digest|
+        text, line = parsed[key]
+        return nil unless text && "#{Zlib.crc32(text)}:#{Zlib.adler32(text)}:#{text.bytesize}" == digest
+        cname, name = key.split('#', 2)
+        method = (Object.const_get(cname).instance_method(name) rescue nil)
+        return nil unless method && method.source_location == [fname, line]
+        method
+      end
+    end
+
+    def self.observe_methods(fname, source)
+      parsed = Norm.methods(source)
+      static = section_methods(fname, parsed, METHODS)
+      return unless static
+      lines = source.lines
+      METHOD_ATTRS.each do |cname, names|
+        names.each do |name|
+          method = (Object.const_get(cname).instance_method(name) rescue nil)
+          loc = method && method.source_location
+          return unless loc && loc[0] == fname &&
+                        lines[loc[1] - 1].to_s =~ /\A\s*attr_(reader|accessor)\s.*:#{name}\b/
+          static << method
+        end
+      end
+      @method_sections = static
+      @method_dynamic = section_methods(fname, parsed, METHOD_DYNAMIC)
+    end
+
     class << self
       attr_reader :dynamic_ok
+
+      # 'sections' or 'methods' once installed: which match turned the compositor on.
+      attr_reader :matched
     end
 
     def self.install
-      return if @installed || !@sections || @sections.size != SECTIONS.size
-      return unless @sections.values.flatten.all? do |method|
+      return if @installed
+      if @sections && @sections.size == SECTIONS.size
+        static = @sections.values.flatten
+        dynamic = @dynamic && @dynamic.size == DYNAMIC.size ? @dynamic.values.flatten(1) : nil
+        matched = 'sections'
+      elsif @method_sections
+        static = @method_sections
+        dynamic = @method_dynamic
+        matched = 'methods'
+      else
+        return
+      end
+      return unless static.all? do |method|
         method && method.owner.instance_method(method.name) == method
       end
       # Every one of these runs on a Light_DSource: what it resolves to there must be the checked one.
@@ -122,9 +194,9 @@ module HardRPGNative
         now = method && (Light_DSource.instance_method(method.name) rescue nil)
         now && now.owner.equal?(method.owner) && now.source_location == method.source_location
       end
-      @dynamic_ok = @dynamic && @dynamic.size == DYNAMIC.size &&
-                    @dynamic.values.flatten(1).all?(&current) ? true : false
+      @dynamic_ok = dynamic && dynamic.all?(&current) ? true : false
       Spriteset_Map.prepend(Updates)
+      @matched = matched
       @installed = true
     end
 

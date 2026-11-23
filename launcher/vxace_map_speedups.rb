@@ -9,9 +9,9 @@
 require 'zlib' unless defined?(Zlib)
 
 module HardRPGVXAceScanCache
-  # Change it whenever a check's result for the same scripts can change (11: HardRPGOffscreenSprites::SAFE
-  # took Victor Engine's picture methods), or games keep the old answer.
-  VERSION = 11
+  # Change it whenever a check's result for the same scripts can change (12: HardRPGJetPath took Jet's
+  # plain pathfinder), or games keep the old answer.
+  VERSION = 12
   MAX_GAMES = 64
 
   @data = nil
@@ -802,6 +802,13 @@ module HardRPGOffscreenSprites
   }.freeze
   # ...each over this default text.
   KNOWN_BASE = { 'update_other' => '800444980:3104521863:169' }.freeze
+  # Galv's Character Animations wraps every sprite's update: the default update (native), then a step
+  # that only touches the party's look and the sprite's own idle count. The native skip would leave
+  # that step out too, so with it the parking is done here: a parked sprite runs only that step.
+  GALV = {
+    'Sprite_Character#initialize' => '3542108543:1438000385:101',
+    'Sprite_Character#update' => '3279057407:1952534086:224',
+  }.freeze
 
   @status = nil
   class << self
@@ -873,12 +880,61 @@ module HardRPGOffscreenSprites
       []
     end
 
+    # Galv's update over the native default update: parking in Ruby (GalvPark). Its status does not
+    # start with "on", so the native-skip users (steady sprites, Galv's shadow parking) stay off.
+    def install_galv(swapped)
+      return nil unless defined?(Chara_Anims) && Sprite_Character.method_defined?(:galv_charanim_update)
+      return nil unless (Sprite_Character.instance_method(:update).source_location rescue nil)
+      found = HardRPGVXAceScanCache.fetch(:offscreen_galv) do
+        locs = HardRPGKnownMethods.locate(GALV)
+        next nil unless locs
+        defs = HardRPGRefreshFilter.definitions($RGSS_SCRIPTS || [], %w[Sprite_Character])
+        defs = defs.to_h do |key, list|
+          [key, list.reject { |text, _| GALV[key] && HardRPGKnownMethods.digest(text) == GALV[key] }]
+        end
+        status = check_scripts(defs)
+        status = check_unreadable($RGSS_SCRIPTS || []) if status == 'on'
+        status == 'on' ? locs : nil
+      end
+      return 'off (galv with other sprite scripts)' unless found && HardRPGKnownMethods.same?(found)
+      inner = Sprite_Character.instance_method(:galv_charanim_update)
+      uc = Spriteset_Map.instance_method(:update_characters)
+      return 'off (galv over a script update)' unless inner.source_location.nil? && inner.original_name == :update &&
+                                                     uc.source_location.nil? &&
+                                                     %w[Spriteset_Map#update_characters Sprite_Character#update].all? { |k| swapped.include?(k) }
+      Sprite_Character.prepend(GalvPark)
+      'galv park (ruby)'
+    end
+
+    # The native rule (native-events.cpp parkedOffscreen): no animation or balloon running or waiting,
+    # and both where the sprite was last drawn and where its character is now lie more than a whole
+    # screen beyond the screen's edges.
+    def parked?(spr)
+      return false unless spr.instance_of?(Sprite_Character)
+      c = spr.instance_variable_get(:@character)
+      return false if c.nil? || spr.instance_variable_get(:@animation) || spr.instance_variable_get(:@balloon_sprite)
+      return false if positive?(spr.instance_variable_get(:@balloon_duration))
+      return false if positive?(c.animation_id) || positive?(c.balloon_id)
+      w = Graphics.width
+      h = Graphics.height
+      far?(spr.x, spr.y, w, h) && far?(c.screen_x, c.screen_y, w, h)
+    end
+
+    def positive?(v) = (Integer === v || Float === v) && v > 0
+
+    def far?(x, y, w, h)
+      (Integer === x || Float === x) && (Integer === y || Float === y) &&
+        (x < -w || x > 2 * w || y < -h || y > 2 * h)
+    end
+
     def install
       return @status if @status
       return @status = 'off (disabled)' if $hardrpg_vxace_map_speedups == false
       return @status = 'off (not VX Ace)' unless Kernel.respond_to?(:rgss_main, true)
       return @status = 'off (no native events)' unless defined?(HardRPGNative) && HardRPGNative.respond_to?(:set_option)
       swapped = HardRPGNative.respond_to?(:swapped) ? HardRPGNative.swapped : []
+      galv = install_galv(swapped)
+      return @status = galv if galv
       %w[Spriteset_Map#update_characters Sprite_Character#update].each do |key|
         cname, name = key.split('#', 2)
         um = (Object.const_get(cname).instance_method(name) rescue nil)
@@ -901,6 +957,21 @@ module HardRPGOffscreenSprites
       @status
     rescue StandardError => e
       @status = "off (#{e.class})"
+    end
+  end
+end
+
+# Galv's update with its default update left out while the sprite is parked (its text, checked at
+# start, after the galv_charanim_update call).
+module HardRPGOffscreenSprites
+  module GalvPark
+    def update
+      return super unless HardRPGOffscreenSprites.parked?(self)
+      return if $game_switches[Chara_Anims::ANIM_SWITCH]
+      return move_anim if $game_player.moving?
+      @idletime += 1
+      idle_anim if @idletime == 5
+      idle_event if @idletime == Chara_Anims::COMMON_EVENT_TIME
     end
   end
 end
@@ -1267,16 +1338,88 @@ module HardRPGKnownMethods
   end
 end
 
+# Erased pictures in the first VX Ace release (the Japanese default scripts, which many Japanese and
+# Korean games keep): Sprite_Picture#update_bitmap is `self.bitmap = Cache.picture(@picture.name)`,
+# and for a picture number that was erased (name "") Cache.empty_bitmap makes a new 32x32 Bitmap.
+# That happens every frame for every picture number the game has used. On the Vita each new
+# bitmap is a new texture and a render-target clear: Cat in the Box keeps 10 such pictures, which
+# cost 11 ms of a frame. Later releases set the bitmap to nil instead. Here an erased picture keeps
+# the blank bitmap it was given until its name changes, and shows the same nothing. This is only
+# on while Sprite_Picture and the Cache methods it uses are the default text, so no script of the
+# game draws into or keeps those bitmaps.
+module HardRPGPictureBlank
+  KNOWN = {
+    'Sprite_Picture#initialize' => '397751729:812260337:75',
+    'Sprite_Picture#dispose' => '1132531100:1345261496:42',
+    'Sprite_Picture#update' => '3030361284:1994596617:85',
+    'Sprite_Picture#update_bitmap' => '1248283342:2702644709:60',
+    'Sprite_Picture#update_origin' => '3528918399:17050158:129',
+    'Sprite_Picture#update_position' => '2226266617:20389351:84',
+    'Sprite_Picture#update_zoom' => '670775139:3418496695:91',
+    'Sprite_Picture#update_other' => '3775195220:3626906750:143',
+  }.freeze
+  CACHE = {
+    'picture' => '778842951:2392594748:70',
+    'load_bitmap' => '2913352449:4211100012:208',
+    'empty_bitmap' => '49718248:758910329:40',
+  }.freeze
+
+  @status = nil
+  class << self
+    attr_reader :status
+
+    # Cache's singleton methods (HardRPGKnownMethods.locate reads instance methods).
+    def cache_ok?
+      parsed = {}
+      CACHE.all? do |name, digest|
+        um = (Cache.method(name).unbind rescue nil)
+        loc = um && um.owner.equal?(Cache.singleton_class) && um.source_location
+        index, src = loc && HardRPGKnownMethods.section_of(loc[0])
+        next false unless src
+        text, line = (parsed[index] ||= HardRPGNative::Norm.methods(src))["Cache.self##{name}"]
+        text && line == loc[1] && HardRPGKnownMethods.digest(text) == digest
+      end
+    end
+
+    def install
+      return @status if @status
+      return @status = 'off (disabled)' if $hardrpg_vxace_map_speedups == false || $hardrpg_picture_blank == false
+      return @status = 'off (no script)' unless defined?(Sprite_Picture) && defined?(Cache) &&
+                                                defined?(HardRPGNative::Norm)
+      found = HardRPGVXAceScanCache.fetch(:picture_blank) do
+        locs = HardRPGKnownMethods.locate(KNOWN)
+        locs && cache_ok? ? locs : nil
+      end
+      return @status = 'off (other script)' unless found && HardRPGKnownMethods.same?(found) && cache_ok?
+      Sprite_Picture.prepend(Keep)
+      @status = 'on'
+    rescue StandardError => e
+      @status = "off (#{e.class})"
+    end
+  end
+
+  module Keep
+    def update_bitmap
+      blank = @hardrpg_blank
+      return if blank && @picture.name.empty? && bitmap.equal?(blank) && !blank.disposed?
+      super
+      @hardrpg_blank = @picture.name.empty? ? bitmap : nil
+    end
+  end
+end
+
 # Jet10985's pathfinder with Venima's changes ("Pathfinding & Event formations"), used by many VX
 # Ace games for chasers: every step of a chase runs a whole search from the chaser to the player.
 # Its open and closed lists are arrays searched one node at a time, so a search that gives up after
 # 1000 nodes made millions of Ruby calls (Ao Oni's Mines: 0.65 s). This is the same search with
 # hash lookups: the same nodes in the same order, the same passable? calls, the same route (built
-# by the game's own recreate_path). While a search runs, the map also answers events_xy_nt from a
+# by the game's own recreate_path). Jet's plain version with only the distance change (no jump
+# argument, Cat in the Box) is the same text without jump, and gets the same search. While a search runs, the map also answers events_xy_nt from a
 # position index and keeps each tile's passage answer; nothing on the map moves during a search.
 module HardRPGJetPath
   SEARCH = {
-    'Game_Map#find_path' => '2400997801:1770213618:981',
+    # Venima's text, then the same text without its jump argument.
+    'Game_Map#find_path' => %w[2400997801:1770213618:981 2262987289:3909045474:969],
     'Game_Map#each_neighbor' => '2944310640:2801426332:285',
     'Node#initialize' => '125828196:1832460518:97',
     'Node#mark_path' => '20748930:1743394057:58',
@@ -1349,10 +1492,12 @@ module HardRPGJetPath
           h[klass] = same.(klass.instance_method(:pos_nt?), pos_nt) && same.(klass.instance_method(:pos?), pos)
         end
       end
-      Game_Map.prepend(Search)
+      # Both texts are known: Venima's takes 7 arguments, the plain one 6.
+      plain = Game_Map.instance_method(:find_path).parameters.size == 6
+      Game_Map.prepend(plain ? SearchPlain : Search)
       Game_Map.prepend(Index) if index
       Game_Map.prepend(Memo) if memo
-      @status = "on (index #{index ? 'on' : 'off'}, memo #{memo ? 'on' : 'off'})"
+      @status = "on (#{plain ? 'plain, ' : ''}index #{index ? 'on' : 'off'}, memo #{memo ? 'on' : 'off'})"
     rescue StandardError => e
       @status = "off (#{e.class})"
     end
@@ -1395,10 +1540,15 @@ module HardRPGJetPath
     end
   end
 
-  module Search
-    def find_path(tx, ty, sx, sy, dist, jump, char = $game_player)
+  PLAIN = Object.new.freeze # the jump argument of the plain version, which has none
+
+  module Core
+    private
+
+    # The route, or :super when the game's own find_path must run.
+    def hardrpg_jet_find(tx, ty, sx, sy, dist, jump, char)
       mode = HardRPGJetPath.mode
-      return super unless mode & 1 != 0 && Integer === tx && Integer === ty && Integer === sx &&
+      return :super unless mode & 1 != 0 && Integer === tx && Integer === ty && Integer === sx &&
                           Integer === sy && Integer === dist && sx >= 0 && sy >= 0 && sy < W
       saved = [@hardrpg_jet_index, @hardrpg_jet_memo]
       @hardrpg_jet_index = mode & 2 != 0 && respond_to?(:hardrpg_jet_index) ? hardrpg_jet_index : nil
@@ -1406,13 +1556,11 @@ module HardRPGJetPath
       # The native events_xy_nt keeps its own per-search index (same premise).
       native_index = mode & 2 != 0 && HardRPGNative.respond_to?(:event_index) && HardRPGNative.event_index(self)
       route = hardrpg_jet_search(tx, ty, sx, sy, dist, jump, char)
-      route.equal?(:retry) ? super : route
+      route.equal?(:retry) ? :super : route
     ensure
       HardRPGNative.event_index(nil) if native_index
       @hardrpg_jet_index, @hardrpg_jet_memo = saved if saved
     end
-
-    private
 
     def hardrpg_jet_search(tx, ty, sx, sy, dist, jump, char)
       return [] if (sx == tx && sy == ty) || (dist > 0 && (sx - tx).abs + (sy - ty).abs <= dist)
@@ -1481,7 +1629,25 @@ module HardRPGJetPath
         key = parent[key]
       end
       node.mark_path
-      recreate_path(node, jump)
+      jump.equal?(PLAIN) ? recreate_path(node) : recreate_path(node, jump)
+    end
+  end
+
+  module Search
+    include Core
+
+    def find_path(tx, ty, sx, sy, dist, jump, char = $game_player)
+      route = hardrpg_jet_find(tx, ty, sx, sy, dist, jump, char)
+      route.equal?(:super) ? super : route
+    end
+  end
+
+  module SearchPlain
+    include Core
+
+    def find_path(tx, ty, sx, sy, dist, char = $game_player)
+      route = hardrpg_jet_find(tx, ty, sx, sy, dist, PLAIN, char)
+      route.equal?(:super) ? super : route
     end
   end
 end
@@ -1656,6 +1822,7 @@ class << Graphics
       HardRPGSwitchSkip.install
       HardRPGOffscreenSprites.install
       HardRPGJetPath.install
+      HardRPGPictureBlank.install
       HardRPGKhasShadows.install
       HardRPGSpriteScripts.install
       HardRPGSteadySprites.install
