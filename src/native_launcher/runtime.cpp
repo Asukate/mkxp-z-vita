@@ -35,6 +35,7 @@
 #include "shader-cache-build-id.h"
 #include "display/gl/shader-warmup.h"
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <vector>
 #include <string>
 extern "C" void glGetProgramBinary(GLuint, GLsizei, GLsizei *, GLenum *, void *);
@@ -614,6 +615,53 @@ public:
     return Button::None;
   }
 };
+
+#ifdef __vita__
+// The regression bench (tools/regress) queues game keys, one per line, in
+// ux0:/data/hardrpg-bench/queue.txt. Each start of the launcher takes the
+// first one off the queue before starting it, so a game that crashes is not
+// started again, and notes the key and wall time (ms) in launched.txt for
+// the in-game driver's launch-to-title time. -1 without a queue.
+int benchNextGame(Model &model) {
+  const std::string dir = "ux0:/data/hardrpg-bench/";
+  std::string queue;
+  try {
+    queue = readFile(dir + "queue.txt", 64 * 1024);
+  } catch (const std::exception &) {
+    return -1;
+  }
+  auto end = queue.find('\n');
+  std::string first = queue.substr(0, end);
+  while (!first.empty() && (first.back() == '\r' || first.back() == ' '))
+    first.pop_back();
+  std::string rest = end == std::string::npos ? "" : queue.substr(end + 1);
+  try {
+    if (rest.find_first_not_of(" \r\n") == std::string::npos)
+      std::remove((dir + "queue.txt").c_str());
+    else
+      atomicWrite(dir + "queue.txt", rest);
+  } catch (const std::exception &) {
+    return -1; // a queue that cannot shrink would start one game forever
+  }
+  for (size_t i = 0; i < model.list.size(); ++i)
+    if (model.list[i].kind != Kind::Folder && key(model.list[i].node.identity(model.paths)) == first) {
+      // The same clock as Ruby's Time.now in the game.
+      timeval now{};
+      gettimeofday(&now, nullptr);
+      try {
+        atomicWrite(dir + "launched.txt",
+                    first + " " + std::to_string(int64_t(now.tv_sec) * 1000 + now.tv_usec / 1000) + "\n");
+      } catch (const std::exception &) {
+      }
+      return int(i);
+    }
+  try {
+    atomicWrite(dir + "missing-" + first + ".txt", "not in the library\n");
+  } catch (const std::exception &) {
+  }
+  return -1;
+}
+#endif
 } // namespace
 
 bool nativeLauncherDirectBoot() {
@@ -1049,6 +1097,9 @@ int runNativeLauncher(bool returning) {
         status();
         uint32_t lastInputAt = SDL_GetTicks();
         bool gameInfoStarted = false;
+#ifdef __vita__
+        bool benchChecked = false;
+#endif
         while (!quit && !ui.exitRequested && !ui.launchRequested) {
           auto button = input.poll(quit);
 #ifdef HARDRPG_LAUNCHER_BENCH
@@ -1072,6 +1123,20 @@ int runNativeLauncher(bool returning) {
           }
 #else
           bool libraryChanged = false;
+#endif
+#ifdef __vita__
+          // Regression bench: start the next queued game once the library
+          // is read. Nothing happens without the queue file.
+          if (!benchChecked && scanThread < 0 && !fresh) {
+            benchChecked = true;
+            int next = benchNextGame(ui.model);
+            Entry chosen;
+            if (next >= 0 && ui.model.enter(ui.model.list[size_t(next)], chosen)) {
+              ui.launchingName = chosen.name;
+              ui.startGame(chosen);
+              continue;
+            }
+          }
 #endif
           bool touched = input.touch(ui);
           bool serviced = libraryChanged;
