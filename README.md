@@ -203,19 +203,17 @@ A font included in the game's own `Fonts` folder always comes first.
 > HardRPG is in alpha. Many games play well, some have problems, and a few do
 > not start. Check the [compatibility list](docs/COMPATIBILITY.md) for your game.
 
-**0.6.0 Alpha** is the current release. New in 0.6.0:
+**0.6.1 Alpha** is the current release. New in 0.6.1:
 
-- **Dante 98 and Dante 98 II games:** the PC-98 RPG Makers run natively, from the game's disk image.
-- **Cheats:** gold, items, levels, god mode, teleport, switches and more, from the in-game menu.
-- **Save backups:** every save a game replaces is kept, and can be restored from the library.
-- **New in-game menu:** fills the 16:9 screen; right stick mapping and turbo buttons.
-- **Text sized as on Windows:** long lines fit their windows (Hello Charlotte, Mysta's Vore RPG).
-- **Fixes:** Orc Strike, Exit Fate's world map and a NoMethodError at start ([#28](https://github.com/Asukate/mkxp-z-vita/issues/28), [#29](https://github.com/Asukate/mkxp-z-vita/issues/29), [#31](https://github.com/Asukate/mkxp-z-vita/issues/31)).
-- **Less memory:** game pictures take half the video memory.
+- **Achievements:** BLACK SOULS and BLACK SOULS II (Steam editions) record them, with a popup and a Steam-style list.
+- **Cat in the Box:** about 51-60 fps where it dropped to 22-32 ([#35](https://github.com/Asukate/mkxp-z-vita/issues/35)).
+- **Fixes:** games that stopped with "incomplete format specifier" or a `method_added` error, such as Get Violated By EVERY Girl You Encounter RPG ~MAX Volume!~ and Country Girl Keiko ([#32](https://github.com/Asukate/mkxp-z-vita/issues/32), [#33](https://github.com/Asukate/mkxp-z-vita/issues/33)).
+- **Faster VX Ace maps** with layers, lights, auras or damage popups (N.P.C. Dreams); Exit Fate without short pauses.
+- **Launcher:** new selection look, grid view and screenshot paging.
 
-Full list: [0.6.0 release notes](docs/RELEASE-NOTES-0.6.0.md).
+Full list: [0.6.1 release notes](docs/RELEASE-NOTES-0.6.1.md).
 
-Older versions: [0.5.3](docs/RELEASE-NOTES-0.5.3.md) · [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
+Older versions: [0.6.0](docs/RELEASE-NOTES-0.6.0.md) · [0.5.3](docs/RELEASE-NOTES-0.5.3.md) · [0.5.2](docs/RELEASE-NOTES-0.5.2.md) ·
 [0.5.1](docs/RELEASE-NOTES-0.5.1.md) · [0.5.0](docs/RELEASE-NOTES-0.5.0.md) ·
 [0.4.9](docs/RELEASE-NOTES-0.4.9.md) · [0.4.8](docs/RELEASE-NOTES-0.4.8.md) ·
 [0.4.7](docs/RELEASE-NOTES-0.4.7.md) · [0.4.6](docs/RELEASE-NOTES-0.4.6.md) ·

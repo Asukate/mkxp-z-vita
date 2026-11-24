@@ -1,12 +1,21 @@
 #pragma once
 // Update this metadata with each tagged release. UTC avoids locale ambiguity.
-#define HARDRPG_VERSION "0.6.0 Alpha"
-#define HARDRPG_VERSION_TAG "v0.6.0-alpha"
-#define HARDRPG_APP_VER "00.60"
-#define HARDRPG_RELEASE_UTC "2026-11-17"
+#define HARDRPG_VERSION "0.6.1 Alpha"
+#define HARDRPG_VERSION_TAG "v0.6.1-alpha"
+#define HARDRPG_APP_VER "00.61"
+#define HARDRPG_RELEASE_UTC "2026-11-24"
 namespace hardrpg {
 static const char *const releaseNotes[] = {
-    "0.6.0 Alpha - " HARDRPG_RELEASE_UTC,
+    "0.6.1 Alpha - " HARDRPG_RELEASE_UTC,
+    "- BLACK SOULS I and II achievements",
+    "- Cat in the Box at 51-60 fps (#35)",
+    "- Two start errors fixed (#32 #33)",
+    "- Faster layered and lit VX Ace maps",
+    "- Exit Fate: no more short pauses",
+    "- 16-bit picture memory crash fixed",
+    "- New selection look, grid, screenshots",
+    "",
+    "0.6.0 Alpha - 2026-11-17",
     "- Dante 98 and Dante 98 II games",
     "- Cheats in the in-game menu",
     "- Save backups: restore an older save",
