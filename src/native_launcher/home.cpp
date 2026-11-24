@@ -13,7 +13,7 @@
 namespace hardrpg {
 using namespace homeLayout;
 namespace {
-constexpr int engineCount = 4; // formats 1..4: XP, VX, VX Ace, 2000/2003
+constexpr int engineCount = filterEngineCount;
 constexpr int optionCount = 5; // favourite, artwork, all artwork, game settings, rename
 const char *const viewNames[] = {"carousel", "grid", "list"};
 int viewFromName(const std::string &name, int otherwise) {
@@ -424,10 +424,12 @@ void UI::filterActivate(int row) {
   auto *current = homeEntry();
   std::string keep = current ? entryKey(*current) : "";
   if (row < engineCount) {
-    unsigned bit = 1u << (row + 1);
+    unsigned bit = 1u << filterEngineFormat(row), all = 0;
+    for (int i = 0; i < engineCount; ++i)
+      all |= 1u << filterEngineFormat(i);
     home.hiddenEngines ^= bit;
     // Never hide every engine.
-    if ((home.hiddenEngines & 0x1e) == 0x1e)
+    if ((home.hiddenEngines & all) == all)
       home.hiddenEngines ^= bit;
     if (engineFilter && (home.hiddenEngines & (1u << engineFilter)))
       engineFilter = 0;

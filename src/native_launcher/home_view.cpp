@@ -1359,12 +1359,12 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
   if (u.home.panel != Home::Filter)
     return;
   // Filter: a half-width panel under its icon, running down to the hints.
-  int favs = 0, unplayed = 0, perEngine[5] = {0, 0, 0, 0, 0};
+  int favs = 0, unplayed = 0, perEngine[formatLast + 1] = {};
   for (auto &e : u.model.list) {
     favs += u.favourites.count(u.entryKey(e)) ? 1 : 0;
     auto a = u.activity.find(u.entryKey(e));
     unplayed += a == u.activity.end() || !a->second.seconds;
-    if (e.version >= 0 && e.version <= 4)
+    if (e.version >= 0 && e.version <= formatLast)
       ++perEngine[e.version];
   }
   std::string key = "filter|" + std::to_string(list.size()) + "|" + std::to_string(u.home.hiddenEngines) + "|" + std::to_string(u.home.favouritesOnly) + "|" +
@@ -1382,17 +1382,15 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
       u.filterHit[row][1] = panelY + ry;
       u.filterHit[row][2] = rw;
       u.filterHit[row][3] = rh;
-      if (u.home.panelFocus == row) {
-        rect(rx, ry, rw, 2, white, 200);
-        rect(rx, ry + rh - 2, rw, 2, white, 200);
-        rect(rx, ry, 2, rh, white, 200);
-        rect(rx + rw - 2, ry, 2, rh, white, 200);
-      }
+      // Where the cursor is: the faint ruby tint every list uses (drawn
+      // under the text).
+      if (u.home.panelFocus == row)
+        rect(rx, ry, rw, rh, ruby, 77, 8);
     };
     bool any = u.home.hiddenEngines || u.home.favouritesOnly || u.home.unplayedOnly || u.home.sort != Home::Recent || u.home.direction != 1;
     rect(x + inner - 84, y + 2, 84, 42, white, 26, 8);
-    label(x + inner - 42, y + 13, tr("Reset"), 15, any ? white : faint, 255, false, 0, 80);
     focusRing(reset, x + inner - 84, y + 2, 84, 42);
+    label(x + inner - 42, y + 13, tr("Reset"), 15, any ? white : faint, 255, false, 0, 80);
     auto section = [&](int sy, const char *english) {
       const char *name = tr(english);
       label(x, sy, name, 12, faint);
@@ -1400,20 +1398,23 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
     };
     auto tile = [&](int row, int tx, int ty, int tw, bool on, bool off, const std::string &title, const std::string &sub, const char *iconName) {
       rect(tx, ty, tw, 46, white, 15, 9);
-      if (on)
-        rect(tx, ty, tw, 46, ruby, 77, 9); // chosen: the faint ruby tint every list uses
+      focusRing(row, tx, ty, tw, 46);
+      // Chosen: a ruby dot in the corner (a sort shows its direction instead).
+      if (on && !iconName)
+        rect(tx + tw - 13, ty + 6, 7, 7, ruby, 255, 4);
       int lx = tx + 12;
       if (iconName) {
         blit(icon(iconName), tx + 10, ty + 11, on ? 255 : 150);
         lx = tx + 42;
       }
-      label(lx, ty + (!sub.empty() && iconName ? 6 : 12), title, 18, on ? white : off ? faint : Color{207, 207, 211}, 255, true, -1,
-            tx + tw - lx - (!sub.empty() && !iconName ? measure(sub, 11) + 16 : 6));
-      if (!sub.empty() && !iconName)
-        label(tx + tw - 10, ty + 17, sub, 11, faint, 255, false, 1);
-      if (!sub.empty() && iconName)
-        label(lx, ty + 27, sub, 11, {208, 208, 212}, 255, false, -1, tx + tw - lx - 4);
-      focusRing(row, tx, ty, tw, 46);
+      // Narrow tiles (and tiles with an icon) put the small line under the title.
+      bool stacked = !sub.empty() && (iconName || tw < 200);
+      label(lx, ty + (stacked ? 6 : 12), title, 18, on ? white : off ? faint : Color{207, 207, 211}, 255, true, -1,
+            tx + tw - lx - (!sub.empty() && !stacked ? measure(sub, 11) + 16 : iconName ? 6 : 16));
+      if (!sub.empty() && !stacked)
+        label(tx + tw - 10, ty + 21, sub, 11, faint, 255, false, 1);
+      if (stacked)
+        label(lx, ty + 27, sub, 11, iconName ? Color{208, 208, 212} : faint, 255, false, -1, tx + tw - lx - 4);
     };
     int sy = y + 56;
     section(sy, "Order by");
@@ -1423,24 +1424,25 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
     int tw3 = (inner - 12) / 3;
     for (int i = 0; i < Home::SortCount; ++i) {
       bool on = u.home.sort == i;
-      tile(6 + i, x + i * (tw3 + 6), sy + 20, tw3, on, false, tr(sortNames[i]),
+      tile(filterEngineCount + 2 + i, x + i * (tw3 + 6), sy + 20, tw3, on, false, tr(sortNames[i]),
            on ? std::string(u.home.direction > 0 ? "\xe2\x86\x93 " : "\xe2\x86\x91 ") + tr(u.home.direction > 0 ? down[i] : up[i]) : "", sortIcons[i]);
     }
     sy += 82;
     section(sy, "Engines");
     int tw2 = (inner - 6) / 2;
-    for (int i = 0; i < 4; ++i) {
-      int f = i + 1, n = perEngine[f];
+    // Three across, as Order by: XP, VX, VX Ace / 2000/2003, Dante 98.
+    for (int i = 0; i < filterEngineCount; ++i) {
+      int f = filterEngineFormat(i), n = perEngine[f];
       bool hidden = u.home.hiddenEngines & (1u << f);
-      tile(i, x + (i % 2) * (tw2 + 6), sy + 20 + (i / 2) * 52, tw2, !hidden, hidden, engineName(f),
+      tile(i, x + (i % 3) * (tw3 + 6), sy + 20 + (i / 3) * 52, tw3, !hidden, hidden, engineName(f),
            n == 1 ? std::string(tr("1 game")) : trf("{} games", {std::to_string(n)}), nullptr);
     }
-    sy += 134;
+    sy += 30 + (filterEngineCount + 2) / 3 * 52;
     section(sy, "Only show");
-    tile(4, x, sy + 20, tw2, u.home.favouritesOnly, false, std::string("     ") + tr("Favourites"),
+    tile(filterEngineCount, x, sy + 20, tw2, u.home.favouritesOnly, false, std::string("     ") + tr("Favourites"),
          favs == 1 ? std::string(tr("1 game")) : trf("{} games", {std::to_string(favs)}), nullptr);
     blitScaled(icon("star-24:ruby"), x + 12, sy + 35, 16, 16);
-    tile(5, x + tw2 + 6, sy + 20, tw2, u.home.unplayedOnly, false, tr("Not played"),
+    tile(filterEngineCount + 1, x + tw2 + 6, sy + 20, tw2, u.home.unplayedOnly, false, tr("Not played"),
          unplayed == 1 ? std::string(tr("1 game")) : trf("{} games", {std::to_string(unplayed)}), nullptr);
     endLayer();
   }

@@ -27,6 +27,9 @@ constexpr int formatMV = 5, formatMZ = 6;
 inline bool comingSoon(int format) { return format == formatMV || format == formatMZ; }
 // PC-98 disk images (RPG Maker Dante 98 / Dante 98 II games), run by NP2kai.
 constexpr int formatPC98 = 7, formatLast = formatPC98;
+// The Filter panel's engine rows: XP, VX, VX Ace, 2000/2003, Dante 98.
+constexpr int filterEngineCount = 5;
+inline int filterEngineFormat(int row) { return row < 4 ? row + 1 : formatPC98; }
 // Dante 98 games (a kind of PC-98 game) run natively by OpenDT when the
 // package has it.
 inline const Engine *openDtEngine() {

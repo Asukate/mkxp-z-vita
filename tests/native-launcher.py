@@ -613,15 +613,15 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(self.ui('touch:39:91')['homeView'], 0)
         self.assertEqual(self.ui('touch:39:91')['homeView'], 1)
         # Filter panel: favourites only, with no favourites, shows nothing.
-        state=self.ui('up,cross,down,down,down,down,cross')
+        state=self.ui('up,cross,down,down,down,down,down,cross')
         self.assertEqual(state['homePanel'],1)
         self.assertEqual(state['homeEntries'],[])
-        state=self.ui('up,cross,down,down,down,down,cross,circle,down,cross')
+        state=self.ui('up,cross,down,down,down,down,down,cross,circle,down,cross')
         self.assertEqual(state['homePanel'],0)
         self.assertFalse(state['launchRequested'])
         # Unplayed only keeps every game; the last row resets the filters.
         self.assertEqual(len(self.ui('up,cross,up,up,up,up,cross')['homeEntries']),24)
-        state=self.ui('up,cross,down,down,down,down,cross,up,up,up,up,up,cross')
+        state=self.ui('up,cross,down,down,down,down,down,cross,up,up,up,up,up,up,cross')
         self.assertEqual(len(state['homeEntries']),24)
     def test_play_time_favourites_and_sorting(self):
         for name in ['Alpha','Bravo','Charlie']:
@@ -630,18 +630,18 @@ class NativeLauncher(unittest.TestCase):
         activity=self.root/'activity.txt'
         activity.write_text(f"{keys['Alpha']} 100 50\n{keys['Bravo']} 300 10\n")
         names=lambda state: [e['name'] for e in state['homeEntries']]
-        # Last played first, then the filter panel's sorts (rows 6 to 8); the
+        # Last played first, then the filter panel's sorts (rows 7 to 9); the
         # same sort again turns the order around.
         self.assertEqual(names(self.ui()),['Bravo','Alpha','Charlie'])
         sort=lambda row: 'up,cross'+',down'*row+',cross'
-        self.assertEqual(names(self.ui(sort(7))),['Alpha','Bravo','Charlie'])
-        self.assertEqual(names(self.ui(sort(7)+',cross')),['Charlie','Bravo','Alpha'])
         self.assertEqual(names(self.ui(sort(8))),['Alpha','Bravo','Charlie'])
         self.assertEqual(names(self.ui(sort(8)+',cross')),['Charlie','Bravo','Alpha'])
+        self.assertEqual(names(self.ui(sort(9))),['Alpha','Bravo','Charlie'])
+        self.assertEqual(names(self.ui(sort(9)+',cross')),['Charlie','Bravo','Alpha'])
         # The options menu's first row stars the focused game; the filter keeps only stars.
         self.ui('triangle,cross')
         self.assertEqual((self.root/'favourite-games.txt').read_text().split(),[keys['Bravo']])
-        self.assertEqual(names(self.ui('up,cross,down,down,down,down,cross')),['Bravo'])
+        self.assertEqual(names(self.ui('up,cross,down,down,down,down,down,cross')),['Bravo'])
         self.ui('triangle,cross')
         self.assertEqual((self.root/'favourite-games.txt').read_text().split(),[])
         # Playing records the start; returning from the game adds the time
@@ -1037,7 +1037,7 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(self.ui('vdrag:300:480:130,vdrag:300:480:130')['listScroll'], 5*37)
         # Triangle still opens a game's options; filters still apply.
         self.assertEqual(self.ui('triangle')['homePanel'], 2)
-        self.assertEqual(self.ui('up,cross,down,down,down,down,cross')['homeEntries'], [])
+        self.assertEqual(self.ui('up,cross,down,down,down,down,down,cross')['homeEntries'], [])
         # It draws, and draws no pictures.
         shot = self.storage/'list.png'
         self.ui('down,down', shot)
