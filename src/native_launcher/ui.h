@@ -1,4 +1,5 @@
 #pragma once
+#include "achievements.h"
 #include "art_fetch.h"
 #include "i18n.h"
 #include "model.h"
@@ -48,7 +49,8 @@ enum class Page {
   Saves,        // a game's backed up saves, one row per save file
   SaveVersions, // the kept versions of one save file
   SaveConfirm,  // restore, delete or adopt, asked first
-  Backups       // Settings: every game with backups, installed or not
+  Backups,      // Settings: every game with backups, installed or not
+  Achievements
 };
 enum class BrowseMode { Games, Rtp, Folder };
 // The home screen: a centred cover carousel over the library, with an
@@ -73,6 +75,7 @@ struct Home {
   // In the details panel: the focused screenshot (-1 none), and the one
   // shown full screen (-1 none).
   int shotFocus = -1, viewing = -1;
+  bool achievementFocus = false;
   double sideAmount = 0;      // 1 while the filter panel holds the right half
   Panel panel = NoPanel;
   int panelFocus = 0;
@@ -143,6 +146,11 @@ public:
   std::vector<size_t> homeList() const;
   // The entry shown in the middle of the carousel, or null on the Add card.
   const Entry *homeEntry() const;
+  const GameAchievements &detailsAchievements(const Entry &) const;
+  void openDetailsAchievements(const Entry &);
+  // Read the catalog and progress once while this game is shown.
+  mutable std::string detailsAchievementKey;
+  mutable GameAchievements detailsAchievementData;
   std::string entryKey(const Entry &) const;
   // Engine tabs present in the library: 0 is All, then format numbers.
   std::vector<int> engineTabs() const;
@@ -271,9 +279,13 @@ public:
   Entry gameEntry, gameMenuSource;
   bool gameOptions = false;
   int gameSetting = 0;
-  // The last row, deleting the ZIP of an unpacked ZIP game, shows only then.
   bool canFreeZip = false;
-  int gameOptionsCount() const { return inGame ? (cheat ? 7 : 6) : canFreeZip ? 11 : 10; }
+  bool hasAchievementsPage() const { return achievements.available; }
+  int gameOptionsCount() const {
+    return inGame ? (cheat ? 7 : 6) : (canFreeZip ? 11 : 10) + int(hasAchievementsPage());
+  }
+  GameAchievements achievements;
+  bool achievementsFromDetails = false;
   // Cheats over a running game. The engine's script owns the pages and rows
   // (launcher/cheats.rb for XP/VX/VX Ace/Essentials, launcher/cheats.js for
   // MV/MZ): cheat sends it a button ("open", "back", "cross", "left",

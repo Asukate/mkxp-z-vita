@@ -874,9 +874,11 @@ void View::buildHome(const UI &u) {
     auto act = u.activity.find(u.entryKey(*current));
     Activity stat = act == u.activity.end() ? Activity{} : act->second;
     bool fav = u.favourites.count(u.entryKey(*current));
+    const auto &progress = u.detailsAchievements(*current);
+    const int progressTop = progressY(!a.shots.empty());
     std::string key = u.entryKey(*current) + "|" + std::to_string(fav) + "|" + std::to_string(stat.seconds) + "|" +
                       std::to_string(stat.last) + "|" + std::to_string(a.logo.id) + "|" + a.info + "|" +
-                      std::to_string(a.shots.size()) + "|" + languageCode(language());
+                      std::to_string(a.shots.size()) + "|" + std::to_string(progress.available) + "|" + languageCode(language());
     if (beginLayer(detailsLayer, key, width - detailsX - 16, detailsBottom - detailsY)) {
       int w = width - detailsX - 40;
       // Facts downloaded with the artwork, blended from several sources.
@@ -940,7 +942,7 @@ void View::buildHome(const UI &u) {
       }
       y += 58;
       // The folder line sits above the screenshots, or at the bottom.
-      int by = (a.shots.empty() ? detailsBottom : shotY - 12) - detailsY;
+      int by = (progress.available ? progressTop - 6 : a.shots.empty() ? detailsBottom : shotY - 12) - detailsY;
       if (!description.empty()) {
         auto lines = wrap(description, 15, w);
         int room = std::max(0, (by - 28 - y) / 20);
@@ -956,6 +958,33 @@ void View::buildHome(const UI &u) {
       endLayer();
     }
     layerQuad(detailsLayer, detailsX + (1 - details) * 24, detailsY, details);
+    if (progress.available) {
+      const auto earned = std::to_string(progress.earned);
+      const auto total = std::to_string(progress.total);
+      const auto percent = std::to_string(progress.percent());
+      std::string progressKey = earned + "|" + total + "|" + languageCode(language());
+      const int x = detailsX + int((1 - details) * 24);
+      if (u.home.achievementFocus)
+        solid(ruby, x - 2, progressTop - 2, progressW + 4, progressH + 4, details, 8);
+      if (beginLayer(progressLayer, progressKey, progressW, progressH)) {
+        rect(0, 0, progressW, progressH, {31, 31, 37}, 255, 6);
+        const int y = progress.total ? 6 : 12;
+        label(14, y, tr("Achievements"), 19, white);
+        const auto summary = progress.total ? earned + "/" + total + "  \xc2\xb7  " + percent + "%"
+                                            : trf("{} unlocked", {earned});
+        label(progressW - 34, y + 1, summary, 17, white, 255, false, 1);
+        label(progressW - 13, y - 1, "\xe2\x80\xba", 21, white, 255, false, 1);
+        if (progress.total) {
+          const int barW = progressW - 28;
+          rect(14, 35, barW, 4, {72, 72, 79}, 255, 2);
+          const int fill = int(barW * progress.earned / progress.total);
+          if (fill > 0)
+            rect(14, 35, fill, 4, rubyHi, 255, 2);
+        }
+        endLayer();
+      }
+      layerQuad(progressLayer, x, progressTop, details);
+    }
     // Play and Options, under the cover.
     if (beginLayer(buttonsLayer, std::string("buttons|") + languageCode(language()), optionsX + optionsW - playX, buttonH)) {
       int ox = optionsX - playX, iy = (buttonH - 30) / 2;
@@ -1470,12 +1499,19 @@ void View::homeHints(const UI &u, const std::vector<size_t> &list) {
       right = {{"L R", tr("More screenshots"), Button::R}};
     hintBar(u, left, right, std::to_string(u.home.viewing + 1) + "|" + std::to_string(std::max(1, u.shotsShown)));
     return;
-  } else if (u.home.details && u.home.shotFocus >= 0) {
-    left = {{"btn-cross-26", tr("View"), Button::Cross}, {"btn-circle-26", tr("Back"), Button::Circle}};
-    right = {{nullptr, tr("Up: game details"), Button::None}};
   } else if (u.home.details) {
-    left = {{"btn-cross-26", tr("Play"), Button::Cross}, {"btn-circle-26", tr("Back"), Button::Circle}, {"btn-triangle-26", tr("Options"), Button::Triangle}};
-    right = {{nullptr, tr(u.shotsShown ? "Down: screenshots" : "Other games"), Button::None}};
+    const bool hasProgress = u.home.target < int(list.size()) &&
+                             u.detailsAchievements(u.model.list[list[u.home.target]]).available;
+    if (u.home.shotFocus >= 0) {
+      left = {{"btn-cross-26", tr("View"), Button::Cross}, {"btn-circle-26", tr("Back"), Button::Circle}};
+      right = {{nullptr, tr(hasProgress ? "Up: achievements" : "Up: game details"), Button::None}};
+    } else if (u.home.achievementFocus && hasProgress) {
+      left = {{"btn-cross-26", tr("Open"), Button::Cross}, {"btn-circle-26", tr("Back"), Button::Circle}};
+      right = {{nullptr, tr(u.shotsShown ? "Down: screenshots" : "Up: game details"), Button::None}};
+    } else {
+      left = {{"btn-cross-26", tr("Play"), Button::Cross}, {"btn-circle-26", tr("Back"), Button::Circle}, {"btn-triangle-26", tr("Options"), Button::Triangle}};
+      right = {{nullptr, tr(hasProgress ? "Down: achievements" : u.shotsShown ? "Down: screenshots" : "Other games"), Button::None}};
+    }
   } else {
     left = {{"btn-cross-26", tr(add ? "Add games" : u.home.list() ? "Play" : "Details"), Button::Cross}};
     if (!add)

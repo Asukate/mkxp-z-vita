@@ -69,7 +69,7 @@ def archive_v3():
 LAUNCHER = shlex.split(subprocess.check_output(
     ['pkg-config', '--cflags', '--libs', 'libpng', 'libturbojpeg', 'libwebp', 'libcurl'], text=True))
 lifecycle = compile('zip-lifecycle', ['tests/native-zip-lifecycle.cpp',
-    'src/native_launcher/model.cpp', 'src/native_launcher/ui.cpp', 'src/native_launcher/save_backups.cpp',
+    'src/native_launcher/model.cpp', 'src/native_launcher/ui.cpp', 'src/native_launcher/save_backups.cpp', 'src/native_launcher/achievements.cpp',
     'src/native_launcher/home.cpp', 'src/native_launcher/art_fetch.cpp',
     'src/native_launcher/image.cpp', 'src/native_launcher/text_input.cpp',
     'src/native_launcher/welcome.cpp', 'src/native_launcher/i18n.cpp'],

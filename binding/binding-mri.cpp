@@ -41,6 +41,10 @@
 #include "binding-util.h"
 #ifdef __vita__
 #include "input/vita_input.h"
+#ifdef MKXPZ_NATIVE_LAUNCHER
+#include "native_launcher/achievements.h"
+#include "native_launcher/model.h"
+#endif
 #endif
 #include "binding.h"
 
@@ -281,6 +285,50 @@ json5pp::value rb2json(VALUE v);
 
 RB_METHOD(mkxpParseCSV);
 
+#if defined(__vita__) && defined(MKXPZ_NATIVE_LAUNCHER)
+static std::string runningAchievementKey(const hardrpg::Paths &paths) {
+    const auto &conf = shState->config();
+    return hardrpg::achievementGameKey(paths, conf.vitaConfigPath, conf.gameFolder);
+}
+
+static void enableSteamAchievements() {
+    try {
+        hardrpg::Paths paths;
+        bool ready = hardrpg::registerAchievements(paths, runningAchievementKey(paths));
+        rb_gv_set("$hardrpg_steam_achievements", ready ? Qtrue : Qfalse);
+    } catch (const std::exception &) {
+        // Storage failure must not stop the game from loading.
+    }
+}
+
+static VALUE localAchievement(VALUE name, bool unlock) {
+    if (!RB_TYPE_P(name, RUBY_T_STRING))
+        return Qfalse;
+    try {
+        hardrpg::Paths paths;
+        auto game = runningAchievementKey(paths);
+        std::string id(RSTRING_PTR(name), RSTRING_LEN(name));
+        bool ok = unlock ? hardrpg::unlockAchievement(paths, game, id)
+                         : hardrpg::achievementUnlocked(paths, game, id);
+        return ok ? Qtrue : Qfalse;
+    } catch (const std::exception &) {
+        return Qfalse;
+    }
+}
+
+RB_METHOD(mkxpUnlockAchievement) {
+    VALUE name;
+    rb_scan_args(argc, argv, "1", &name);
+    return localAchievement(name, true);
+}
+
+RB_METHOD(mkxpAchievementUnlocked) {
+    VALUE name;
+    rb_scan_args(argc, argv, "1", &name);
+    return localAchievement(name, false);
+}
+#endif
+
 static void mriBindingInit() {
     tableBindingInit();
     etcBindingInit();
@@ -376,36 +424,34 @@ static void mriBindingInit() {
         "$stdout = VitaNullIO.new\n"
         "$stderr = VitaNullIO.new\n");
 
-    /* No Steam API can exist on Vita, but shipped games reference it:
-     * BS1's Map068 boss-victory events call SteamUserStatsLite.instance /
-     * set_achievement / update, and the Win32-bound script that defines
-     * the class is skipped below, so the reference died with NameError
-     * and the Vita fiber backend unwound it past all Ruby frames --
-     * the game just closed after "VICTORY ACHIEVED". Define the measured
-     * surface as a no-op up front (return values mirror the real script
-     * in its never-initted state) so every current and future game
-     * degrades instead of exiting. tests/unit/test_steam_stub_contract.rb
-     * asserts this contract against the shipped bytes. */
-    /* STEAM_STUB_BEGIN */
+    // Toro's SteamUserStatsLite wrapper calls from in-game events. Enable
+    // its local achievement methods when its Windows script is encountered.
+    rb_gv_set("$hardrpg_steam_achievements", Qfalse);
     rb_eval_string(
         "class SteamUserStatsLite\n"
         "  def self.instance\n"
-        "    @vita_stub_instance ||= new\n"
+        "    @hardrpg_instance ||= new\n"
         "  end\n"
         "  def initted?\n"
-        "    false\n"
+        "    $hardrpg_steam_achievements\n"
         "  end\n"
-        "  def set_achievement(_name)\n"
-        "    false\n"
+        "  def set_achievement(name)\n"
+        "    initted? && System.unlock_achievement(name)\n"
+        "  end\n"
+        "  def get_achievement(name)\n"
+        "    System.achievement_unlocked?(name) if initted?\n"
         "  end\n"
         "  def update\n"
         "    nil\n"
         "  end\n"
         "end\n");
-    /* STEAM_STUB_END */
 #endif
     
     VALUE mod = rb_define_module("System");
+#if defined(__vita__) && defined(MKXPZ_NATIVE_LAUNCHER)
+    _rb_define_module_function(mod, "unlock_achievement", mkxpUnlockAchievement);
+    _rb_define_module_function(mod, "achievement_unlocked?", mkxpAchievementUnlocked);
+#endif
     _rb_define_module_function(mod, "delta", mkxpDelta);
     _rb_define_module_function(mod, "uptime", mkxpDelta);
     _rb_define_module_function(mod, "data_directory", mkxpDataDirectory);
@@ -2312,9 +2358,11 @@ static void runRMXPScripts(BacktraceData &btData) {
 #ifdef __vita__
             /* Toro's Steam script (BS1, BS2) binds Win32 Steam DLLs in its
              * class body, which cannot load on Vita. Match by exact script
-             * name at any index; the Vita bootstrap above defines the
-             * no-op class the victory events reference. */
+             * name at any index and let game events use the local bridge. */
             if (std::strcmp(scriptName, "steam_acheivement") == 0) {
+#ifdef MKXPZ_NATIVE_LAUNCHER
+                enableSteamAchievements();
+#endif
                 vitaDiagLog("RUBY", "rgss_eval_skip_vita index=%ld name=%s", i,
                             scriptName);
                 continue;

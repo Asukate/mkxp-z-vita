@@ -707,6 +707,17 @@ int main(int argc, char **argv) {
       o["listScroll"] = ui.listScroll;
       o["homeDetails"] = ui.home.details;
       o["homeShotFocus"] = ui.home.shotFocus;
+      o["homeAchievementFocus"] = ui.home.achievementFocus;
+      if (auto *entry = ui.home.details ? ui.homeEntry() : nullptr) {
+        const auto &progress = ui.detailsAchievements(*entry);
+        if (progress.available) {
+          auto counts = object();
+          counts.as_object()["earned"] = Json::integer_type(progress.earned);
+          counts.as_object()["total"] = Json::integer_type(progress.total);
+          counts.as_object()["percent"] = Json::integer_type(progress.percent());
+          o["homeAchievementProgress"] = counts;
+        }
+      }
       o["homeViewing"] = ui.home.viewing;
       o["shotsShown"] = ui.shotsShown;
       o["homeSort"] = ui.home.sort;
@@ -741,6 +752,20 @@ int main(int argc, char **argv) {
     state.as_object()["rtpSelected"] = ui.rtpSelected;
     state.as_object()["missingRtp"] = ui.missingRtp;
     state.as_object()["page"] = int(ui.page);
+    if (ui.page == Page::Achievements) {
+      auto rows = array();
+      for (const auto &achievement : ui.achievements.entries) {
+        auto row = object();
+        const bool concealed = achievement.concealed();
+        if (!concealed)
+          row.as_object()["id"] = achievement.id;
+        row.as_object()["name"] = concealed ? std::string(tr("Hidden achievement")) : achievement.name;
+        row.as_object()["description"] = concealed ? "" : achievement.description;
+        row.as_object()["unlocked"] = achievement.unlocked;
+        rows.as_array().push_back(row);
+      }
+      state.as_object()["achievements"] = rows;
+    }
     state.as_object()["inGame"] = ui.inGame;
     state.as_object()["inGameExit"] = int(ui.inGameExit);
     state.as_object()["inGameChanged"] = ui.inGameChanged;

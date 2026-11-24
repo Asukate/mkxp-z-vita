@@ -568,6 +568,14 @@ class NativeLauncher(unittest.TestCase):
         self.ui('cross,draw,down,cross', self.storage/'screenshot-viewer.png')
         self.ui('cross,draw,down', self.storage/'details-shots.png')
 
+        # When achievements exist, Down moves through progress to the screenshots.
+        (self.games/'Shots'/'hardrpg-achievements.json').write_text('[{"id":"one"}]')
+        self.assertTrue(self.ui('cross,draw,down')['homeAchievementFocus'])
+        self.assertEqual(self.ui('cross,draw,down,down,cross')['homeViewing'], 0)
+        self.assertTrue(self.ui('cross,draw,down,down,up')['homeAchievementFocus'])
+        self.assertIn('achievements', self.ui('cross,draw,touch:500:384'))
+        self.assertEqual(self.ui('cross,draw,touch:500:450')['homeViewing'], 1)
+
     def test_touch_scroll_selection_and_filter_boundaries(self):
         for i in range(24): self.game(self.games/f'{i:02}',title=f'Game {i:02}')
         # Swiping the carousel moves the focus without launching.
@@ -1547,6 +1555,45 @@ class NativeLauncher(unittest.TestCase):
         self.assertTrue(self.games.exists())
         self.game(self.games/'Plain', title='Plain game')
         self.assertEqual(names(), ['Plain game'])
+    def test_achievements_combine_the_catalog_and_local_unlocks(self):
+        game = self.game(self.games/'medals', title='Medals')
+        other = self.game(self.games/'other', title='Other game')
+        catalog = [{"id": "Award", "name": "Earned"},
+                   {"id": "award", "name": "The secret", "description": "The ending", "hidden": True}]
+        (game/'hardrpg-achievements.json').write_text(json.dumps(catalog))
+        saved = self.root/'achievements'/fnv('medals')/'unlocked'
+        saved.mkdir(parents=True)
+        for id_ in ('Award', 'Unknown'):
+            (saved/id_.encode().hex()).touch()
+        (saved/'junk').touch()
+
+        details = self.to('Medals') + 'cross,draw'
+        self.assertEqual(self.ui(details)['homeAchievementProgress'],
+                         {'earned': 1, 'total': 2, 'percent': 50})
+        keyboard = self.ui(details + ',down,cross')
+        touch = self.ui(details + ',touch:500:470')
+        self.assertEqual(touch['achievements'], keyboard['achievements'])
+        self.assertEqual(touch['achievements'], [
+            {'id': 'Award', 'name': 'Earned', 'description': '', 'unlocked': True},
+            {'name': 'Hidden achievement', 'description': '', 'unlocked': False},
+            {'id': 'Unknown', 'name': 'Unknown', 'description': '', 'unlocked': True}])
+        self.assertFalse(touch['launchRequested'])
+        back = self.ui(details + ',down,cross,circle')
+        self.assertTrue(back['homeActive'] and back['homeDetails'] and back['homeAchievementFocus'])
+        self.assertTrue(self.ui(details + ',down,touch:100:460')['launchRequested'])
+
+        (saved/'award'.encode().hex()).touch()
+        finished = self.ui(details + ',down,cross')
+        self.assertEqual(finished['homeAchievementProgress'], {'earned': 2, 'total': 2, 'percent': 100})
+        self.assertEqual(finished['achievements'][1],
+                         {'id': 'award', 'name': 'The secret', 'description': 'The ending', 'unlocked': True})
+
+        other_details = self.to('Other game') + 'cross,draw'
+        self.assertNotIn('homeAchievementProgress', self.ui(other_details))
+        (other/'hardrpg-achievements.json').write_text(json.dumps(catalog))
+        self.assertEqual(self.ui(other_details)['homeAchievementProgress'],
+                         {'earned': 0, 'total': 2, 'percent': 0})
+
     def test_delete_the_zip_keeps_an_unpacked_game_playable(self):
         zip_path = self.zip(self.games/'freed.zip')
         # Not unpacked yet: no such row, the menu ends at Remove from library.

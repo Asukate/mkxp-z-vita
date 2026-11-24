@@ -230,6 +230,8 @@ Older versions: [0.5.3](docs/RELEASE-NOTES-0.5.3.md) · [0.5.2](docs/RELEASE-NOT
 - RPG Maker **XP, VX and VX Ace** games run natively (RGSS1, RGSS2 and RGSS3,
   with real Ruby), including games packed in `Game.rgssad`, `.rgss2a` or
   `.rgss3a` archives.
+- Local achievements for the Steam editions of BLACK SOULS and BLACK SOULS II.
+  See [HardRPG achievements](docs/ACHIEVEMENTS.md) for catalogs and game-script integration.
 - RPG Maker **2000 and 2003** games run on the built-in EasyRPG Player, from the
   same library.
 - RPG Maker **Dante 98 and Dante 98 II** games (PC-98) run natively on the

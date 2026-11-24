@@ -29,6 +29,8 @@ constexpr int detailsX = 344, detailsY = 70, detailsBottom = 494;
 constexpr int playX = 33, playY = 434, playW = 129, optionsX = 170, optionsW = 161, buttonH = 51;
 // Its screenshots, four across along the bottom of the panel.
 constexpr int shotW = 135, shotH = 76, shotGap = 12, shotY = detailsBottom - shotH;
+constexpr int progressW = 4 * shotW + 3 * shotGap, progressH = 48;
+inline int progressY(bool screenshots) { return (screenshots ? shotY - 10 : detailsBottom) - progressH; }
 // Side panel (filter) and options menu.
 constexpr int panelX = 490, panelY = 120, panelW = 470, panelRowH = 33;
 constexpr int menuX = 612, menuY = 150, menuW = 290, menuRowH = 44;
@@ -38,7 +40,7 @@ constexpr int hintsY = 502;
 // Seven rows show at a time; RTP rows are taller (two lines), browser rows
 // shorter.
 constexpr int sheetX = 130, sheetW = 700, sheetTitleY = 72, sheetTop = 151, sheetRowH = 42, sheetRows = 7;
-constexpr int rtpRowH = 54, browserRowH = 40, browserRows = 8;
+constexpr int achievementRowH = 48, rtpRowH = 54, browserRowH = 40, browserRows = 8;
 // Over a running game the sheets use the whole width and taller rows with
 // bigger text, easier to read over the game and to hit with a thumb. Seven
 // rows still fit, so scrolling is the same.

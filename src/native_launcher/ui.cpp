@@ -546,7 +546,7 @@ void UI::sheetTouch(int x, int y) {
   }
   bool rtp = page == Page::Rtp;
   int visible = rtp ? rtpPackCount : page == Page::Keys ? keysRowsShown : sheetRows;
-  int r = rowAt(rtp ? wideRtpRowH : sheetRowH, visible);
+  int r = rowAt(rtp ? wideRtpRowH : page == Page::Achievements ? achievementRowH : sheetRowH, visible);
   if (r < 0)
     return;
   if (gameOptions) {
@@ -606,6 +606,7 @@ void UI::openGameMenu(size_t index) {
           source.node.path().substr(source.node.path().find_last_of('/') + 1))
     gameEntry.name = source.name;
   displayValues = values;
+  achievements = gameAchievements(model.paths, entry);
   {
     auto r = model.removal(entry);
     canFreeZip = !r.zip.empty() && !r.unpacked.empty();
@@ -788,6 +789,7 @@ int UI::optionRows() const {
          : page == Page::Metrics  ? metricsRows()
          : page == Page::Rtp      ? rtpPackCount
          : page == Page::GameInfo ? 0
+         : page == Page::Achievements ? int(achievements.entries.size())
          : page == Page::Remove   ? 2
          : page == Page::Rescue   ? 3
          : page == Page::Audio    ? (inGame ? 1 : 4)
@@ -1036,7 +1038,8 @@ void UI::gameAction(Button b) {
     return;
   }
   if (b == Button::Circle) {
-    if (page == Page::Game) {
+    if (page == Page::Game || (page == Page::Achievements && achievementsFromDetails)) {
+      achievementsFromDetails = false;
       gameOptions = false;
       page = Page::Home;
       focus = Focus::Home;
@@ -1096,6 +1099,10 @@ void UI::gameAction(Button b) {
   }
   if (page == Page::Game && b == Button::Cross) {
     gameSetting = setting;
+    if (hasAchievementsPage() && setting == gameOptionsCount() - 1) {
+      openPage(Page::Achievements);
+      return;
+    }
     switch (setting) {
     case 0:
       openControls();
@@ -1560,6 +1567,8 @@ void UI::openPage(Page next) {
     refreshFolders();
   if (next == Page::Errors)
     errors = model.errorHistory();
+  if (next == Page::Achievements)
+    achievements = gameAchievements(model.paths, gameEntry);
   page = next;
   setting = settingFirst = 0;
   message.clear();

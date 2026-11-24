@@ -26,7 +26,7 @@ int viewFromName(const std::string &name, int otherwise) {
 
 void UI::setView(int view, bool remember) {
   home.view = view;
-  home.details = false;
+  home.details = home.achievementFocus = false;
   home.shotFocus = home.viewing = -1;
   home.position = home.target;
   home.gridVelocity = 0;
@@ -251,6 +251,7 @@ bool UI::pollArt() {
 
 void UI::loadHome() {
   themeSourceCache.clear();
+  detailsAchievementKey.clear();
   activity = model.activity();
   favourites = model.favourites();
   int lang = -1;
@@ -416,6 +417,37 @@ const Entry *UI::homeEntry() const {
   if (home.target < 0 || size_t(home.target) >= list.size())
     return nullptr;
   return &model.list[list[home.target]];
+}
+
+const GameAchievements &UI::detailsAchievements(const Entry &source) const {
+  auto k = entryKey(source);
+  if (detailsAchievementKey != k) {
+    detailsAchievementKey = std::move(k);
+    detailsAchievementData = {};
+    try {
+      Entry game;
+      if (configurableGame(source, game))
+        detailsAchievementData = gameAchievements(model.paths, game);
+    } catch (const std::exception &) {
+      // A collection or an unreadable catalog should leave the details usable.
+    }
+  }
+  return detailsAchievementData;
+}
+
+void UI::openDetailsAchievements(const Entry &entry) {
+  auto &progress = detailsAchievements(entry);
+  if (!progress.available)
+    return;
+  gameEntry = entry;
+  achievements = progress;
+  achievementsFromDetails = gameOptions = true;
+  home.achievementFocus = true;
+  home.shotFocus = -1;
+  page = Page::Achievements;
+  focus = Focus::Settings;
+  setting = settingFirst = 0;
+  message.clear();
 }
 
 int UI::filterRows() const { return engineCount + 2 + Home::SortCount + 1; }
@@ -585,8 +617,27 @@ void UI::homeAction(Button b) {
       home.viewing = -1;
     return;
   }
-  // The details panel's screenshot row: Down goes to it, Up leaves it.
-  if (home.details && home.zone == Home::Shelf && !home.list()) {
+  // Move down from the game to achievement progress and then screenshots.
+  // The details panel shows in the carousel and the grid.
+  if (home.details && home.zone == Home::Shelf && !home.list() && home.target < count) {
+    const auto &entry = model.list[list[home.target]];
+    const bool hasProgress = detailsAchievements(entry).available;
+    if (home.achievementFocus) {
+      if (hasProgress && b == Button::Cross) {
+        openDetailsAchievements(entry);
+        return;
+      }
+      if (hasProgress && b == Button::Down) {
+        if (shotsShown > 0) {
+          home.achievementFocus = false;
+          home.shotFocus = 0;
+        }
+        return;
+      }
+      home.achievementFocus = false;
+      if (hasProgress && (b == Button::Up || b == Button::Circle))
+        return;
+    }
     if (home.shotFocus >= 0) {
       int n = shotsShown;
       if (n <= 0)
@@ -596,14 +647,17 @@ void UI::homeAction(Button b) {
         return;
       } else if (b == Button::Up || b == Button::Circle) {
         home.shotFocus = -1;
+        home.achievementFocus = b == Button::Up && hasProgress;
         return;
       } else if (b == Button::Cross) {
         home.viewing = home.shotFocus;
         return;
       } else if (b == Button::Down)
         return;
-    } else if (b == Button::Down && shotsShown > 0) {
-      home.shotFocus = 0;
+    } else if (b == Button::Down && (hasProgress || shotsShown > 0)) {
+      home.achievementFocus = hasProgress;
+      if (!hasProgress)
+        home.shotFocus = 0;
       return;
     }
   }
@@ -678,14 +732,18 @@ void UI::homeAction(Button b) {
   case Button::Cross:
     // In carousel and grid the first press shows the game's details, the second
     // plays it, as tapping does. The list and collections open at once.
-    if (hasDetails && home.target < count && !home.details && model.list[list[home.target]].kind != Kind::Folder)
+    if (hasDetails && home.target < count && !home.details && model.list[list[home.target]].kind != Kind::Folder) {
       home.details = true;
-    else
+      detailsAchievementKey.clear();
+    } else
       launchTarget();
     break;
   case Button::Square:
-    if (hasDetails && home.target < count && model.list[list[home.target]].kind != Kind::Folder)
+    if (hasDetails && home.target < count && model.list[list[home.target]].kind != Kind::Folder) {
       home.details = !home.details;
+      if (home.details)
+        detailsAchievementKey.clear();
+    }
     break;
   case Button::Triangle:
     if (home.target < count) {
@@ -720,8 +778,10 @@ void UI::homeAction(Button b) {
   if (home.target >= count)
     home.details = false;
   clampTarget(home, count);
-  if (!home.details)
+  if (!home.details) {
+    home.achievementFocus = false;
     home.shotFocus = home.viewing = -1;
+  }
   if (!carousel)
     home.position = home.target;
 }
@@ -839,13 +899,23 @@ void UI::homeTap(int x, int y) {
       home.target = home.position = i;
     return;
   }
-  if (home.details && !home.list()) {
+  if (home.details && !home.list() && home.target < count) {
+    const auto &entry = model.list[list[home.target]];
+    const int xStart = detailsX + int((1 - home.detailsAmount) * 24);
+    if (inside(x, y, xStart, progressY(shotsShown > 0), progressW, progressH) &&
+        detailsAchievements(entry).available) {
+      openDetailsAchievements(entry);
+      return;
+    }
     for (int i = 0; i < shotsShown && i < 4; ++i)
       if (inside(x, y, shotHit[i][0], shotHit[i][1], shotHit[i][2], shotHit[i][3])) {
+        home.achievementFocus = false;
         home.shotFocus = home.viewing = i;
         return;
       }
     if (inside(x, y, playX, playY, playW, buttonH)) {
+      home.achievementFocus = false;
+      home.shotFocus = -1;
       homeAction(Button::Cross);
       return;
     }
@@ -889,14 +959,20 @@ void UI::homeTap(int x, int y) {
   }
   if (best < 0)
     return;
-  if (best != home.target)
+  if (best != home.target) {
+    home.achievementFocus = false;
+    home.shotFocus = -1;
     home.target = best;
-  else if (best == count)
+  } else if (best == count)
     openBrowser(BrowseMode::Games);
-  else if (!home.details)
+  else if (!home.details) {
     home.details = true;
-  else
+    detailsAchievementKey.clear();
+  } else {
+    home.achievementFocus = false;
+    home.shotFocus = -1;
     homeAction(Button::Cross);
+  }
 }
 
 bool UI::homePointer(int state, int x, int y, uint32_t ms) {
@@ -965,6 +1041,10 @@ bool UI::homePointer(int state, int x, int y, uint32_t ms) {
       if (home.target != int(std::lround(home.position)) && home.target != before)
         emit(Sound::Move);
       home.details = home.details && home.target < count;
+      if (home.target != before || !home.details) {
+        home.achievementFocus = false;
+        home.shotFocus = -1;
+      }
     } else if (home.grid()) {
       if (std::fabs(home.gridVelocity) < 40.0 || ms - home.lastMove > 120)
         home.gridVelocity = 0;

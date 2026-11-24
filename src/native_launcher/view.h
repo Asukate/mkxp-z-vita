@@ -111,7 +111,7 @@ private:
     Image image;
     std::string key;
   };
-  Layer topLayer, toolbarLayer, captionLayer, detailsLayer, buttonsLayer, viewerLayer, hintsLayer, panelLayer, messageLayer, addLayer, frameLayer;
+  Layer topLayer, toolbarLayer, captionLayer, detailsLayer, progressLayer, buttonsLayer, viewerLayer, hintsLayer, panelLayer, messageLayer, addLayer, frameLayer;
   Image scrimV, scrimH, tint, band, glow;
   // The tint's two visible ends (top 70 px, bottom 56 px): drawn as strips,
   // the GPU does not shade the clear middle of the screen.

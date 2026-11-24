@@ -770,6 +770,10 @@ void View::buildSheet(const UI &u) {
       // Resume is a row like the others: only the focus is ruby.
       Row::Kind playingKinds[] = {Row::Plain, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Nav, Row::Plain};
       for (int i = 0; i < u.gameOptionsCount(); ++i) {
+        if (!u.inGame && u.hasAchievementsPage() && i == u.gameOptionsCount() - 1) {
+          row(Row::Nav, "Achievements");
+          continue;
+        }
         // Without cheats the last row is Back to library.
         int at = u.inGame && !u.cheat && i == 5 ? 6 : i;
         row(u.inGame ? playingKinds[at] : kinds[i], u.inGame ? playing[at] : names[i]);
@@ -785,6 +789,29 @@ void View::buildSheet(const UI &u) {
         left = {hint("btn-cross-26", "Open", Button::Cross), hint("btn-circle-26", "Resume", Button::Circle)};
       } else
         left = {hint("btn-cross-26", "Open", Button::Cross), back};
+    } else if (u.page == Page::Achievements) {
+      section = u.gameEntry.name;
+      title = tr("Achievements");
+      rowH = achievementRowH;
+      const auto &progress = u.achievements;
+      const auto earned = std::to_string(progress.earned);
+      subtitle = progress.total ? trf("{} / {} unlocked", {earned, std::to_string(progress.total)})
+                                : trf("{} unlocked", {earned});
+      for (const auto &a : progress.entries) {
+        row(Row::Plain, "", a.unlocked ? "Unlocked" : "Locked");
+        auto &r = rows.back();
+        if (a.concealed())
+          r.label = tr("Hidden achievement");
+        else {
+          r.label = a.name;
+          r.detail = a.description;
+        }
+      }
+      if (rows.empty())
+        notes = {tr("No achievements recorded for this game yet.")};
+      focusRow = u.setting;
+      first = u.settingFirst;
+      left = {back};
     } else if (u.page == Page::Cheats) {
       section = tr("Cheats");
       title = tr(u.cheatTitle.empty() ? "Cheats" : u.cheatTitle);

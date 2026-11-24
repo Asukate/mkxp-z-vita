@@ -900,6 +900,15 @@ const Text table[] = {
     // Details panel screenshots.
     {"Left and Right: more screenshots", "Izquierda y derecha: más capturas", "Esquerda e direita: mais capturas"},
     {"More screenshots", "Más capturas", "Mais capturas"},
+    {"Achievements", "Logros", "Conquistas"},
+    {"Hidden achievement", "Logro oculto", "Conquista oculta"},
+    {"{} unlocked", "{} desbloqueados", "{} desbloqueadas"},
+    {"{} / {} unlocked", "{} / {} desbloqueados", "{} / {} desbloqueadas"},
+    {"Unlocked", "Desbloqueado", "Desbloqueada"},
+    {"Locked", "Bloqueado", "Bloqueada"},
+    {"Down: achievements", "Abajo: logros", "Baixo: conquistas"},
+    {"Up: achievements", "Arriba: logros", "Cima: conquistas"},
+    {"No achievements recorded for this game yet.", "Aún no hay logros registrados.", "Ainda não há conquistas registradas."},
     {"Up: game details", "Arriba: detalles del juego", "Cima: detalhes do jogo"},
     {"Down: screenshots", "Abajo: capturas", "Baixo: capturas"},
     // The controls picture.
