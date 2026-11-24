@@ -3,6 +3,7 @@
 #include "art_fetch.h"
 #include "i18n.h"
 #include "model.h"
+#include "net_session.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -179,7 +180,10 @@ struct AchievementFetch::State {
   }
 
   void run() {
-    curl = curl_easy_init();
+    // Brings the network up itself: the artwork lookup before it takes its
+    // own down when it finishes.
+    NetSession session;
+    curl = session.online() ? curl_easy_init() : nullptr;
     for (size_t i = 0; i < jobs.size() && !cancel; ++i) {
       bool changed = curl && run(jobs[i]);
       std::lock_guard<std::mutex> hold(lock);

@@ -1,5 +1,6 @@
 #include "art_fetch.h"
 #include "image.h"
+#include "net_session.h"
 #include "util/json5pp.hpp"
 #include <algorithm>
 #include <cctype>
@@ -1378,53 +1379,32 @@ struct ArtFetch::State {
   }
 
   void run() {
-#ifdef __vita__
-    bool module = sceSysmoduleLoadModule(SCE_SYSMODULE_NET) == 0;
-    void *pool = std::malloc(1024 * 1024);
-    SceNetInitParam param{};
-    param.memory = pool;
-    param.size = 1024 * 1024;
-    // Another part of the launcher may already have the network up.
-    bool net = pool && sceNetInit(&param) == 0;
-    bool ctl = sceNetCtlInit() == 0;
-    int connection = 0;
-    bool online = sceNetCtlInetGetState(&connection) == 0 && connection == SCE_NETCTL_STATE_CONNECTED;
-#else
-    bool online = true;
-#endif
-    if (!online)
-      note("Not connected to the internet.");
-    else if (curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK) {
-      curl = curl_easy_init();
-      if (curl) {
-        for (auto &job : jobs) {
-          if (cancel)
-            break;
-          {
+    {
+      NetSession session;
+      if (!session.online())
+        note("Not connected to the internet.");
+      else {
+        curl = curl_easy_init();
+        if (curl) {
+          for (auto &job : jobs) {
+            if (cancel)
+              break;
+            {
+              std::lock_guard<std::mutex> hold(lock);
+              progress.current = job.name;
+            }
+            bool found = strict ? fillIn(job) : choose(job);
             std::lock_guard<std::mutex> hold(lock);
-            progress.current = job.name;
+            ++progress.done;
+            if (found) {
+              ++progress.found;
+              progress.updated.push_back(job.key);
+            }
           }
-          bool found = strict ? fillIn(job) : choose(job);
-          std::lock_guard<std::mutex> hold(lock);
-          ++progress.done;
-          if (found) {
-            ++progress.found;
-            progress.updated.push_back(job.key);
-          }
+          curl_easy_cleanup(curl);
         }
-        curl_easy_cleanup(curl);
       }
-      curl_global_cleanup();
     }
-#ifdef __vita__
-    if (ctl)
-      sceNetCtlTerm();
-    if (net)
-      sceNetTerm();
-    std::free(pool);
-    if (module && net)
-      sceSysmoduleUnloadModule(SCE_SYSMODULE_NET);
-#endif
     std::lock_guard<std::mutex> hold(lock);
     progress.finished = true;
     done = true;

@@ -1,4 +1,5 @@
 #include "update_check.h"
+#include "net_session.h"
 #include "release.h"
 #include <cstdlib>
 #include <curl/curl.h>
@@ -37,22 +38,9 @@ struct UpdateCheck::State {
     return static_cast<State *>(ptr)->cancel ? 1 : 0;
   }
   void fetch() {
-#ifdef __vita__
-    bool module = sceSysmoduleLoadModule(SCE_SYSMODULE_NET) == 0;
-    void *pool = std::malloc(1024 * 1024);
-    SceNetInitParam param{};
-    param.memory = pool;
-    param.size = 1024 * 1024;
-    bool net = pool && sceNetInit(&param) == 0;
-    bool ctl = sceNetCtlInit() == 0;
-    int connection = 0;
-    bool online = sceNetCtlInetGetState(&connection) == 0 &&
-                  connection == SCE_NETCTL_STATE_CONNECTED;
-#else
-    bool online = true;
-#endif
-    if (online && !cancel &&
-        curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK) {
+    NetSession session;
+    bool online = session.online();
+    if (online && !cancel) {
       CURL *curl = curl_easy_init();
       if (curl) {
         curl_easy_setopt(curl, CURLOPT_URL,
@@ -82,17 +70,7 @@ struct UpdateCheck::State {
           notice = newerRelease(payload, HARDRPG_VERSION_TAG, &retrieved);
         curl_easy_cleanup(curl);
       }
-      curl_global_cleanup();
     }
-#ifdef __vita__
-    if (ctl)
-      sceNetCtlTerm();
-    if (net)
-      sceNetTerm();
-    std::free(pool);
-    if (module)
-      sceSysmoduleUnloadModule(SCE_SYSMODULE_NET);
-#endif
     payload.clear();
     done.store(true, std::memory_order_release);
   }
