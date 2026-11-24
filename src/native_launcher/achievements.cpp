@@ -1,12 +1,15 @@
 #include "achievements.h"
 #include "model.h"
+#include "theme.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <fstream>
 #include <map>
+#include <sstream>
 #include <dirent.h>
 #include <fcntl.h>
 #include <set>
@@ -107,6 +110,10 @@ std::string catalog(const Paths &paths, const Entry &entry, const std::string &g
     return readFile(gameDir(paths, game) + "/catalog.json", maxCatalog);
   } catch (const std::exception &) {
   }
+  // Reading inside a ZIP mounts it, which is slow on the Vita: only for a
+  // ZIP game that uses achievements (it has its achievements folder).
+  if (entry.node.archive && !directory(gameDir(paths, game)))
+    return {};
   try {
     auto data = entry.node.read("hardrpg-achievements.json");
     if (!data.empty())
@@ -326,6 +333,31 @@ bool steamCatalogRecorded(const Paths &paths, const std::string &game) {
 
 bool achievementsUsed(const Paths &paths, const Entry &entry) {
   return directory(gameDir(paths, key(entry.node.identity(paths))));
+}
+
+bool steamScriptGame(const Paths &paths, const Entry &entry) {
+  if (entry.kind != Kind::Game || entry.node.archive)
+    return false;
+  auto dir = entry.node.path();
+  struct stat st;
+  if (stat((dir + "/steam_api.dll").c_str(), &st) != 0)
+    return false;
+  auto game = key(entry.node.identity(paths));
+  auto list = paths.at("achievements/steam-script-checked.txt");
+  std::string checked;
+  try {
+    checked = readFile(list, 256 * 1024);
+  } catch (const std::exception &) {
+  }
+  std::istringstream lines(checked);
+  for (std::string line; std::getline(lines, line);)
+    if (line == game)
+      return false;
+  if (gameScriptsMention(dir, "steam_acheivement"))
+    return registerAchievements(paths, game);
+  if (ensureDir(paths.root) && ensureDir(paths.at("achievements")))
+    std::ofstream(list, std::ios::app) << game << "\n";
+  return false;
 }
 
 bool safeIconName(const std::string &name) {
