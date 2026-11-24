@@ -1221,9 +1221,9 @@ void View::buildSheet(const UI &u) {
       // without a slab of red across the screen.
       solidQuad({0, 0, 0}, G.x, y, G.w, box, 0.38, 10);
       solidQuad(ruby, G.x, y, G.w, box, 0.42, 10);
-    } else if (r.kind == Row::Primary)
-      solidQuad(ruby, G.x, y, G.w, box, focused ? 1 : 0.7, wide ? 10 : 8);
-    else if (r.kind != Row::Info || focused) {
+    } else if (r.kind != Row::Info || focused) {
+      // Primary rows (the suggested choice) look like any other row; only
+      // their bold label sets them apart, so the tint alone marks the cursor.
       if (!(menuPage && focused)) {
       // Over a game each row is a clear button: a dark plate under the tint.
       if (wide)
