@@ -308,8 +308,15 @@ static VALUE localAchievement(VALUE name, bool unlock) {
         hardrpg::Paths paths;
         auto game = runningAchievementKey(paths);
         std::string id(RSTRING_PTR(name), RSTRING_LEN(name));
-        bool ok = unlock ? hardrpg::unlockAchievement(paths, game, id)
+        bool fresh = false;
+        bool ok = unlock ? hardrpg::unlockAchievement(paths, game, id, &fresh)
                          : hardrpg::achievementUnlocked(paths, game, id);
+        if (fresh) {
+            // Newly earned: the popup over the game, with its name and icon.
+            std::string icon;
+            auto shown = hardrpg::describeAchievement(paths, game, shState->config().gameFolder, id, icon);
+            shState->graphics().showAchievement(shown.name, shown.description, icon);
+        }
         return ok ? Qtrue : Qfalse;
     } catch (const std::exception &) {
         return Qfalse;

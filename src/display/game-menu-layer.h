@@ -12,6 +12,7 @@
 #include "etc/etc.h"
 #include "native_launcher/view.h"
 #include "input/vita-keyboard.h"
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -51,6 +52,9 @@ class GameMenuLayer {
     // The same blur behind the menu, over the whole screen: the paused game
     // stays recognisable but its own text no longer fights the menu's.
     TEXFBO menuHalf, menuQuarter;
+    // The achievement popup's glass, along the top of the screen.
+    TEXFBO toastHalf, toastQuarter;
+    bool toastGlassMade = false, toastGlassFailed = false, toastGlassFresh = false;
     bool menuGlassMade = false, menuGlassFailed = false, menuGlassFresh = false;
     hardrpg::Image buttons;
     int buttonsFor = -1;
@@ -338,12 +342,10 @@ public:
     }
 
 public:
-    // Before the game is drawn to the screen: the glass area of this frame,
-    // a quarter size. game is the frame's texture, shown at gameRect.
-    void prepareGlass(GLuint game, const IntRect &gameRect) {
-        if (!ready() || !glassReady())
-            return;
-        const auto area = hardrpg::GameKeyboard::glassArea();
+    // Blurs one area of the frame into half, then quarter (which must be
+    // sized for it): drawn later stretched back, as frosted glass.
+    void blurArea(TEXFBO &half, TEXFBO &quarter, const hardrpg::KeyboardRect &area, GLuint game,
+                  const IntRect &gameRect) {
         glState.scissorTest.pushSet(false);
         glState.blend.pushSet(false);
         glState.program.set(glassProgram);
@@ -354,8 +356,8 @@ public:
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(GLfloat), nullptr);
         // Each pass fills its whole target (the 960x544 space is the
         // viewport), drawn upside down so rows stay top first in memory.
-        FBO::bind(glassHalf.fbo);
-        glState.viewport.pushSet(IntRect(0, 0, glassHalf.width, glassHalf.height));
+        FBO::bind(half.fbo);
+        glState.viewport.pushSet(IntRect(0, 0, half.width, half.height));
         glState.clearColor.pushSet(Vec4(0, 0, 0, 1));
         FBO::clear();
         glState.clearColor.pop();
@@ -368,9 +370,9 @@ public:
         gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glState.viewport.pop();
-        FBO::bind(glassQuarter.fbo);
-        glState.viewport.pushSet(IntRect(0, 0, glassQuarter.width, glassQuarter.height));
-        glBindTexture(GL_TEXTURE_2D, glassHalf.tex.gl);
+        FBO::bind(quarter.fbo);
+        glState.viewport.pushSet(IntRect(0, 0, quarter.width, quarter.height));
+        glBindTexture(GL_TEXTURE_2D, half.tex.gl);
         glassQuad(0, 0, 960, 544, 0, 1, 1, 0, 0);
         glState.viewport.pop();
         glDisableVertexAttribArray(0);
@@ -378,7 +380,66 @@ public:
         glState.blend.pop();
         glState.scissorTest.pop();
         FBO::bind(FBO::ID(0));
+    }
+
+public:
+    // Before the game is drawn to the screen: the glass area of this frame,
+    // a quarter size. game is the frame's texture, shown at gameRect.
+    void prepareGlass(GLuint game, const IntRect &gameRect) {
+        if (!ready() || !glassReady())
+            return;
+        blurArea(glassHalf, glassQuarter, hardrpg::GameKeyboard::glassArea(), game, gameRect);
         glassFresh = true;
+    }
+
+    // The achievement popup's glass: a band along the top of the screen,
+    // where the card slides in and out (achievement_toast.h).
+    static hardrpg::KeyboardRect toastArea() { return {0, 0, 960, 160}; }
+    void prepareToastGlass(GLuint game, const IntRect &gameRect) {
+        if (!ready() || !glassReady() || toastGlassFailed)
+            return;
+        if (!toastGlassMade) {
+            try {
+                const auto area = toastArea();
+                for (TEXFBO *t : {&toastHalf, &toastQuarter}) {
+                    const int div = t == &toastHalf ? 2 : 4;
+                    TEXFBO::init(*t);
+                    TEXFBO::allocEmpty(*t, area.w / div, area.h / div);
+                    TEXFBO::linkFBO(*t);
+                    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                }
+            } catch (const Exception &) {
+                toastGlassFailed = true;
+                FBO::bind(FBO::ID(0));
+                return;
+            }
+            toastGlassMade = true;
+        }
+        blurArea(toastHalf, toastQuarter, toastArea(), game, gameRect);
+        toastGlassFresh = true;
+    }
+
+    // The achievement card at x, y: the blurred game under its rounded
+    // shape (or a dark tint when there is no blur), then the card, whose
+    // contents fade by alpha.
+    void drawToast(const hardrpg::Image &card, float x, float y, float alpha, int winW, int winH) {
+        if (card.empty() || !begin(winW, winH))
+            return;
+        const float w = float(card.width), h = float(card.height);
+        if (toastGlassFresh && glassProgram) {
+            const auto area = toastArea();
+            glState.program.set(glassProgram);
+            glUniform1i(glassImage, 0);
+            glBindTexture(GL_TEXTURE_2D, toastQuarter.tex.gl);
+            glassQuad(x, y, w, h, (x - area.x) / area.w, (y - area.y) / area.h, (x + w - area.x) / area.w,
+                      (y + h - area.y) / area.h, 16);
+            glState.program.set(program);
+        } else
+            quad(x, y, w, h, 0.05f, 0.06f, 0.08f, 0.55f * std::max(alpha, 0.4f), 16, nullptr);
+        toastGlassFresh = false;
+        quad(x, y, w, h, 1, 1, 1, alpha, 0, &card);
+        end();
     }
 
     // Before the game is drawn to the screen while the menu is open: the

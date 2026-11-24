@@ -915,6 +915,7 @@ const Text table[] = {
      "Cima e baixo: mover  ·  L e R: página"},
     {"Looking up achievements on Steam...", "Buscando logros en Steam...", "Buscando conquistas na Steam..."},
     {"Achievements updated.", "Logros actualizados.", "Conquistas atualizadas."},
+    {"Achievement unlocked", "Logro desbloqueado", "Conquista desbloqueada"},
     {"No achievements found on Steam.", "No se encontraron logros en Steam.", "Nenhuma conquista encontrada na Steam."},
     {"Could not reach Steam. Try again later.", "No se pudo conectar con Steam. Inténtalo más tarde.",
      "Não foi possível acessar a Steam. Tente mais tarde."},

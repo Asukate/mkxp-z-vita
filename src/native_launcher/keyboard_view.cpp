@@ -2,6 +2,8 @@
 // drawn once per page and modifier state. The blur behind the glass is the
 // GPU's (display/game-menu-layer.h); these images hold the light tint, the
 // rims, the labels and the icons.
+#include "achievement_toast.h"
+#include "i18n.h"
 #include "input/vita-keyboard.h"
 #include "view.h"
 #include <algorithm>
@@ -284,6 +286,50 @@ const Image &View::keyPreview(const std::string &text, int w, int h) {
     endLayer();
   }
   return previewLayer.image;
+}
+
+// The achievement popup's card: the keyboard's glass (a light tint and a
+// bright rim over the blur, with a little shade so white text reads over a
+// bright game), the icon, then "Achievement unlocked", the name and the
+// description, each line cut short to fit.
+const Image &View::achievementToast(const AchievementToasts::Toast &toast) {
+  const int w = AchievementToasts::width, h = AchievementToasts::height;
+  if (!beginLayer(toastLayer, toast.name + "|" + toast.description + "|" + toast.icon + "|" + languageCode(language()), w, h))
+    return toastLayer.image;
+  Canvas cv{surface, surfaceW, surfaceH};
+  glassFill(cv, 0, 0, float(w), float(h), 16, {8, 9, 12}, 92);
+  glassFill(cv, 0, 0, float(w), float(h), 16, {205, 212, 224}, 26);
+  glassEdge(cv, 0, 0, float(w), float(h), 16, 1.4f, {150, 70, 110});
+  const int icon = 56, iy = (h - icon) / 2, ix = 12;
+  Image picture = toast.icon.empty() ? Image() : Image::load(toast.icon);
+  if (!picture.empty())
+    blitScaled(picture, ix, iy, icon, icon, 255, 256, 8);
+  else {
+    // No icon yet: a ruby medal on a dark tile.
+    glassFill(cv, ix, iy, ix + icon, iy + icon, 8, {30, 30, 36}, 230);
+    glassFill(cv, ix + 16, iy + 14, ix + 40, iy + 38, 12, {224, 35, 63}, 255);
+    glassFill(cv, ix + 23, iy + 21, ix + 33, iy + 31, 5, {255, 214, 222}, 255);
+  }
+  glassEdge(cv, ix, iy, ix + icon, iy + icon, 8, 1.0f, {110, 60, 90});
+  const int tx = ix + icon + 14, room = w - tx - 16;
+  // Text with a soft shadow under it: the game behind can be bright.
+  auto shadowed = [&](int y, const std::string &text, int size, std::array<int, 3> c, bool bold) {
+    label(tx + 1, y + 1, text, size, {0, 0, 0}, 150, bold, -1, room);
+    label(tx, y, text, size, c, 255, bold, -1, room);
+  };
+  std::string head = tr("Achievement unlocked");
+  for (auto &ch : head)
+    if (ch >= 'a' && ch <= 'z')
+      ch = char(ch - 32);
+  shadowed(8, head, 12, {255, 120, 138}, true);
+  if (toast.description.empty())
+    shadowed(32, toast.name, 21, {255, 255, 255}, true);
+  else {
+    shadowed(23, toast.name, 20, {255, 255, 255}, true);
+    shadowed(50, toast.description, 14, {226, 228, 234}, false);
+  }
+  endLayer();
+  return toastLayer.image;
 }
 
 void drawGameButtons(Image &image, int gameX, bool keyboardOpen, bool menuLit) {

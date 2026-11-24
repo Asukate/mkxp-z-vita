@@ -40,7 +40,13 @@ struct GameAchievements {
 std::string achievementGameKey(const Paths &, const std::string &configPath,
                                const std::string &gameFolder);
 bool registerAchievements(const Paths &, const std::string &game);
-bool unlockAchievement(const Paths &, const std::string &game, const std::string &id);
+// fresh (when given) is set when this call earned it, not an earlier one.
+bool unlockAchievement(const Paths &, const std::string &game, const std::string &id, bool *fresh = nullptr);
+// What the popup shows for an achievement a running game just earned: its
+// name, description and the earned icon's file (empty without one), from the
+// same catalogs as the list. gameFolder is the running game's folder.
+Achievement describeAchievement(const Paths &, const std::string &game, const std::string &gameFolder,
+                                const std::string &id, std::string &iconPath);
 bool achievementUnlocked(const Paths &, const std::string &game, const std::string &id);
 GameAchievements gameAchievements(const Paths &, const Entry &);
 

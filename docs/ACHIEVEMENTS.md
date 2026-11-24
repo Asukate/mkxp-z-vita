@@ -80,6 +80,24 @@ An achievement marked hidden appears as **Hidden achievement** until
 earned. Set `"hidden": true` on any entry that should conceal spoilers,
 including entries whose source catalog marks them public. A catalog can be up to 256 KiB and contain up to 1,024 entries.
 
+## The popup in game
+
+When a game earns an achievement, a card slides down from the top of the
+screen with its icon, name and description. It stays about four and a half
+seconds, then slides back up. It sits on the same frosted glass as the in-game
+keyboard, so the game stays visible through it. Swipe it up or to the side to
+send it away early. A short drag springs back, and the time it has already
+been shown is kept. When several are earned at once they show one after the
+other. While a finger holds the card, the game does not see that touch. The
+popup does not show while the HardRPG menu is open.
+
+The motion is in `src/native_launcher/achievement_toast.h`, so the desktop
+tests and renders use the same code as the Vita. `View::achievementToast`
+draws the card and `display/game-menu-layer.h` puts it over the glass. The
+glass has no fade, so only the card's contents fade as it moves. The host's
+`--toast-script FILE` command plays a scripted run over a screenshot and
+writes frames as PNG.
+
 ## RGSS game scripts
 
 Call `System.unlock_achievement(id)` at the existing award event. It returns

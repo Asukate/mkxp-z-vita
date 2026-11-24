@@ -1729,6 +1729,61 @@ class NativeLauncher(unittest.TestCase):
         self.assertEqual(again['message'], 'Achievements updated.')
         self.assertEqual(again['page'], self.ui(page)['page'])
 
+    def toast_run(self, touches, times, out=None):
+        import zlib
+        background = self.storage/'game.png'
+        if not background.exists():
+            raw = b''.join(b'\0' + bytes((40, 60, 90)) * 960 for _ in range(544))
+            chunk = lambda t, d: struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+            background.write_bytes(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 960, 544, 8, 2, 0, 0, 0)) +
+                                   chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+        spec = self.storage/'toast.json'
+        spec.write_text(json.dumps({
+            'background': str(background),
+            'toasts': [{'name': 'First', 'description': 'One'}, {'name': 'Second', 'description': 'Two'}],
+            'touches': [{'t': t, 'x': x, 'y': y, 'down': d} for t, x, y, d in touches],
+            'frames': [{'t': t, **({'out': str(out)} if out and t == times[-1] else {})} for t in times]}))
+        frames = self.run_binary('--toast-script', spec)['frames']
+        return {f['t']: f for f in frames}
+
+    def test_achievement_popup_slides_in_stays_and_leaves_in_turn(self):
+        shot = self.storage/'popup.png'
+        f = self.toast_run([], [0, 200, 400, 4800, 5000, 5200, 5600, 10900], out=shot)
+        self.assertLess(f[0]['y'], 0)                    # starts above the screen
+        self.assertTrue(-80 < f[200]['y'] < 30)          # on its way down
+        self.assertEqual((f[400]['x'], f[400]['y'], f[400]['alpha']), (254, 12, 1))
+        self.assertEqual((f[4800]['name'], f[4800]['y']), ('First', 12))  # a few seconds
+        self.assertLess(f[5000]['y'], 12)                # leaving by itself
+        self.assertEqual(f[5200]['name'], 'Second')      # then the next one
+        self.assertEqual((f[5600]['name'], f[5600]['y']), ('Second', 12))
+        self.assertFalse(f[10900]['active'])
+        self.assertTrue(shot.exists())
+
+    def test_achievement_popup_swipes_away_and_springs_back(self):
+        # Up by 40 px and let go: it goes, the next one comes.
+        f = self.toast_run([(1000, 480, 50, True), (1100, 480, 10, True), (1150, 480, 10, False)],
+                           [1100, 1300, 1500])
+        self.assertTrue(f[1100]['holding'])
+        self.assertEqual(f[1100]['y'], 12 - 40)
+        self.assertFalse(f[1300]['holding'])
+        self.assertEqual(f[1300]['name'], 'First')
+        self.assertLess(f[1300]['y'], 12 - 40)
+        self.assertEqual(f[1500]['name'], 'Second')
+        # Sideways works too.
+        f = self.toast_run([(1000, 480, 50, True), (1100, 600, 52, True), (1150, 600, 52, False)], [1300, 1500])
+        self.assertGreater(f[1300]['x'], 254 + 120)
+        self.assertEqual(f[1500]['name'], 'Second')
+        # A short drag settles back, and the time already shown is kept.
+        f = self.toast_run([(1000, 480, 50, True), (1300, 490, 58, True), (1600, 490, 58, False)],
+                           [1600, 1900, 5500, 6000])
+        self.assertEqual((f[1900]['name'], f[1900]['x'], f[1900]['y']), ('First', 254, 12))
+        self.assertEqual((f[5500]['name'], f[5500]['y']), ('First', 12))
+        self.assertEqual(f[6000]['name'], 'Second')
+        # A touch below the card is the game's.
+        f = self.toast_run([(1000, 480, 300, True), (1100, 480, 200, True), (1150, 480, 200, False)], [1100, 1300])
+        self.assertFalse(f[1100]['holding'])
+        self.assertEqual((f[1300]['name'], f[1300]['y']), ('First', 12))
+
     def test_delete_the_zip_keeps_an_unpacked_game_playable(self):
         zip_path = self.zip(self.games/'freed.zip')
         # Not unpacked yet: no such row, the menu ends at Remove from library.

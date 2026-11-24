@@ -154,7 +154,9 @@ bool registerAchievements(const Paths &paths, const std::string &game) {
          ensureDir(markerDir(paths, game));
 }
 
-bool unlockAchievement(const Paths &paths, const std::string &game, const std::string &id) {
+bool unlockAchievement(const Paths &paths, const std::string &game, const std::string &id, bool *fresh) {
+  if (fresh)
+    *fresh = false;
   if (!validId(id) || !registerAchievements(paths, game))
     return false;
 
@@ -170,6 +172,8 @@ bool unlockAchievement(const Paths &paths, const std::string &game, const std::s
   // A failed write leaves an empty marker: still unlocked, dated by the file.
   bool written = n > 0 && write(fd, when, size_t(n)) == n;
   (void)written;
+  if (fresh)
+    *fresh = true;
   return close(fd) == 0;
 }
 
@@ -263,6 +267,56 @@ GameAchievements gameAchievements(const Paths &paths, const Entry &entry) {
     return a.unlocked && a.unlockedAt > b.unlockedAt;
   });
   return result;
+}
+
+Achievement describeAchievement(const Paths &paths, const std::string &game, const std::string &gameFolder,
+                                const std::string &id, std::string &iconPath) {
+  Achievement a;
+  a.id = a.name = id;
+  a.unlocked = true;
+  iconPath.clear();
+  if (!validGame(game) || !validId(id))
+    return a;
+  auto steam = steamRows(paths, game);
+  auto find = [&](const Json &list) -> const Json * {
+    if (list.is_array())
+      for (const auto &row : list.as_array())
+        if (row.is_object() && field(row, "id") == id)
+          return &row;
+    return nullptr;
+  };
+  // The text from the first catalog that has this achievement.
+  std::vector<std::string> texts;
+  for (auto path : {gameDir(paths, game) + "/catalog.json", gameFolder + "/hardrpg-achievements.json"}) {
+    try {
+      texts.push_back(readFile(path, maxCatalog));
+    } catch (const std::exception &) {
+    }
+  }
+  const Json *row = nullptr;
+  Json parsed;
+  for (auto &text : texts) {
+    try {
+      parsed = json5pp::parse(text);
+      if ((row = find(parsed)))
+        break;
+    } catch (const std::exception &) {
+    }
+  }
+  if (!row)
+    row = find(steam);
+  if (row) {
+    auto name = field(*row, "name");
+    if (!name.empty())
+      a.name = name;
+    a.description = field(*row, "description");
+  }
+  if (const Json *icons = find(steam)) {
+    a.icon = field(*icons, "icon");
+    if (safeIconName(a.icon))
+      iconPath = gameDir(paths, game) + "/icons/" + a.icon;
+  }
+  return a;
 }
 
 bool steamCatalogRecorded(const Paths &paths, const std::string &game) {

@@ -5,6 +5,7 @@
 #include "view.h"
 #include "release.h"
 #include <SDL.h>
+#include <png.h>
 #include <iostream>
 #include <sstream>
 #include <chrono>
@@ -475,6 +476,117 @@ int main(int argc, char **argv) {
         }
         v.save(value);
         std::puts("{}");
+        return 0;
+      } else if (arg == "--toast-script") {
+        // The achievement popup over a game screenshot, run by the same code
+        // as the Vita (achievement_toast.h): a JSON file with "background"
+        // (a 960x544 PNG), "toasts" [{name, description, icon}], "touches"
+        // [{t, x, y, down}] and "frames" [{t, out}]. Prints where the card
+        // was at each frame; frames with "out" are written as PNG, the glass
+        // made as the game layer makes it (half, quarter, stretched back).
+        auto spec = json5pp::parse(hardrpg::readFile(value, 1 << 20));
+        auto &o = spec.as_object();
+        auto text = [](const Json &v, const char *name) {
+          auto it = v.as_object().find(name);
+          return it != v.as_object().end() && it->second.is_string() ? it->second.as_string() : std::string();
+        };
+        auto number = [](const Json &v, const char *name) {
+          auto it = v.as_object().find(name);
+          return it != v.as_object().end() && it->second.is_number() ? it->second.as_number() : 0.0;
+        };
+        hardrpg::View v(font);
+        hardrpg::AchievementToasts toasts;
+        for (auto &t : o["toasts"].as_array())
+          toasts.push({text(t, "name"), text(t, "description"), text(t, "icon")});
+        hardrpg::Image background = hardrpg::Image::load(text(spec, "background"));
+        if (background.width != 960 || background.height != 544)
+          background = background.cover(960, 544);
+        hardrpg::Image glass = background.resized(480, 272).resized(240, 136).resized(960, 544);
+        struct Touch {
+          uint64_t t;
+          int x, y;
+          bool down;
+        };
+        std::vector<Touch> touches;
+        if (o.count("touches"))
+          for (auto &t : o["touches"].as_array())
+            touches.push_back({uint64_t(number(t, "t")), int(number(t, "x")), int(number(t, "y")),
+                               t.as_object().count("down") && t.as_object().at("down").as_boolean()});
+        auto frames = o["frames"].as_array();
+        uint64_t end = 0;
+        for (auto &f : frames)
+          end = std::max(end, uint64_t(number(f, "t")));
+        auto out = array();
+        bool down = false, wasDown = false;
+        int fx = 0, fy = 0;
+        size_t nextTouch = 0, nextFrame = 0;
+        for (uint64_t t = 0; t <= end; ++t) {
+          // A frame every 16 ms, and at each asked time.
+          bool asked = nextFrame < frames.size() && uint64_t(number(frames[nextFrame], "t")) == t;
+          if (t % 16 && !asked)
+            continue;
+          while (nextTouch < touches.size() && touches[nextTouch].t <= t) {
+            down = touches[nextTouch].down;
+            fx = touches[nextTouch].x, fy = touches[nextTouch].y;
+            ++nextTouch;
+          }
+          if (down || wasDown)
+            toasts.touch(down, down && !wasDown, fx, fy, t);
+          else
+            toasts.update(t);
+          wasDown = down;
+          while (nextFrame < frames.size() && uint64_t(number(frames[nextFrame], "t")) == t) {
+            auto &f = frames[nextFrame++];
+            auto row = object();
+            auto &r = row.as_object();
+            r["t"] = Json::integer_type(t);
+            r["active"] = toasts.active();
+            r["holding"] = toasts.holding();
+            if (toasts.active()) {
+              auto p = toasts.placement(t);
+              r["name"] = toasts.current().name;
+              r["x"] = Json::integer_type(std::lround(p.x));
+              r["y"] = Json::integer_type(std::lround(p.y));
+              r["alpha"] = std::round(p.alpha * 100) / 100;
+            }
+            out.as_array().push_back(row);
+            auto path = text(f, "out");
+            if (path.empty())
+              continue;
+            std::vector<uint8_t> pixels = background.rgba;
+            if (toasts.active()) {
+              auto p = toasts.placement(t);
+              const auto &card = v.achievementToast(toasts.current());
+              const int x0 = int(std::lround(p.x)), y0 = int(std::lround(p.y));
+              const float r = 16, w = float(card.width), h = float(card.height);
+              for (int y = std::max(0, y0); y < std::min(544, y0 + card.height); ++y)
+                for (int x = std::max(0, x0); x < std::min(960, x0 + card.width); ++x) {
+                  // The glass: blurred game inside the rounded card.
+                  float px = x - x0 + 0.5f, py = y - y0 + 0.5f;
+                  float qx = std::fabs(px - w / 2) - (w / 2 - r), qy = std::fabs(py - h / 2) - (h / 2 - r);
+                  float d = std::hypot(std::max(qx, 0.f), std::max(qy, 0.f)) + std::min(std::max(qx, qy), 0.f) - r;
+                  float cover = std::max(0.f, std::min(1.f, 0.5f - d));
+                  uint8_t *dst = &pixels[(size_t(y) * 960 + x) * 4];
+                  const uint8_t *g = &glass.rgba[(size_t(y) * 960 + x) * 4];
+                  for (int k = 0; k < 3; ++k)
+                    dst[k] = uint8_t(dst[k] + (g[k] - dst[k]) * cover);
+                  const uint8_t *src = &card.rgba[(size_t(y - y0) * card.width + (x - x0)) * 4];
+                  float a = p.alpha;
+                  for (int k = 0; k < 3; ++k)
+                    dst[k] = uint8_t(std::min(255.f, src[k] * a + dst[k] * (1 - src[3] / 255.f * a)));
+                }
+            }
+            png_image image{};
+            image.version = PNG_IMAGE_VERSION;
+            image.width = 960;
+            image.height = 544;
+            image.format = PNG_FORMAT_RGBA;
+            png_image_write_to_file(&image, path.c_str(), 0, pixels.data(), 0, nullptr);
+          }
+        }
+        auto result = object();
+        result.as_object()["frames"] = out;
+        std::cout << result.stringify() << "\n";
         return 0;
       } else if (arg == "--in-game")
         inGame = value; // the running game's settings key, as the engine has it

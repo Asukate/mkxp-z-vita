@@ -33,6 +33,8 @@ struct AtomicFlag;
 struct THEORAPLAY_VideoFrame;
 struct Movie;
 
+#include <string>
+
 class Graphics
 {
 public:
@@ -74,6 +76,10 @@ public:
 
 	void reset();
     void center();
+
+    /* HardRPG: the popup for an achievement the game just earned (Vita
+     * launcher builds; elsewhere nothing). icon is a file, or empty. */
+    void showAchievement(const std::string &name, const std::string &description, const std::string &icon);
 
     /* Non-standard extension */
     DECL_ATTR( Fullscreen, bool )

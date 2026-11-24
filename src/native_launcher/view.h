@@ -1,4 +1,5 @@
 #pragma once
+#include "achievement_toast.h"
 #include "art_loader.h"
 #include "image.h"
 #include "ui.h"
@@ -59,6 +60,8 @@ public:
   // buttons in the left border (drawGameButtons: no font needed).
   const Image &keyboardPanel(const GameKeyboard &);
   const Image &keyPreview(const std::string &text, int w, int h);
+  // The achievement popup's card (AchievementToasts::width x height).
+  const Image &achievementToast(const AchievementToasts::Toast &);
   bool gpu = false;      // the presenter draws scene; pixels hold nothing
   // Drawn over a running game: sheets keep a see-through background and
   // pixels start transparent (premultiplied alpha).
@@ -126,7 +129,7 @@ private:
   Image shoulderGlow[2];
   int shoulderX[2] = {0, 0}, shoulderY[2] = {0, 0};
   const Image &shoulder(int side, int &x, int &y);
-  Layer statsLayer, previewLayer;
+  Layer statsLayer, previewLayer, toastLayer;
   std::list<std::pair<std::string, Image>> keyboardImages; // newest first
   void centredLabel(float cx, float cy, const std::string &text, int size);
   const Image *heroShown = nullptr, *heroFading = nullptr;

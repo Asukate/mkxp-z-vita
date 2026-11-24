@@ -558,6 +558,7 @@ const CjkText cjkTable[] = {
     {"Up and Down: move  ·  L and R: page", "上下：移動  ·  L・R：ページ", "上下：移动  ·  L、R：翻页"},
     {"Looking up achievements on Steam...", "Steam で実績を検索中...", "正在 Steam 上查找成就..."},
     {"Achievements updated.", "実績を更新しました。", "成就已更新。"},
+    {"Achievement unlocked", "実績を解除", "成就已解锁"},
     {"No achievements found on Steam.", "Steam に実績が見つかりません。", "Steam 上没有找到成就。"},
     {"Could not reach Steam. Try again later.", "Steam に接続できません。あとで試してください。", "无法连接 Steam。请稍后再试。"},
     {"Down: achievements", "下：実績", "下：成就"},

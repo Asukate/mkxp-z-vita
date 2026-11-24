@@ -1464,6 +1464,12 @@ struct GraphicsPrivate {
     const hardrpg::View *gameMenuView = nullptr;
     hardrpg::GameKeyboard gameKeyboard;
     unsigned keyboardEpoch = vitaResumeEpoch();
+    /* Achievement popups over the game (achievement_toast.h); a swipe on
+     * one holds the touch from the game until the finger lifts. */
+    hardrpg::AchievementToasts achievementToasts;
+    bool toastHoldsTouch = false;
+    int toastTouchX = 0, toastTouchY = 0;
+    static uint64_t overlayClockMs() { return sceKernelGetProcessTimeWide() / 1000; }
     /* The keyboard and performance panel share the launcher's fonts. */
     std::unique_ptr<hardrpg::View> overlayView;
     bool overlayViewFailed = false;
@@ -1542,6 +1548,19 @@ struct GraphicsPrivate {
         const bool down = !sample.front.empty();
         const bool began = down && !overlayTouching;
         overlayTouching = down;
+        if (achievementToasts.active()) {
+            if (down) {
+                toastTouchX = int(sample.front[0].x * 960);
+                toastTouchY = int(sample.front[0].y * 544);
+            }
+            const bool held = achievementToasts.touch(down, began, toastTouchX, toastTouchY, overlayClockMs());
+            if (held != toastHoldsTouch) {
+                toastHoldsTouch = held;
+                vitaSetKeyboardOverlay(gameKeyboard.heldKeys(), held || gameKeyboard.capturing());
+            }
+            if (held)
+                return;
+        }
         gameKeyboard.setGameOffset(scOffset.x);
         if (gameKeyboard.capturing()) {
             const char ch = gameKeyboard.step(sample);
@@ -1909,6 +1928,13 @@ struct GraphicsPrivate {
                                            sceKernelGetProcessTimeWide() / 1000, winSize.x, winSize.y);
             }
             gameMenuLayer.drawButtons(winSize.x, winSize.y, scOffset.x, menuIconPressed, gameKeyboard.visible());
+            const uint64_t now = overlayClockMs();
+            achievementToasts.update(now);
+            if (achievementToasts.active() && ensureOverlayView()) {
+                const auto at = achievementToasts.placement(now);
+                gameMenuLayer.drawToast(overlayView->achievementToast(achievementToasts.current()), at.x, at.y,
+                                        at.alpha, winSize.x, winSize.y);
+            }
         }
 #endif
 #ifdef MKXPZ_VITA_DIAGNOSTICS
@@ -2093,6 +2119,10 @@ struct GraphicsPrivate {
         else if (gameMenu.isOpen() && gameMenuView)
             gameMenuLayer.prepareMenuGlass(screen.getPP().frontBuffer().tex.gl,
                                            IntRect(scOffset.x, scOffset.y, scSize.x, scSize.y));
+        /* The achievement popup's glass, along the top of this frame. */
+        if (achievementToasts.active() && !gameMenu.isOpen())
+            gameMenuLayer.prepareToastGlass(screen.getPP().frontBuffer().tex.gl,
+                                            IntRect(scOffset.x, scOffset.y, scSize.x, scSize.y));
 #endif
 #ifdef MKXPZ_VITA_DIAGNOSTICS
         s42iMark("REDRAW_SCREEN_COMPOSITE_RETURN");
@@ -3146,6 +3176,14 @@ void Graphics::setBrightness(int value) {
     
     p->brightness = value;
     p->screen.setBrightness(value / 255.0);
+}
+
+void Graphics::showAchievement(const std::string &name, const std::string &description, const std::string &icon) {
+#if defined(__vita__) && defined(MKXPZ_PROTO_LAUNCHER)
+    p->achievementToasts.push({name, description, icon});
+#else
+    (void)name, (void)description, (void)icon;
+#endif
 }
 
 void Graphics::reset() {
