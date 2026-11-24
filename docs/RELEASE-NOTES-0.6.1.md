@@ -19,10 +19,10 @@ Cat in the Box and fixes for games that stopped at the start.
 
 ## Fixes
 
-- **Games that stopped with "incomplete format specifier"** (#32),
-  such as the CG Gallery of Get Violated By EVERY Girl You Encounter
-  RPG ~MAX Volume!~: a lone % at the end of a text, which older RPG
-  Makers printed as is, no longer stops the game.
+- **Games that stopped with "incomplete format specifier"** (#32): a
+  lone % at the end of a text, which older RPG Makers printed as is,
+  no longer stops the game. The CG Gallery of Get Violated By EVERY
+  Girl You Encounter RPG ~MAX Volume!~ opens again.
 - **Country Girl Keiko and other games with a menu of several games
   inside** (#33): picking one of the inner games no longer stops
   with "super: no superclass method 'method_added'", and each inner
