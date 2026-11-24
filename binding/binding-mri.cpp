@@ -2716,6 +2716,14 @@ static void mriBindingExecute() {
                 rb_provided("fiber.so"));
 #endif
     
+#ifdef __vita__
+    /* Ruby grows its heap only when a collection frees less than 20% of it, so a game's heap can
+     * settle just above that line: then every couple of seconds of play it runs out of slots and
+     * collects again (Exit Fate, map 111: a 40-80 ms collection every 3 s, 0.6.1 bench). Where it
+     * settles depends on what the boot happened to allocate. Keep 60000 slots (about 2.3 MB) free
+     * after a collection instead; large heaps already keep more than that. ruby_options reads it. */
+    setenv("RUBY_GC_HEAP_FREE_SLOTS", "60000", 0);
+#endif
     std::vector<const char*> rubyArgsC{"mkxp-z"};
     rubyArgsC.push_back("-e ");
     void *node;
