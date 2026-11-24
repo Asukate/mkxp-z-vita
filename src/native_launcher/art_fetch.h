@@ -29,6 +29,17 @@ namespace hardrpg {
 // Art is written to art/<folder>/cover|hero|logo.<png|jpg|webp>, screenshots
 // to art/<folder>/shot1..4, facts to art/<folder>/info.json. In a library
 // run, pictures a game already has are never replaced.
+// One HTTPS GET (or a POST with a body) with the downloader's settings: a
+// 20 second limit, 8 MiB at most, certificates checked, stopped when cancel
+// turns true. curl is a CURL handle owned by the calling thread. Uses the
+// transport set by ArtFetch::setTransport when there is one. False on any
+// failure or a status other than 200.
+bool httpsRequest(void *curl, const std::atomic<bool> &cancel, const std::string &url, std::string &out,
+                  const std::string &bearer = "", const std::string &post = "",
+                  const char *contentType = "application/json", const std::string &header = "");
+// A name reduced for matching search results: lower case letters and digits.
+std::string plainTitle(const std::string &);
+
 class ArtFetch {
 public:
   struct Job {

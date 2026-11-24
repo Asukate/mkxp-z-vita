@@ -964,8 +964,6 @@ void View::buildHome(const UI &u) {
       const auto percent = std::to_string(progress.percent());
       std::string progressKey = earned + "|" + total + "|" + languageCode(language());
       const int x = detailsX + int((1 - details) * 24);
-      if (u.home.achievementFocus)
-        solid(ruby, x - 2, progressTop - 2, progressW + 4, progressH + 4, details, 8);
       if (beginLayer(progressLayer, progressKey, progressW, progressH)) {
         rect(0, 0, progressW, progressH, {31, 31, 37}, 255, 6);
         const int y = progress.total ? 6 : 12;
@@ -984,6 +982,9 @@ void View::buildHome(const UI &u) {
         endLayer();
       }
       layerQuad(progressLayer, x, progressTop, details);
+      // Focused: the launcher's selection look, a faint ruby tint over it.
+      if (u.home.achievementFocus)
+        solid(ruby, x, progressTop, progressW, progressH, 0.3 * details, 6);
     }
     // Play and Options, under the cover.
     if (beginLayer(buttonsLayer, std::string("buttons|") + languageCode(language()), optionsX + optionsW - playX, buttonH)) {

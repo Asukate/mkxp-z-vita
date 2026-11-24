@@ -518,6 +518,10 @@ int main(int argc, char **argv) {
       return 0;
     }
     hardrpg::UI ui(paths, !quickStart);
+    {
+      std::time_t now = std::time(nullptr);
+      ui.clockOffset = int(std::localtime(&now)->tm_gmtoff);
+    }
     bool fromSnapshot = false;
     if (quickStart) {
       fromSnapshot = ui.showSnapshot();
@@ -632,6 +636,35 @@ int main(int argc, char **argv) {
           // sleep:MS  draw, then let MS of real time pass (timed animations).
           view.draw(ui);
           std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(action.c_str() + 6)));
+        } else if (action.find("steam-fixtures:") == 0) {
+          // steam-fixtures:DIR  answer downloads from files instead of the
+          // network: each URL's file is named by its last path part (query
+          // dropped); storesearch answers with DIR/storesearch.json. Missing
+          // files fail as offline does.
+          auto dir = action.substr(15);
+          hardrpg::ArtFetch::setTransport([dir](const std::string &url, const std::string &, std::string &out) {
+            auto path = url.substr(0, url.find('?'));
+            auto name = path.substr(path.find_last_of('/') + 1);
+            if (url.find("/api/storesearch/") != std::string::npos)
+              name = "storesearch.json";
+            else if (url.find("steamcommunity.com/achievements/") != std::string::npos)
+              name = "page-" + name + ".html";
+            try {
+              out = hardrpg::readFile(dir + "/" + name, 16 * 1024 * 1024);
+              return true;
+            } catch (const std::exception &) {
+              return false;
+            }
+          });
+        } else if (action == "fetch-achievements") {
+          ui.fetchAchievementsAutomatically();
+        } else if (action == "wait-achievements") {
+          // Let the achievement lookups finish (up to a minute).
+          for (int i = 0; i < 600 && (ui.achievementFetch || !ui.achievementQueue.empty()); ++i) {
+            ui.pollAchievements();
+            if (ui.achievementFetch)
+              std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          }
         } else if (action == "wait-art") {
           // Let an artwork download finish (up to two minutes).
           for (int i = 0; i < 1200 && ui.artFetch && ui.artFetch->running() && ui.home.panel != Home::Artwork; ++i) {
@@ -762,9 +795,15 @@ int main(int argc, char **argv) {
         row.as_object()["name"] = concealed ? std::string(tr("Hidden achievement")) : achievement.name;
         row.as_object()["description"] = concealed ? "" : achievement.description;
         row.as_object()["unlocked"] = achievement.unlocked;
+        if (achievement.unlockedAt)
+          row.as_object()["unlockedAt"] = Json::integer_type(achievement.unlockedAt);
+        if (!achievement.icon.empty())
+          row.as_object()["icon"] = achievement.icon;
         rows.as_array().push_back(row);
       }
       state.as_object()["achievements"] = rows;
+      state.as_object()["achievementScroll"] = ui.achievementScroll;
+      state.as_object()["achievementTotal"] = Json::integer_type(ui.achievements.total);
     }
     state.as_object()["inGame"] = ui.inGame;
     state.as_object()["inGameExit"] = int(ui.inGameExit);

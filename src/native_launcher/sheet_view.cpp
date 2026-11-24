@@ -348,7 +348,7 @@ void View::buildSheet(const UI &u) {
   };
   std::vector<Hint> left, right;
   int topFocus = -1;
-  enum Special { NoSpecial, About, ControlsTest, ControlsPick, ControlsPad, ControlsMap } special = NoSpecial;
+  enum Special { NoSpecial, About, ControlsTest, ControlsPick, ControlsPad, ControlsMap, AchievementList } special = NoSpecial;
   // Labels and values are given in English and shown translated.
   auto row = [&](Row::Kind kind, const std::string &label, const std::string &value = "", bool on = false) {
     Row r;
@@ -790,28 +790,11 @@ void View::buildSheet(const UI &u) {
       } else
         left = {hint("btn-cross-26", "Open", Button::Cross), back};
     } else if (u.page == Page::Achievements) {
-      section = u.gameEntry.name;
-      title = tr("Achievements");
-      rowH = achievementRowH;
-      const auto &progress = u.achievements;
-      const auto earned = std::to_string(progress.earned);
-      subtitle = progress.total ? trf("{} / {} unlocked", {earned, std::to_string(progress.total)})
-                                : trf("{} unlocked", {earned});
-      for (const auto &a : progress.entries) {
-        row(Row::Plain, "", a.unlocked ? "Unlocked" : "Locked");
-        auto &r = rows.back();
-        if (a.concealed())
-          r.label = tr("Hidden achievement");
-        else {
-          r.label = a.name;
-          r.detail = a.description;
-        }
-      }
-      if (rows.empty())
-        notes = {tr("No achievements recorded for this game yet.")};
-      focusRow = u.setting;
-      first = u.settingFirst;
-      left = {back};
+      // Its own layout (achievementList below): header, sections and rows.
+      special = AchievementList;
+      left = {back, hint("btn-square-26", "Update from Steam", Button::Square)};
+      if (!u.achievements.entries.empty())
+        right = {{nullptr, tr("Up and Down: move  ·  L and R: page"), Button::None}};
     } else if (u.page == Page::Cheats) {
       section = tr("Cheats");
       title = tr(u.cheatTitle.empty() ? "Cheats" : u.cheatTitle);
@@ -1197,7 +1180,7 @@ void View::buildSheet(const UI &u) {
   topBar(u, topFocus);
 
   // Header: a small section name over the title, the subtitle after it.
-  if (special != About) {
+  if (special != About && special != AchievementList) {
     const int titleY = wide ? wideSheetTitleY : sheetTitleY;
     const int titleH = wide ? 68 : 76;
     std::string key = section + "|" + title + "|" + subtitle + "|" + std::to_string(wide);
@@ -1324,6 +1307,8 @@ void View::buildSheet(const UI &u) {
   int y = rows.empty() ? G.top : G.top + rowsShown * rowH + 6;
   if (menuPage)
     y = inGameMenuFooterY - 2; // one line just above the hint bar
+  if (special == AchievementList)
+    achievementList(u);
   if (special == About) {
     place(icon("emblem-72"), G.x, 84);
     place(icon("wordmark-46"), G.x + 90, 92);
@@ -1945,6 +1930,222 @@ void View::buildSheet(const UI &u) {
       solidQuad(white, 280, 318, 400, 6, 0.14, 3);
       solidQuad(ruby, 280, 318, 400 * std::min(1.0, u.preparationFraction), 6, 1, 3);
     }
+  }
+}
+
+// The achievements page, laid out like Steam's: the game's cover, name,
+// counts and play time over a progress bar, then "Unlocked achievements"
+// (newest first, with their dates) and "Locked achievements" (grey icons;
+// hidden ones keep their secret).
+const Image &View::achievementIcon(const std::string &path) {
+  auto found = achievementIcons.find(path);
+  if (found != achievementIcons.end())
+    return found->second;
+  // A page holds ~100 achievements: forget them all now and then.
+  if (achievementIcons.size() > 160)
+    achievementIcons.clear();
+  Image img = Image::load(path);
+  if (!img.empty())
+    img = img.cover(achIcon, achIcon);
+  return achievementIcons.emplace(path, std::move(img)).first->second;
+}
+
+namespace {
+std::string playedFor(int64_t seconds) {
+  if (seconds <= 0)
+    return tr("Not played yet");
+  int64_t minutes = std::max<int64_t>(1, seconds / 60);
+  char buf[40];
+  if (minutes < 60)
+    std::snprintf(buf, sizeof buf, "%lld min", (long long)minutes);
+  else
+    std::snprintf(buf, sizeof buf, "%lld h %02lld min", (long long)(minutes / 60), (long long)(minutes % 60));
+  return trf("Play time: {}", {buf});
+}
+// "2026-11-24 16:10" in the console's time zone: the same in every language.
+std::string unlockDate(int64_t when, int offset) {
+  if (when <= 0)
+    return tr("Unlocked");
+  std::time_t t = std::time_t(when + offset);
+  std::tm parts{};
+#ifdef _WIN32
+  gmtime_s(&parts, &t);
+#else
+  gmtime_r(&t, &parts);
+#endif
+  char buf[24];
+  std::strftime(buf, sizeof buf, "%Y-%m-%d %H:%M", &parts);
+  return trf("Unlocked {}", {buf});
+}
+} // namespace
+
+void View::achievementList(const UI &u) {
+  const auto &progress = u.achievements;
+  const Entry &game = u.gameMenuSource.name.empty() ? u.gameEntry : u.gameMenuSource;
+  auto quad = [&](const Image *img, Color c, double x, double y, double w, double h, double alpha, double radius,
+                  int clipTop = 0, int clipBottom = height) {
+    Quad q;
+    q.image = img;
+    q.color = c;
+    q.x = float(x), q.y = float(y), q.w = float(w), q.h = float(h), q.alpha = float(alpha), q.radius = float(radius);
+    q.clipTop = clipTop, q.clipBottom = clipBottom;
+    scene.push_back(q);
+  };
+
+  // The cover: the game's own art, read once while the page is open.
+  const auto gameKey = u.entryKey(game);
+  if (achievementCoverKey != gameKey) {
+    achievementCoverKey = gameKey;
+    achievementCover = Image();
+    auto found = art.find(gameKey);
+    if (found != art.end() && !found->second.cover.empty())
+      achievementCover = found->second.cover.resized(achCoverW * 2, achCoverH * 2);
+    for (auto &folder : u.artFolders(game)) {
+      if (!achievementCover.empty() || folder.empty())
+        break;
+      for (const char *ext : {".jpg", ".png", ".webp", ".jpeg"}) {
+        auto img = Image::load(u.model.paths.at("art/" + folder + "/cover" + ext));
+        if (!img.empty()) {
+          achievementCover = img.cover(achCoverW * 2, achCoverH * 2);
+          break;
+        }
+      }
+    }
+  }
+  if (!achievementCover.empty())
+    quad(&achievementCover, white, achX, achHeaderY, achCoverW, achCoverH, 1, 6);
+  else {
+    quad(nullptr, {28, 28, 31}, achX, achHeaderY, achCoverW, achCoverH, 1, 6);
+    quad(nullptr, ruby, achX + 12, achHeaderY + achCoverH - 22, 24, 3, 1, 0);
+  }
+
+  // Name, counts and play time, then the progress card.
+  const auto act = u.activity.find(u.entryKey(game));
+  const int64_t played = act == u.activity.end() ? 0 : act->second.seconds;
+  const auto earned = std::to_string(progress.earned), total = std::to_string(progress.total);
+  const auto percent = std::to_string(progress.percent());
+  const int textW = achX + achW - achTextX;
+  std::string headerKey = game.name + "|" + earned + "|" + total + "|" + std::to_string(played / 60) + "|" +
+                          languageCode(language());
+  if (beginLayer(achievementHeader, headerKey, textW, achBarY + achBarH - achHeaderY)) {
+    label(0, 4, game.name, 30, white, 255, true, -1, textW);
+    std::string counts = progress.total ? trf("Achievements: {} / {}", {earned, total})
+                                        : trf("{} unlocked", {earned});
+    int cw = measure(counts, 15);
+    label(0, 44, counts, 15, soft);
+    rect(cw + 14, 46, 1, 16, {90, 90, 96}, 255);
+    label(cw + 28, 44, playedFor(played), 15, soft);
+    // The card: the counts in words over the bar.
+    const int cy = achBarY - achHeaderY;
+    rect(0, cy, textW, achBarH, {38, 38, 44}, 235, 8);
+    // A medal: ribbon tails under a ruby disc.
+    const int mx = 16, my = cy + 8;
+    rect(mx + 4, my + 18, 6, 14, {150, 24, 44}, 255, 2);
+    rect(mx + 14, my + 18, 6, 14, {150, 24, 44}, 255, 2);
+    rect(mx, my, 24, 24, ruby, 255, 12);
+    rect(mx + 7, my + 7, 10, 10, {255, 214, 222}, 255, 5);
+    const int tx = 54;
+    if (progress.total) {
+      std::string line = trf("{}/{} achievements unlocked", {earned, total});
+      label(tx, cy + 6, line, 17, white);
+      label(tx + measure(line, 17) + 8, cy + 6, "(" + percent + "%)", 17, faint);
+      const int barW = textW - tx - 18;
+      rect(tx, cy + 33, barW, 6, {72, 72, 79}, 255, 3);
+      int fill = int(int64_t(barW) * int64_t(progress.earned) / int64_t(progress.total));
+      if (fill > 0)
+        rect(tx, cy + 33, std::max(6, fill), 6, rubyHi, 255, 3);
+    } else
+      label(tx, cy + (achBarH - 22) / 2, trf("{} unlocked", {earned}), 17, white);
+    endLayer();
+  }
+  quad(&achievementHeader.image, white, achTextX, achHeaderY, achievementHeader.image.width,
+       achievementHeader.image.height, 1, 0);
+
+  // The list: headings and rows, scrolled, cut off above and below.
+  const int n = int(progress.entries.size()), unlocked = progress.unlockedRows();
+  if (!n) {
+    std::string key = std::string("ach-empty|") + languageCode(language());
+    auto &layer = rowCache[key];
+    if (layer.key.empty()) {
+      beginLayer(layer, key, achW, 30);
+      label(0, 4, tr("No achievements recorded for this game yet."), 17, muted);
+      endLayer();
+    }
+    quad(&layer.image, white, achX, achListTop + 10, layer.image.width, layer.image.height, 1, 0);
+    return;
+  }
+  const int top = achListTop, bottom = achListBottom, scroll = u.achievementScroll;
+  auto heading = [&](const std::string &text, int y) {
+    std::string key = "ach-head|" + text;
+    auto &layer = rowCache[key];
+    if (layer.key.empty()) {
+      beginLayer(layer, key, achW, achSectionH);
+      label(6, 10, upper(text), 14, muted, 255, true);
+      endLayer();
+    }
+    int sy = top + y - scroll;
+    if (sy + achSectionH > top && sy < bottom)
+      quad(&layer.image, white, achX, sy, achW, achSectionH, 1, 0, top, bottom);
+  };
+  if (unlocked > 0)
+    heading(trf("Unlocked achievements ({})", {std::to_string(unlocked)}), 0);
+  if (n > unlocked)
+    heading(trf("Locked achievements ({})", {std::to_string(n - unlocked)}),
+            achievementRowY(unlocked, unlocked, n) - achSectionH);
+  const int box = achRowH - 6;
+  for (int i = 0; i < n; ++i) {
+    int y = top + achievementRowY(i, unlocked, n) - scroll;
+    if (y + box <= top || y >= bottom)
+      continue;
+    const auto &a = progress.entries[size_t(i)];
+    const bool focused = i == u.setting, hidden = a.concealed();
+    quad(nullptr, white, achX, y, achW, box, a.unlocked ? 0.07 : 0.04, 8, top, bottom);
+    if (focused)
+      quad(nullptr, ruby, achX, y, achW, box, 0.3, 8, top, bottom);
+    const std::string iconFile = a.unlocked ? a.icon : a.iconLocked;
+    const std::string iconPath = iconFile.empty() ? "" : progress.iconDir + iconFile;
+    const std::string name = hidden ? tr("Hidden achievement") : a.name;
+    const std::string description = hidden ? "" : a.description;
+    const std::string date = a.unlocked ? unlockDate(a.unlockedAt, u.clockOffset) : "";
+    std::string key = "ach|" + iconPath + "|" + name + "|" + description + "|" + date + "|" + std::to_string(a.unlocked);
+    auto &layer = rowCache[key];
+    if (layer.key.empty()) {
+      beginLayer(layer, key, achW, box);
+      const int iy = (box - achIcon) / 2;
+      const Image *picture = iconPath.empty() ? nullptr : &achievementIcon(iconPath);
+      if (picture && !picture->empty())
+        blitScaled(*picture, 8, iy, achIcon, achIcon, 255, a.unlocked ? 256 : 200);
+      else {
+        // No icon: a plain medal, ruby once earned.
+        rect(8, iy, achIcon, achIcon, {46, 46, 52}, 255, 6);
+        rect(8 + achIcon / 2 - 12, iy + achIcon / 2 - 12, 24, 24, a.unlocked ? ruby : Color{88, 88, 94}, 255, 12);
+        if (hidden)
+          label(8 + achIcon / 2, iy + achIcon / 2 - 11, "?", 18, white, 255, true, 0);
+      }
+      int textX = 8 + achIcon + 16, right = achW - 18;
+      if (!date.empty()) {
+        label(right, (box - 20) / 2, date, 14, muted, 255, false, 1);
+        right -= measure(date, 14) + 24;
+      }
+      const int room = std::max(80, right - textX);
+      Color nameColor = a.unlocked ? white : soft;
+      if (description.empty())
+        label(textX, (box - 24) / 2, name, 19, nameColor, 255, true, -1, room);
+      else {
+        label(textX, 6, name, 19, nameColor, 255, true, -1, room);
+        label(textX, 32, description, 15, a.unlocked ? soft : muted, 255, false, -1, room);
+      }
+      endLayer();
+    }
+    quad(&layer.image, white, achX, y, achW, box, 1, 0, top, bottom);
+  }
+  // A scroll bar when the list is longer than the space.
+  const int view = bottom - top, end = achievementRowY(n, unlocked, n);
+  if (end > view) {
+    int thumb = std::max(24, view * view / end);
+    int offset = (view - thumb) * scroll / std::max(1, end - view);
+    quad(nullptr, white, achX + achW + 6, top, 4, view, 0.1, 2);
+    quad(nullptr, white, achX + achW + 6, top + offset, 4, thumb, 0.6, 2);
   }
 }
 } // namespace hardrpg

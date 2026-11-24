@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -446,8 +447,101 @@ void UI::openDetailsAchievements(const Entry &entry) {
   home.shotFocus = -1;
   page = Page::Achievements;
   focus = Focus::Settings;
-  setting = settingFirst = 0;
+  setting = settingFirst = achievementScroll = 0;
   message.clear();
+}
+
+void UI::followAchievement() {
+  using namespace homeLayout;
+  const int n = int(achievements.entries.size()), unlocked = achievements.unlockedRows();
+  const int view = achListBottom - achListTop, end = achievementRowY(n, unlocked, n);
+  if (n > 0) {
+    setting = std::max(0, std::min(n - 1, setting));
+    // The first of a section brings its heading into view with it.
+    int top = achievementRowY(setting, unlocked, n), bottom = top + achRowH;
+    if (setting == 0 || setting == unlocked)
+      top -= achSectionH;
+    if (top < achievementScroll)
+      achievementScroll = top;
+    else if (bottom > achievementScroll + view)
+      achievementScroll = bottom - view;
+  }
+  achievementScroll = std::max(0, std::min(achievementScroll, std::max(0, end - view)));
+}
+
+namespace {
+// The Steam app ID the artwork lookup found for a game (info.json), or 0.
+long artSteamApp(const Paths &paths, const std::vector<std::string> &folders) {
+  for (auto &folder : folders) {
+    if (folder.empty())
+      continue;
+    try {
+      auto info = json5pp::parse(readFile(paths.at("art/" + folder + "/info.json"), 64 * 1024));
+      auto it = info.as_object().find("steamAppId");
+      if (it != info.as_object().end() && it->second.is_string() && !it->second.as_string().empty())
+        return std::atol(it->second.as_string().c_str());
+    } catch (const std::exception &) {
+    }
+  }
+  return 0;
+}
+} // namespace
+
+void UI::fetchAchievementsAutomatically() {
+  // Only games that use achievements: started with the bridge or given a
+  // catalog by hand. Each is looked up once, its missing icons again.
+  for (auto &e : model.list) {
+    if (e.kind == Kind::Folder || !achievementsUsed(model.paths, e))
+      continue;
+    auto game = key(e.node.identity(model.paths));
+    if (steamCatalogComplete(model.paths.at("achievements/" + game)))
+      continue;
+    bool queued = false;
+    for (auto &j : achievementQueue)
+      queued = queued || j.game == game;
+    if (!queued)
+      achievementQueue.push_back({game, e.name, artSteamApp(model.paths, artFolders(e)), false});
+  }
+}
+
+void UI::lookUpAchievements(const Entry &e) {
+  auto game = key(e.node.identity(model.paths));
+  for (auto it = achievementQueue.begin(); it != achievementQueue.end();)
+    it = it->game == game ? achievementQueue.erase(it) : std::next(it);
+  achievementQueue.push_back({game, e.name, artSteamApp(model.paths, artFolders(e)), true});
+  message = tr("Looking up achievements on Steam...");
+}
+
+bool UI::pollAchievements() {
+  bool changed = false;
+  if (achievementFetch) {
+    bool finished = !achievementFetch->running();
+    auto p = achievementFetch->poll();
+    for (auto &game : p.updated) {
+      detailsAchievementKey.clear();
+      if (page == Page::Achievements && achievements.game == game) {
+        achievements = gameAchievements(model.paths, gameEntry);
+        followAchievement();
+      }
+      changed = true;
+    }
+    if (!finished)
+      return changed;
+    achievementFetch.reset();
+    if (page == Page::Achievements && message == tr("Looking up achievements on Steam...")) {
+      message = tr(!p.found              ? "Could not reach Steam. Try again later."
+                   : achievements.total ? "Achievements updated."
+                                        : "No achievements found on Steam.");
+      changed = true;
+    }
+  }
+  // One download at a time: after the artwork lookup.
+  if (achievementQueue.empty() || (artFetch && artFetch->running()))
+    return changed;
+  achievementFetch.reset(new AchievementFetch);
+  achievementFetch->start(std::move(achievementQueue), model.paths.at("achievements/"), steamLanguage(language()));
+  achievementQueue.clear();
+  return changed;
 }
 
 int UI::filterRows() const { return engineCount + 2 + Home::SortCount + 1; }

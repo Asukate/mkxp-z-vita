@@ -52,7 +52,7 @@ SOURCES=("$SRC"/src/core/*.cpp "$SRC"/src/music/*.cpp "$SRC"/src/d1/*.cpp "$SRC"
          "$ROOT/backends/opendt/vita_main.cpp")
 # The in-game menu is the launcher's own page for the game, as in the main
 # engine (src/meson.build lists the same files).
-LAUNCHER=(model ui save_backups achievements view home home_view image art_loader art_fetch sheet_view welcome welcome_view
+LAUNCHER=(model ui save_backups achievements achievement_fetch view home home_view image art_loader art_fetch sheet_view welcome welcome_view
           i18n text_input update_check theme game_menu keyboard_view)
 for f in "${LAUNCHER[@]}"; do SOURCES+=("$ROOT/src/native_launcher/$f.cpp"); done
 # The Vita's pthread library has no pthread_once, which libstdc++'s guards

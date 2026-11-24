@@ -40,7 +40,22 @@ constexpr int hintsY = 502;
 // Seven rows show at a time; RTP rows are taller (two lines), browser rows
 // shorter.
 constexpr int sheetX = 130, sheetW = 700, sheetTitleY = 72, sheetTop = 151, sheetRowH = 42, sheetRows = 7;
-constexpr int achievementRowH = 48, rtpRowH = 54, browserRowH = 40, browserRows = 8;
+constexpr int rtpRowH = 54, browserRowH = 40, browserRows = 8;
+// The achievements page: a header with the cover, the counts and a progress
+// bar, then the list in two sections (unlocked, then locked), each under a
+// heading, scrolling between the header and the hint bar.
+constexpr int achX = 16, achW = 928, achCoverW = 80, achCoverH = 120, achHeaderY = 70;
+constexpr int achTextX = achX + achCoverW + 18, achBarY = 140, achBarH = 50;
+constexpr int achListTop = 202, achListBottom = hintsY - 4, achSectionH = 34, achRowH = 64, achIcon = 50;
+// Where entry i starts in the list (0 at the top of the first heading), with
+// the first `unlocked` entries in the first section; i == total is the end.
+inline int achievementRowY(int i, int unlocked, int total) {
+  int y = unlocked > 0 ? achSectionH : 0;
+  if (i < unlocked)
+    return y + i * achRowH;
+  y += unlocked * achRowH + (total > unlocked ? achSectionH : 0);
+  return y + (i - unlocked) * achRowH;
+}
 // Over a running game the sheets use the whole width and taller rows with
 // bigger text, easier to read over the game and to hit with a thumb. Seven
 // rows still fit, so scrolling is the same.

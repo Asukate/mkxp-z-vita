@@ -1,4 +1,5 @@
 #pragma once
+#include "achievement_fetch.h"
 #include "achievements.h"
 #include "art_fetch.h"
 #include "i18n.h"
@@ -286,6 +287,20 @@ public:
   }
   GameAchievements achievements;
   bool achievementsFromDetails = false;
+  // The achievements page scrolls by pixels: its first shown pixel of the
+  // list (see homeLayout::achievementRowY).
+  int achievementScroll = 0;
+  void followAchievement();
+  // Achievement names, descriptions and icons from Steam (achievement_fetch.h):
+  // once for each game that uses achievements, after the artwork lookup.
+  std::unique_ptr<AchievementFetch> achievementFetch;
+  std::vector<AchievementFetch::Job> achievementQueue;
+  void fetchAchievementsAutomatically();
+  // Looks the game up again (Square on its achievements page).
+  void lookUpAchievements(const Entry &);
+  bool pollAchievements();
+  // Seconds east of UTC, for unlock times (the Vita's localtime is UTC).
+  int clockOffset = 0;
   // Cheats over a running game. The engine's script owns the pages and rows
   // (launcher/cheats.rb for XP/VX/VX Ace/Essentials, launcher/cheats.js for
   // MV/MZ): cheat sends it a button ("open", "back", "cross", "left",

@@ -167,6 +167,15 @@ private:
   std::vector<std::string> wrap(const std::string &, int size, int width, bool display = false);
   std::map<std::string, Layer> rowCache;
   Layer headerLayer, notesLayer, bodyLayer;
+  // The achievements page (sheet_view.cpp): the header with the game's cover
+  // and progress, and the list of rows with their icons, scrolled by
+  // UI::achievementScroll. Icons are read when their row first shows.
+  void achievementList(const UI &);
+  const Image &achievementIcon(const std::string &path);
+  std::map<std::string, Image> achievementIcons;
+  Image achievementCover;
+  std::string achievementCoverKey;
+  Layer achievementHeader;
   // The cheats number editor's panel: one layer redrawn as the value
   // changes (a cached layer per value ran the Vita out of video memory).
   Layer cheatEditLayer;

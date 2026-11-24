@@ -1563,8 +1563,9 @@ class NativeLauncher(unittest.TestCase):
         (game/'hardrpg-achievements.json').write_text(json.dumps(catalog))
         saved = self.root/'achievements'/fnv('medals')/'unlocked'
         saved.mkdir(parents=True)
-        for id_ in ('Award', 'Unknown'):
-            (saved/id_.encode().hex()).touch()
+        # Each marker holds its unlock time; the newest is listed first.
+        for id_, when in (('Award', 1000), ('Unknown', 2000)):
+            (saved/id_.encode().hex()).write_text(f'{when}\n')
         (saved/'junk').touch()
 
         details = self.to('Medals') + 'cross,draw'
@@ -1574,25 +1575,159 @@ class NativeLauncher(unittest.TestCase):
         touch = self.ui(details + ',touch:500:470')
         self.assertEqual(touch['achievements'], keyboard['achievements'])
         self.assertEqual(touch['achievements'], [
-            {'id': 'Award', 'name': 'Earned', 'description': '', 'unlocked': True},
-            {'name': 'Hidden achievement', 'description': '', 'unlocked': False},
-            {'id': 'Unknown', 'name': 'Unknown', 'description': '', 'unlocked': True}])
+            {'id': 'Unknown', 'name': 'Unknown', 'description': '', 'unlocked': True, 'unlockedAt': 2000},
+            {'id': 'Award', 'name': 'Earned', 'description': '', 'unlocked': True, 'unlockedAt': 1000},
+            {'name': 'Hidden achievement', 'description': '', 'unlocked': False}])
         self.assertFalse(touch['launchRequested'])
         back = self.ui(details + ',down,cross,circle')
         self.assertTrue(back['homeActive'] and back['homeDetails'] and back['homeAchievementFocus'])
         self.assertTrue(self.ui(details + ',down,touch:100:460')['launchRequested'])
 
-        (saved/'award'.encode().hex()).touch()
+        # A marker from before times were kept (empty) is dated by its file.
+        marker = saved/'award'.encode().hex()
+        marker.touch()
+        os.utime(marker, (3000, 3000))
         finished = self.ui(details + ',down,cross')
         self.assertEqual(finished['homeAchievementProgress'], {'earned': 2, 'total': 2, 'percent': 100})
-        self.assertEqual(finished['achievements'][1],
-                         {'id': 'award', 'name': 'The secret', 'description': 'The ending', 'unlocked': True})
+        self.assertEqual(finished['achievements'][0],
+                         {'id': 'award', 'name': 'The secret', 'description': 'The ending', 'unlocked': True,
+                          'unlockedAt': 3000})
 
         other_details = self.to('Other game') + 'cross,draw'
         self.assertNotIn('homeAchievementProgress', self.ui(other_details))
         (other/'hardrpg-achievements.json').write_text(json.dumps(catalog))
         self.assertEqual(self.ui(other_details)['homeAchievementProgress'],
                          {'earned': 0, 'total': 2, 'percent': 0})
+
+    def steam_fixture(self, appid=42, rows=None, name='Medals'):
+        """A canned Steam store search, achievements page and icons."""
+        fixtures = self.storage/'steam'
+        fixtures.mkdir(exist_ok=True)
+        (fixtures/'storesearch.json').write_text(json.dumps({'items': [
+            {'id': 7, 'name': name + ' Deluxe Soundtrack'}, {'id': appid, 'name': name}]}))
+        if rows is None:
+            rows = [{'api_name': 'FIRST', 'name': 'First steps', 'description': 'Start the game', 'hidden': False,
+                     'icon_achieved': 'aa01.jpg', 'icon_unachieved': 'bb01.jpg'},
+                    {'api_name': 'ENDING', 'name': 'The end', 'description': 'See the ending', 'hidden': True,
+                     'icon_achieved': 'aa02.jpg', 'icon_unachieved': 'bb02.jpg'}]
+        queries = {'queries': [
+            {'queryKey': ['StoreItem', f'app_{appid}', 'default_info'], 'state': {'data': {}}},
+            {'queryKey': ['achievements', appid, 'schema_v2'], 'state': {'data': {'appid': appid, 'groups': [
+                {'id': 0, 'archived': False, 'ispublic': True, 'achievements': rows},
+                {'id': 1, 'archived': True, 'ispublic': True, 'achievements': [
+                    {'api_name': 'OLD', 'name': 'Archived', 'icon_achieved': 'cc.jpg'}]}]}}}]}
+        ssr = json.dumps({'route': '/achievements/:appid', 'renderContext': {'queryData': json.dumps(queries)}})
+        (fixtures/f'page-{appid}.html').write_text(
+            '<html><body><div id="root"></div><script type="application/json" id="valve-ssr-data" '
+            f'nonce="x">{ssr}</script></body></html>')
+        for row in rows:
+            for key in ('icon_achieved', 'icon_unachieved'):
+                (fixtures/row[key]).write_bytes(b'\xff\xd8\xff\xe0' + row[key].encode())
+        return fixtures
+
+    def test_achievements_fetch_steam_names_and_icons_once(self):
+        game = self.game(self.games/'medals', title='Medals')
+        self.game(self.games/'plain', title='Plain')
+        record = self.root/'achievements'/fnv('medals')
+        (record/'unlocked').mkdir(parents=True)  # the game started with the bridge
+        (record/'unlocked'/'FIRST'.encode().hex()).write_text('1700000000\n')
+        fixtures = self.steam_fixture()
+        fetch = f'steam-fixtures:{fixtures},fetch-achievements,wait-achievements'
+
+        # Offline: nothing is recorded, so the game is tried again.
+        self.ui(f'steam-fixtures:{self.storage/"nowhere"},fetch-achievements,wait-achievements')
+        self.assertFalse((record/'steam.json').exists())
+
+        self.ui(fetch)
+        saved = json.loads((record/'steam.json').read_text())
+        self.assertEqual((saved['appid'], saved['language'], saved.get('incomplete')), (42, 'english', None))
+        self.assertEqual([(a['id'], a['name'], a['hidden'], a['icon'], a['iconLocked']) for a in saved['achievements']],
+                         [('FIRST', 'First steps', False, 'aa01.jpg', 'bb01.jpg'),
+                          ('ENDING', 'The end', True, 'aa02.jpg', 'bb02.jpg')])
+        self.assertEqual(sorted(p.name for p in (record/'icons').iterdir()),
+                         ['aa01.jpg', 'aa02.jpg', 'bb01.jpg', 'bb02.jpg'])
+        # Only games that use achievements are looked up.
+        self.assertFalse((self.root/'achievements'/fnv('plain')).exists())
+
+        page = self.ui(self.to('Medals') + 'cross,draw,down,cross')
+        self.assertEqual(page['achievementTotal'], 2)
+        self.assertEqual(page['achievements'], [
+            {'id': 'FIRST', 'name': 'First steps', 'description': 'Start the game', 'unlocked': True,
+             'unlockedAt': 1700000000, 'icon': 'aa01.jpg'},
+            {'name': 'Hidden achievement', 'description': '', 'unlocked': False, 'icon': 'aa02.jpg'}])
+
+        # Once recorded, never fetched again on its own.
+        stamp = (record/'steam.json').stat().st_mtime_ns
+        (fixtures/'page-42.html').write_text('changed')
+        self.ui(fetch)
+        self.assertEqual((record/'steam.json').stat().st_mtime_ns, stamp)
+        # Asked again, a page HardRPG cannot read keeps what it has.
+        again = self.ui(self.to('Medals') + f'cross,draw,down,cross,steam-fixtures:{fixtures},square,wait-achievements')
+        self.assertEqual(again['message'], 'Could not reach Steam. Try again later.')
+        self.assertEqual((record/'steam.json').stat().st_mtime_ns, stamp)
+
+        # A catalog beside Game.ini gives the text; the icons still come from Steam.
+        (game/'hardrpg-achievements.json').write_text(json.dumps([{'id': 'FIRST', 'name': 'Own name'}]))
+        own = self.ui(self.to('Medals') + 'cross,draw,down,cross')['achievements']
+        self.assertEqual((own[0]['name'], own[0]['icon']), ('Own name', 'aa01.jpg'))
+
+    def test_achievements_fetch_retries_icons_and_records_games_without_any(self):
+        self.game(self.games/'medals', title='Medals')
+        self.game(self.games/'unknown', title='Not on Steam')
+        record = self.root/'achievements'/fnv('medals')
+        nothing = self.root/'achievements'/fnv('unknown')
+        record.mkdir(parents=True)
+        nothing.mkdir(parents=True)
+        fixtures = self.steam_fixture()
+        (fixtures/'bb02.jpg').unlink()
+        fetch = f'steam-fixtures:{fixtures},fetch-achievements,wait-achievements'
+        self.ui(fetch)
+        self.assertTrue(json.loads((record/'steam.json').read_text())['incomplete'])
+        # No store match: recorded as none, so it is not searched for again.
+        self.assertEqual(json.loads((nothing/'steam.json').read_text())['appid'], 0)
+        self.assertEqual(json.loads((nothing/'steam.json').read_text())['achievements'], [])
+
+        # Next time only the missing icon is fetched: the page is not asked for.
+        (fixtures/'page-42.html').unlink()
+        (fixtures/'bb02.jpg').write_bytes(b'\xff\xd8\xff\xe0late')
+        self.ui(fetch)
+        saved = json.loads((record/'steam.json').read_text())
+        self.assertNotIn('incomplete', saved)
+        self.assertEqual(len(saved['achievements']), 2)
+        self.assertTrue((record/'icons'/'bb02.jpg').exists())
+        # Not an icon: refused.
+        self.assertFalse(any(p.suffix == '.part' for p in (record/'icons').iterdir()))
+
+    def test_achievements_page_scrolls_and_updates_from_steam(self):
+        self.game(self.games/'medals', title='Medals')
+        record = self.root/'achievements'/fnv('medals')
+        (record/'unlocked').mkdir(parents=True)
+        rows = [{'api_name': f'A{i:02}', 'name': f'Medal {i}', 'description': f'Do thing {i}', 'hidden': False,
+                 'icon_achieved': f'a{i:02}.jpg', 'icon_unachieved': f'b{i:02}.jpg'} for i in range(12)]
+        for i in (3, 7):
+            (record/'unlocked'/f'A{i:02}'.encode().hex()).write_text(f'{1700000000 + i}\n')
+        fixtures = self.steam_fixture(rows=rows)
+        self.ui(f'steam-fixtures:{fixtures},fetch-achievements,wait-achievements')
+        page = self.to('Medals') + 'cross,draw,down,cross'
+        state = self.ui(page)
+        self.assertEqual([a['id'] for a in state['achievements'][:3]], ['A07', 'A03', 'A00'])
+        self.assertEqual(state['achievementScroll'], 0)
+        # Down to the last: the list scrolls so it shows.
+        last = self.ui(page + ',' + ','.join(['down'] * 13))
+        self.assertEqual(last['setting'], 11)
+        self.assertGreater(last['achievementScroll'], 0)
+        self.assertEqual(self.ui(page + ',r,r,l')['setting'], 4)
+        # A tap selects the row under it (the second row of the first section).
+        self.assertEqual(self.ui(page + ',touch:400:300')['setting'], 1)
+        self.assertEqual(self.ui(page + ',touch:400:150')['setting'], 0)
+
+        # Square looks the game up again: Steam renamed a medal.
+        rows[0]['name'] = 'Renamed'
+        self.steam_fixture(rows=rows)
+        again = self.ui(page + f',steam-fixtures:{fixtures},square,wait-achievements')
+        self.assertEqual(again['achievements'][2]['name'], 'Renamed')
+        self.assertEqual(again['message'], 'Achievements updated.')
+        self.assertEqual(again['page'], self.ui(page)['page'])
 
     def test_delete_the_zip_keeps_an_unpacked_game_playable(self):
         zip_path = self.zip(self.games/'freed.zip')

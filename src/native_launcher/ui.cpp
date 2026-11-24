@@ -355,6 +355,8 @@ void UI::scroll(int rows) {
     int count = optionRows();
     setting = std::max(0, std::min(setting + rows, std::max(0, count - 1)));
     settingFirst = std::max(0, setting - 6);
+    if (page == Page::Achievements)
+      followAchievement();
     return;
   }
   if(page==Page::Controls) {if(!controlsTesting && !controlPicking) {setting=std::max(0,std::min(controlsCount()-1,setting+rows));settingFirst=std::max(0,setting-6);} return;}
@@ -544,9 +546,25 @@ void UI::sheetTouch(int x, int y) {
     }
     return;
   }
+  if (page == Page::Achievements) {
+    // A tap selects the achievement under it.
+    if (x < achX || x >= achX + achW || y < achListTop || y >= achListBottom)
+      return;
+    const int at = y - achListTop + achievementScroll, n = int(achievements.entries.size());
+    const int unlocked = achievements.unlockedRows();
+    for (int i = 0; i < n; ++i) {
+      int top = achievementRowY(i, unlocked, n);
+      if (at >= top && at < top + achRowH) {
+        setting = i;
+        followAchievement();
+        return;
+      }
+    }
+    return;
+  }
   bool rtp = page == Page::Rtp;
   int visible = rtp ? rtpPackCount : page == Page::Keys ? keysRowsShown : sheetRows;
-  int r = rowAt(rtp ? wideRtpRowH : page == Page::Achievements ? achievementRowH : sheetRowH, visible);
+  int r = rowAt(rtp ? wideRtpRowH : sheetRowH, visible);
   if (r < 0)
     return;
   if (gameOptions) {
@@ -1054,6 +1072,18 @@ void UI::gameAction(Button b) {
   if (controlsMap() && (b == Button::Up || b == Button::Down || b == Button::Left || b == Button::Right)) {
     setting = controlsNeighbor(setting, b);
     message.clear();
+    return;
+  }
+  if (page == Page::Achievements) {
+    // Up and Down move one achievement, Left/Right and L/R a screenful.
+    const int n = int(achievements.entries.size());
+    int step = b == Button::Up ? -1 : b == Button::Down ? 1 : b == Button::Left || b == Button::L ? -4
+             : b == Button::Right || b == Button::R ? 4 : 0;
+    if (step && n) {
+      setting = std::max(0, std::min(n - 1, setting + step));
+      followAchievement();
+    } else if (b == Button::Square)
+      lookUpAchievements(gameEntry);
     return;
   }
   if (b == Button::Up || b == Button::Down) {
@@ -1570,7 +1600,7 @@ void UI::openPage(Page next) {
   if (next == Page::Achievements)
     achievements = gameAchievements(model.paths, gameEntry);
   page = next;
-  setting = settingFirst = 0;
+  setting = settingFirst = achievementScroll = 0;
   message.clear();
 }
 void UI::openBrowser(BrowseMode mode) {

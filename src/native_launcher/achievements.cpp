@@ -3,6 +3,10 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <map>
 #include <dirent.h>
 #include <fcntl.h>
 #include <set>
@@ -52,9 +56,28 @@ std::string decode(const std::string &file) {
   return validId(id) ? id : std::string();
 }
 
-bool markerExists(const std::string &path) {
+// A marker holds its unlock time as decimal Unix seconds. Markers written
+// before times were kept are empty; their file time stands in.
+constexpr off_t maxMarker = 32;
+
+bool markerExists(const std::string &path, int64_t *when = nullptr) {
   struct stat st;
-  return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 0;
+  if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size > maxMarker)
+    return false;
+  if (when) {
+    *when = int64_t(st.st_mtime);
+    if (st.st_size > 0) {
+      try {
+        auto text = readFile(path, maxMarker);
+        char *end = nullptr;
+        long long t = std::strtoll(text.c_str(), &end, 10);
+        if (end != text.c_str() && t > 0)
+          *when = t;
+      } catch (const std::exception &) {
+      }
+    }
+  }
+  return true;
 }
 
 bool ensureDir(const std::string &path) {
@@ -70,16 +93,42 @@ std::string field(const Json &row, const char *name) {
   return it != row.as_object().end() && it->second.is_string() ? it->second.as_string() : "";
 }
 
+bool boolean(const Json &row, const char *name) {
+  auto it = row.as_object().find(name);
+  return it != row.as_object().end() && it->second.is_boolean() && it->second.as_boolean();
+}
+
+std::string gameDir(const Paths &paths, const std::string &game) { return paths.at("achievements/" + game); }
+
+// The catalog to show, in priority order: one put in the achievements folder,
+// one shipped beside Game.ini, then the one fetched from Steam.
 std::string catalog(const Paths &paths, const Entry &entry, const std::string &game) {
   try {
-    return readFile(paths.at("achievements/" + game + "/catalog.json"), maxCatalog);
+    return readFile(gameDir(paths, game) + "/catalog.json", maxCatalog);
   } catch (const std::exception &) {
   }
   try {
-    return entry.node.read("hardrpg-achievements.json");
+    auto data = entry.node.read("hardrpg-achievements.json");
+    if (!data.empty())
+      return data;
   } catch (const std::exception &) {
-    return {};
   }
+  return {};
+}
+
+// The fetched Steam record's rows ("achievements"), or null.
+Json steamRows(const Paths &paths, const std::string &game) {
+  try {
+    auto data = readFile(gameDir(paths, game) + "/steam.json", maxCatalog);
+    auto doc = json5pp::parse(data);
+    if (doc.is_object()) {
+      auto it = doc.as_object().find("achievements");
+      if (it != doc.as_object().end() && it->second.is_array() && it->second.as_array().size() <= maxEntries)
+        return it->second;
+    }
+  } catch (const std::exception &) {
+  }
+  return Json();
 }
 } // namespace
 
@@ -109,12 +158,18 @@ bool unlockAchievement(const Paths &paths, const std::string &game, const std::s
   if (!validId(id) || !registerAchievements(paths, game))
     return false;
 
-  // The marker itself is the whole record. Exclusive creation keeps a repeated
-  // award or concurrent writer from replacing the original unlock.
+  // The marker itself is the whole record: the unlock time. Exclusive
+  // creation keeps a repeated award or concurrent writer from replacing the
+  // original unlock.
   auto path = markerDir(paths, game) + "/" + encode(id);
   int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
   if (fd < 0)
     return errno == EEXIST && markerExists(path);
+  char when[24];
+  int n = std::snprintf(when, sizeof when, "%lld\n", (long long)std::time(nullptr));
+  // A failed write leaves an empty marker: still unlocked, dated by the file.
+  bool written = n > 0 && write(fd, when, size_t(n)) == n;
+  (void)written;
   return close(fd) == 0;
 }
 
@@ -125,39 +180,68 @@ bool achievementUnlocked(const Paths &paths, const std::string &game, const std:
 GameAchievements gameAchievements(const Paths &paths, const Entry &entry) {
   const auto game = key(entry.node.identity(paths));
   const auto dir = markerDir(paths, game);
-  std::set<std::string> unlocked;
+  std::map<std::string, int64_t> unlocked;
   auto closeDir = [](DIR *handle) { closedir(handle); };
   std::unique_ptr<DIR, decltype(closeDir)> files(opendir(dir.c_str()), closeDir);
   if (files) {
     while (auto *item = readdir(files.get())) {
       auto id = decode(item->d_name);
-      if (!id.empty() && markerExists(dir + "/" + item->d_name))
-        unlocked.insert(id);
+      int64_t when = 0;
+      if (!id.empty() && markerExists(dir + "/" + item->d_name, &when))
+        unlocked[id] = when;
     }
   }
 
   GameAchievements result;
+  result.game = game;
+  result.iconDir = gameDir(paths, game) + "/icons/";
   auto &rows = result.entries;
   std::set<std::string> seen;
+  // Icons come from the Steam record whichever catalog gives the text.
+  std::map<std::string, std::pair<std::string, std::string>> icons;
+  auto steam = steamRows(paths, game);
+  if (steam.is_array())
+    for (const auto &row : steam.as_array())
+      if (row.is_object()) {
+        auto icon = field(row, "icon"), locked = field(row, "iconLocked");
+        icons[field(row, "id")] = {safeIconName(icon) ? icon : "", safeIconName(locked) ? locked : ""};
+      }
+  auto take = [&](const Json &list) {
+    if (!list.is_array() || list.as_array().size() > maxEntries)
+      return;
+    for (const auto &row : list.as_array()) {
+      if (!row.is_object())
+        continue;
+      auto id = field(row, "id");
+      if (!validId(id) || !seen.insert(id).second)
+        continue;
+      Achievement a;
+      a.id = id;
+      a.name = field(row, "name");
+      if (a.name.empty())
+        a.name = id;
+      a.description = field(row, "description");
+      a.hidden = boolean(row, "hidden");
+      auto icon = icons.find(id);
+      if (icon != icons.end()) {
+        a.icon = icon->second.first;
+        a.iconLocked = icon->second.second;
+      }
+      auto earned = unlocked.find(id);
+      if (earned != unlocked.end()) {
+        a.unlocked = true;
+        a.unlockedAt = earned->second;
+        unlocked.erase(earned);
+      }
+      rows.push_back(a);
+    }
+  };
   try {
     auto data = catalog(paths, entry, game);
-    if (!data.empty() && data.size() <= maxCatalog) {
-      auto list = json5pp::parse(data);
-      if (list.is_array() && list.as_array().size() <= maxEntries)
-        for (const auto &row : list.as_array()) {
-          if (!row.is_object())
-            continue;
-          auto id = field(row, "id");
-          if (!validId(id) || !seen.insert(id).second)
-            continue;
-          auto name = field(row, "name");
-          auto hidden = row.as_object().find("hidden");
-          rows.push_back({id, name.empty() ? id : name, field(row, "description"),
-                          hidden != row.as_object().end() && hidden->second.is_boolean() &&
-                              hidden->second.as_boolean(),
-                          unlocked.erase(id) != 0});
-        }
-    }
+    if (!data.empty() && data.size() <= maxCatalog)
+      take(json5pp::parse(data));
+    else
+      take(steam);
   } catch (const std::exception &) {
     // A missing or invalid catalog still leaves locally earned IDs visible.
   }
@@ -165,8 +249,145 @@ GameAchievements gameAchievements(const Paths &paths, const Entry &entry) {
   result.earned = result.total ? std::count_if(rows.begin(), rows.end(), [](const Achievement &a) { return a.unlocked; })
                                : unlocked.size();
   result.available = result.total || bool(files);
-  for (const auto &item : unlocked)
-    rows.push_back({item, item, "", false, true});
+  for (const auto &item : unlocked) {
+    Achievement a;
+    a.id = a.name = item.first;
+    a.unlocked = true;
+    a.unlockedAt = item.second;
+    rows.push_back(a);
+  }
+  // As Steam lists them: the newest unlock first, then what is still locked.
+  std::stable_sort(rows.begin(), rows.end(), [](const Achievement &a, const Achievement &b) {
+    if (a.unlocked != b.unlocked)
+      return a.unlocked;
+    return a.unlocked && a.unlockedAt > b.unlockedAt;
+  });
   return result;
+}
+
+bool steamCatalogRecorded(const Paths &paths, const std::string &game) {
+  struct stat st;
+  return validGame(game) && stat((gameDir(paths, game) + "/steam.json").c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
+bool achievementsUsed(const Paths &paths, const Entry &entry) {
+  return directory(gameDir(paths, key(entry.node.identity(paths))));
+}
+
+bool safeIconName(const std::string &name) {
+  if (name.size() < 5 || name.size() > 80 || name.compare(name.size() - 4, 4, ".jpg") != 0)
+    return false;
+  return name.find_first_not_of(hex, 0) == name.size() - 4;
+}
+
+namespace {
+// The JSON inside <script ... id="valve-ssr-data">...</script>.
+std::string ssrData(const std::string &html) {
+  auto id = html.find("id=\"valve-ssr-data\"");
+  if (id == std::string::npos)
+    return {};
+  auto open = html.rfind("<script", id);
+  auto start = html.find('>', id);
+  auto end = start == std::string::npos ? start : html.find("</script>", start);
+  if (open == std::string::npos || end == std::string::npos)
+    return {};
+  return html.substr(start + 1, end - start - 1);
+}
+const Json *member(const Json &v, const char *name) {
+  if (!v.is_object())
+    return nullptr;
+  auto it = v.as_object().find(name);
+  return it == v.as_object().end() ? nullptr : &it->second;
+}
+} // namespace
+
+bool parseSteamAchievementPage(const std::string &html, long appid, std::vector<SteamAchievement> &out) {
+  out.clear();
+  try {
+    auto data = ssrData(html);
+    if (data.empty())
+      return false;
+    auto page = json5pp::parse(data);
+    auto *context = member(page, "renderContext");
+    auto *queryText = context ? member(*context, "queryData") : nullptr;
+    if (!queryText || !queryText->is_string())
+      return false;
+    auto queryData = json5pp::parse(queryText->as_string());
+    auto *queries = member(queryData, "queries");
+    if (!queries || !queries->is_array())
+      return false;
+    for (const auto &query : queries->as_array()) {
+      // queryKey ["achievements", <appid>, "schema_v2"]
+      auto *k = member(query, "queryKey");
+      if (!k || !k->is_array() || k->as_array().size() != 3)
+        continue;
+      auto &parts = k->as_array();
+      if (!parts[0].is_string() || parts[0].as_string() != "achievements" || !parts[1].is_number() ||
+          long(parts[1].as_number()) != appid || !parts[2].is_string() || parts[2].as_string() != "schema_v2")
+        continue;
+      auto *state = member(query, "state");
+      auto *schema = state ? member(*state, "data") : nullptr;
+      auto *groups = schema ? member(*schema, "groups") : nullptr;
+      if (!groups || !groups->is_array())
+        return true; // an app without achievements
+      std::set<std::string> ids;
+      for (const auto &group : groups->as_array()) {
+        if (!group.is_object() || boolean(group, "archived") || !boolean(group, "ispublic"))
+          continue;
+        auto *list = member(group, "achievements");
+        if (!list || !list->is_array())
+          continue;
+        for (const auto &a : list->as_array()) {
+          if (!a.is_object() || boolean(a, "archived"))
+            continue;
+          SteamAchievement row;
+          row.id = field(a, "api_name");
+          if (!validId(row.id) || !ids.insert(row.id).second || out.size() >= maxEntries)
+            continue;
+          row.name = field(a, "name");
+          row.description = field(a, "description");
+          row.hidden = boolean(a, "hidden");
+          row.icon = field(a, "icon_achieved");
+          row.iconLocked = field(a, "icon_unachieved");
+          if (!safeIconName(row.icon))
+            row.icon.clear();
+          if (!safeIconName(row.iconLocked))
+            row.iconLocked.clear();
+          out.push_back(row);
+        }
+      }
+      return true;
+    }
+    // The page was understood, but it lists no achievements for this app.
+    return true;
+  } catch (const std::exception &) {
+  }
+  return false;
+}
+
+std::string steamCatalogJson(long appid, const std::string &language, const std::vector<SteamAchievement> &rows,
+                             bool incomplete) {
+  auto doc = Json(std::initializer_list<Json::pair_type>{});
+  auto &o = doc.as_object();
+  o["source"] = "steam";
+  o["appid"] = Json::integer_type(appid);
+  o["language"] = language;
+  o["fetched"] = Json::integer_type(int64_t(std::time(nullptr)));
+  if (incomplete)
+    o["incomplete"] = true;
+  auto list = Json(std::initializer_list<Json>{});
+  for (const auto &a : rows) {
+    auto row = Json(std::initializer_list<Json::pair_type>{});
+    auto &r = row.as_object();
+    r["id"] = a.id;
+    r["name"] = a.name;
+    r["description"] = a.description;
+    r["hidden"] = a.hidden;
+    r["icon"] = a.icon;
+    r["iconLocked"] = a.iconLocked;
+    list.as_array().push_back(row);
+  }
+  o["achievements"] = list;
+  return doc.stringify();
 }
 } // namespace hardrpg

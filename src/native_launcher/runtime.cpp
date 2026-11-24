@@ -1028,6 +1028,14 @@ int runNativeLauncher(bool returning) {
             char clock[8];
             std::snprintf(clock, sizeof clock, "%02d:%02d", t.hour, t.minute);
             ui.clockText = clock;
+            // The time zone, for achievement unlock times: local minus UTC.
+            SceDateTime utc{};
+            SceRtcTick localTick{}, utcTick{};
+            if (sceRtcGetCurrentClock(&utc, 0) >= 0 && sceRtcGetTick(&t, &localTick) >= 0 &&
+                sceRtcGetTick(&utc, &utcTick) >= 0) {
+              int64_t offset = (int64_t(localTick.tick) - int64_t(utcTick.tick)) / 1000000;
+              ui.clockOffset = int((offset + (offset >= 0 ? 30 : -30)) / 60 * 60); // whole minutes
+            }
           }
           int battery = scePowerGetBatteryLifePercent();
           ui.batteryPercent = battery >= 0 && battery <= 100 ? battery : -1;
@@ -1075,6 +1083,7 @@ int runNativeLauncher(bool returning) {
           if (!gameInfoStarted && ui.homeActive() && !ui.home.list() && !ui.welcome.active && SDL_GetTicks() - lastInputAt > 2000) {
             gameInfoStarted = true;
             ui.fetchArtAutomatically();
+            ui.fetchAchievementsAutomatically();
           }
           if (releaseDeferred && ui.homeActive() && SDL_GetTicks() - lastInputAt > 5000) {
             releaseDeferred = false;
@@ -1103,6 +1112,7 @@ int runNativeLauncher(bool returning) {
           serviced = bench.takeRedraw() || serviced;
 #endif
           serviced = ui.pollArt() || serviced;
+          serviced = ui.pollAchievements() || serviced;
           uint32_t now = SDL_GetTicks();
           double dt = std::min(0.05, (now - lastFrame) / 1000.0);
           lastFrame = now;

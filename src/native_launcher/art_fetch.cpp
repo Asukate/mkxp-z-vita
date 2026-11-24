@@ -414,7 +414,57 @@ size_t collect(char *data, size_t size, size_t count, void *out) {
 
 namespace {
 ArtFetch::Transport transport;
+int abortTransfer(void *flag, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+  return *static_cast<std::atomic<bool> *>(flag) ? 1 : 0;
+}
 } // namespace
+
+bool httpsRequest(void *handle, const std::atomic<bool> &cancel, const std::string &url, std::string &out,
+                  const std::string &bearer, const std::string &post, const char *contentType,
+                  const std::string &header) {
+  out.clear();
+  if (transport)
+    return transport(url, post, out) && !cancel;
+  auto *curl = static_cast<CURL *>(handle);
+  curl_easy_reset(curl);
+  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "HardRPG launcher (github.com/Asukate/mkxp-z-vita)");
+  curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
+  curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 4L);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 20000L);
+  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+#ifdef __vita__
+  curl_easy_setopt(curl, CURLOPT_CAINFO, "app0:/ca-certificates.crt");
+#endif
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, collect);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
+  curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, abortTransfer);
+  curl_easy_setopt(curl, CURLOPT_XFERINFODATA, const_cast<std::atomic<bool> *>(&cancel));
+  curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+  curl_slist *headers = nullptr;
+  if (!bearer.empty())
+    headers = curl_slist_append(headers, ("Authorization: Bearer " + bearer).c_str());
+  if (!header.empty())
+    headers = curl_slist_append(headers, header.c_str());
+  if (!post.empty()) {
+    headers = curl_slist_append(headers, (std::string("Content-Type: ") + contentType).c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post.c_str());
+  }
+  if (headers)
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+  long status = 0;
+  auto rc = curl_easy_perform(curl);
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+  curl_slist_free_all(headers);
+  return rc == CURLE_OK && status == 200 && !cancel;
+}
+
+std::string plainTitle(const std::string &name) { return plain(name); }
 
 struct ArtFetch::State {
   std::vector<Job> jobs;
@@ -436,6 +486,7 @@ struct ArtFetch::State {
     bool adult = false;       // the source rates the game (or picture) adults only
     bool rpgMaker = false;    // the source says the game was made with RPG Maker
     std::string title, released, developer, publisher, genres, description, source;
+    std::string steamApp; // Steam's app ID, for the achievements lookup
     std::vector<std::string> shots; // screenshots, best first
     bool complete(const bool need[3]) const {
       for (int k = 0; k < 3; ++k)
@@ -445,52 +496,11 @@ struct ArtFetch::State {
     }
   };
 
-  static int abort(void *self, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
-    return static_cast<State *>(self)->cancel ? 1 : 0;
-  }
   // GET (or POST, with a JSON body) url; false on any failure or a status
   // other than 200.
   bool get(const std::string &url, std::string &out, const std::string &bearer = "", const std::string &post = "",
            const char *contentType = "application/json", const std::string &header = "") {
-    out.clear();
-    if (transport)
-      return transport(url, post, out) && !cancel;
-    curl_easy_reset(curl);
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "HardRPG launcher (github.com/Asukate/mkxp-z-vita)");
-    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
-    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 4L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 20000L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-#ifdef __vita__
-    curl_easy_setopt(curl, CURLOPT_CAINFO, "app0:/ca-certificates.crt");
-#endif
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, collect);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, abort);
-    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_slist *headers = nullptr;
-    if (!bearer.empty())
-      headers = curl_slist_append(headers, ("Authorization: Bearer " + bearer).c_str());
-    if (!header.empty())
-      headers = curl_slist_append(headers, header.c_str());
-    if (!post.empty()) {
-      headers = curl_slist_append(headers, (std::string("Content-Type: ") + contentType).c_str());
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post.c_str());
-    }
-    if (headers)
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    long status = 0;
-    auto rc = curl_easy_perform(curl);
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-    curl_slist_free_all(headers);
-    return rc == CURLE_OK && status == 200 && !cancel;
+    return httpsRequest(curl, cancel, url, out, bearer, post, contentType, header);
   }
   std::string escaped(const std::string &s) {
     char *e = curl_easy_escape(curl, s.c_str(), int(s.size()));
@@ -619,6 +629,7 @@ struct ArtFetch::State {
     // Steam's own list of the app's pictures: newer apps keep them under
     // hashed folders, so the file names cannot be guessed.
     auto app = std::to_string(ids[at]);
+    take(f.steamApp, [&] { return app; });
     auto query = "{\"ids\":[{\"appid\":" + app +
                  "}],\"context\":{\"language\":\"english\",\"country_code\":\"US\"},"
                  "\"data_request\":{\"include_assets\":true,\"include_basic_info\":true,\"include_release\":true,"
@@ -1181,6 +1192,7 @@ struct ArtFetch::State {
            ",\n  \"publisher\": " + quoted(best(&Found::publisher, {"IGDB", "RAWG", "Steam"})) +
            ",\n  \"genres\": " + quoted(best(&Found::genres, {"IGDB", "RAWG"})) +
            ",\n  \"description\": " + quoted(best(&Found::description, {"Steam", "IGDB", "RAWG", "VNDB"})) +
+           ",\n  \"steamAppId\": " + quoted(best(&Found::steamApp, {"Steam"})) +
            ",\n  \"adult\": " + (adult ? "true" : "false") + ",\n  \"sources\": " + quoted(sources) + "\n}\n";
   }
   // Where a game's picture of this kind is now, if it has one.
