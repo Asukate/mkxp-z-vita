@@ -64,12 +64,12 @@ const Image &View::welcomeSlide(const UI &u, int slide) {
     }
     y += after;
   };
-  // Something easy to miss: a ruby bar beside the text.
+  // Something easy to miss: a faintly ruby box.
   auto reminder = [&](const std::string &text) {
     auto lines = wrap(text, 15, textW - 30);
     int h = int(lines.size()) * 21 + 14;
     rect(textX, y, textW, h, white, 14, 8);
-    rect(textX, y, 4, h, ruby, 255, 2);
+    rect(textX, y, textW, h, ruby, 46, 8);
     for (size_t i = 0; i < lines.size(); ++i)
       label(textX + 18, y + 7 + int(i) * 21, lines[i], 15, soft);
     y += h + 10;
@@ -89,9 +89,9 @@ const Image &View::welcomeSlide(const UI &u, int slide) {
     for (int i = 0; i < languageCount; ++i) {
       int ry = langTop + i * langRowH;
       bool focused = u.welcome.languageFocus == i, chosen = language() == i;
-      rect(textX, ry, textW, langBox, white, focused ? 41 : 15, 8);
+      rect(textX, ry, textW, langBox, white, 15, 8);
       if (focused)
-        rect(textX, ry, 4, langBox, ruby, 255, 2);
+        rect(textX, ry, textW, langBox, ruby, 77, 8);
       label(textX + 20, ry + 9, languageName(i), 20, white);
       if (chosen)
         rect(textX + textW - 32, ry + langBox / 2 - 6, 12, 12, ruby, 255, 6);
@@ -290,8 +290,7 @@ void View::welcomeMotion(const UI &u, int slide, double ox, double alpha, double
       for (int k = 0; k < rows; ++k) {
         double y = y0 + k * rh;
         if (k == sel) {
-          solid(white, x0, y, w, rh - 2, 0.1, 4);
-          solid(ruby, x0, y, 3, rh - 2, 1);
+          solid(ruby, x0, y, w, rh - 2, 0.3, 4);
         }
         solid(white, x0 + 12, y + 7, lengths[k], 6, k == sel ? 0.85 : 0.35, 3);
         solid(white, x0 + w - 30, y + 8, 20, 4, 0.2, 2);

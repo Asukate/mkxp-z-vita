@@ -1218,11 +1218,12 @@ void View::buildSheet(const UI &u) {
       // Over a game each row is a clear button: a dark plate under the tint.
       if (wide)
         solidQuad({0, 0, 0}, G.x, y, G.w, box, 0.38, 10);
-      solidQuad(white, G.x, y, G.w, box, focused ? (wide ? 0.2 : 0.16) : wide ? 0.1 : 0.06, wide ? 10 : 8);
+      // The focused row: a faint ruby tint over the plate (no side mark).
+      solidQuad(white, G.x, y, G.w, box, wide ? 0.1 : 0.06, wide ? 10 : 8);
+      if (focused)
+        solidQuad(ruby, G.x, y, G.w, box, 0.3, wide ? 10 : 8);
       }
     }
-    if (focused && r.kind != Row::Primary && !menuPage)
-      solidQuad(ruby, G.x, y, wide ? 6 : 4, box, 1, wide ? 3 : 2);
     std::string key = std::to_string(int(r.kind)) + "|" + std::to_string(int(r.statusTone)) + "|" + r.label + "|" + r.value + "|" +
                       r.detail + "|" + std::to_string(r.on) + "|" + std::to_string(box) + "|" + std::to_string(bigRows) + "|" +
                       std::to_string(wide);
@@ -1259,12 +1260,9 @@ void View::buildSheet(const UI &u) {
           if (r.statusTone != Row::ToneNone) {
             int vs = wide ? 17 : 15;
             int vw = std::min(280, measure(r.value, vs, true));
-            int pw = vw + 24, ph = vs + 11, px = right - pw, py = (box - ph) / 2;
-            Color pillBg = r.statusTone == Row::ToneGood ? Color{34, 178, 102} : Color{224, 35, 63};
-            Color pillFg = r.statusTone == Row::ToneGood ? Color{102, 236, 158} : Color{255, 112, 128};
-            rect(px, py, pw, ph, pillBg, 62, ph / 2);
-            label(px + pw / 2, py + (ph - vs - 4) / 2, r.value, vs, pillFg, 255, true, 0, vw + 4);
-            right = px - 14;
+            Color tone = r.statusTone == Row::ToneGood ? Color{102, 236, 158} : Color{255, 112, 128};
+            label(right, (box - (vs + 5)) / 2, r.value, vs, tone, 255, true, 1, vw + 4);
+            right -= vw + 16;
           } else {
             int vs = wide ? 18 : 15;
             label(right, (box - (vs + 5)) / 2, r.value, vs, wide ? soft : muted, 255, false, 1, 300);
@@ -1571,9 +1569,9 @@ void View::buildSheet(const UI &u) {
     int x, py, w, h;
     u.padRowRect(0, x, py, w, h);
     bool modeFocused = u.setting == 0;
-    solidQuad(white, x, py, w, h, modeFocused ? 0.16 : 0.06, 8);
+    solidQuad(white, x, py, w, h, 0.06, 8);
     if (modeFocused)
-      solidQuad(ruby, x, py, 4, h, 1, 2);
+      solidQuad(ruby, x, py, w, h, 0.3, 8);
     std::string key = "padmode|" + u.controlValue(0) + "|" + std::to_string(w) + "|" + std::to_string(h);
     auto &mode = rowCache[key];
     if (mode.key.empty()) {

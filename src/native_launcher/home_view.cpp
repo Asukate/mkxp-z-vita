@@ -1203,8 +1203,7 @@ void View::buildList(const UI &u, const std::vector<size_t> &list, int target) {
     double y = listTop + i * listRowH - u.listScroll;
     bool sel = i == target;
     if (sel) {
-      quad(nullptr, listX, y + 2, listW, listRowH - 4, 0.1, 1, 6)->color = white;
-      quad(nullptr, listX, y + 8, 3, listRowH - 16, 1)->color = ruby;
+      quad(nullptr, listX, y + 2, listW, listRowH - 4, 0.3, 1, 6)->color = ruby;
     }
     if (i == count) {
       if (beginLayer(listAddLayer, "add|" + lang, 300, nameH)) {
@@ -1400,7 +1399,9 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
       rect(x + measure(name, 12) + 8, sy + 8, inner - measure(name, 12) - 8, 1, white, 20);
     };
     auto tile = [&](int row, int tx, int ty, int tw, bool on, bool off, const std::string &title, const std::string &sub, const char *iconName) {
-      rect(tx, ty, tw, 46, white, on ? 36 : 15, 9);
+      rect(tx, ty, tw, 46, white, 15, 9);
+      if (on)
+        rect(tx, ty, tw, 46, ruby, 77, 9); // chosen: the faint ruby tint every list uses
       int lx = tx + 12;
       if (iconName) {
         blit(icon(iconName), tx + 10, ty + 11, on ? 255 : 150);
@@ -1412,10 +1413,6 @@ void View::homePanels(const UI &u, const std::vector<size_t> &list) {
         label(tx + tw - 10, ty + 17, sub, 11, faint, 255, false, 1);
       if (!sub.empty() && iconName)
         label(lx, ty + 27, sub, 11, {208, 208, 212}, 255, false, -1, tx + tw - lx - 4);
-      if (on && !iconName)
-        rect(tx + 12, ty + 40, 22, 3, ruby, 255, 1);
-      if (on && iconName)
-        rect(tx, ty, 3, 46, ruby, 255);
       focusRing(row, tx, ty, tw, 46);
     };
     int sy = y + 56;
