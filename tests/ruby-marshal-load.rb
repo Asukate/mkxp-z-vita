@@ -47,6 +47,7 @@ check('binary pair') { a = ['b31d47773a0a753b043fedeee646e1cd67624c27829eb14aee2
 check('binary deep') { a = ['6a24880b08919eb212501a007e31e40ecae89310af31958b4a10ad0725827b0f'.b, ['6a24880b08919eb212501a007e31e40ecae89310af31958b4a10ad0725827b0f'.b]]; Marshal.load(Marshal.dump(a)) == a }
 check('binary frozen') { a = ['16125e4c93dd84bc0b559d7c3b118de60b57be6e5de8a6ccdc568a70b5d97fd1'.b, ['16125e4c93dd84bc0b559d7c3b118de60b57be6e5de8a6ccdc568a70b5d97fd1'.b]]; Marshal.load(Marshal.dump(a)) == a }
 check('binary copy') { a = ['4beb05af1fedf36d1540c8bea5202274eb549a30863dce2b31864878bc35e983'.b, ['4beb05af1fedf36d1540c8bea5202274eb549a30863dce2b31864878bc35e983'.b]]; Marshal.load(Marshal.dump(a)) == a }
+check('binary list') { a = ['db9a6758dfdbbe873240a9ca5f82aa280ea8a3ab0e5e1876a82600fd4f0d9e7c'.b, ['db9a6758dfdbbe873240a9ca5f82aa280ea8a3ab0e5e1876a82600fd4f0d9e7c'.b]]; Marshal.load(Marshal.dump(a)) == a }
 check('values') { loaded[1][19_999].code == 19_999 % 400 && loaded[1][19_999].parameters[3] == '19999' }
 
 # Cycles, user-defined dump formats, and compat loaders (Rational, Complex).
