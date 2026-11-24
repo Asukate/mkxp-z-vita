@@ -15,9 +15,14 @@ unlocks alone, the row shows the earned count. Unlocks are shared across that ga
 on the Vita under `ux0:/data/hardrpg/achievements/`. HardRPG uses the same
 library identity for an installed ZIP and its unpacked copy.
 
-The Steam editions of BLACK SOULS and BLACK SOULS II award achievements through
-`SteamUserStatsLite`. HardRPG routes the games' calls to a local store. A
-gameplay event must call the bridge to award an achievement. Existing save
+Steam editions of RPG Maker XP, VX and VX Ace games award achievements through
+`steam_api.dll` (for example cyanic's `SteamUserStatsLite`, used by BLACK SOULS
+I and II and Cat in the Box), a small helper DLL such as LISA's
+`steam_stats.dll` or Finding Paradise's `UtilsSteam.dll`, or mkxp's
+`_steam_achievement_unlock` (To the Moon). HardRPG answers these calls itself
+and routes unlocks to a local store, so no per-game setup is needed. A
+gameplay event must make the call to award an achievement. Achievements that
+Steam awards on its own servers from a stat are not unlocked. Existing save
 progress is kept, and loading it will earn a trophy if the game fires the
 corresponding event again. Earned IDs are visible even before a catalog is
 installed. The achievements stay in HardRPG and can be earned offline.
@@ -26,7 +31,7 @@ installed. The achievements stay in HardRPG and can be earned offline.
 
 The launcher looks these up on its own, in the background, after the artwork
 lookup. It does this once for each game that uses achievements, meaning the
-game has started with the achievement bridge or has a catalog. It takes the
+game folder has a Steam DLL or the game has a catalog. It takes the
 Steam app ID from the artwork lookup, or searches the Steam store for the
 game's exact name. Then it reads the public achievements page on Steam
 Community and downloads both icons of every achievement. No key or account is

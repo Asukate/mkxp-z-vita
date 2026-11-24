@@ -1,12 +1,14 @@
 # HardRPG 0.6.1 Alpha
 
-New: achievements for BLACK SOULS and BLACK SOULS II, a smoother
-Cat in the Box and fixes for games that stopped at the start.
+New: Steam achievements for RPG Maker games, a smoother Cat in the
+Box and fixes for games that stopped at the start.
 
 ## New
 
-- **Achievements for BLACK SOULS and BLACK SOULS II (Steam
-  editions):** unlocks are recorded on the Vita as on Steam, and a
+- **Steam achievements:** Steam editions of RPG Maker XP, VX and
+  VX Ace games that unlock achievements, such as BLACK SOULS I and
+  II, Cat in the Box, LISA, Finding Paradise and To the Moon, now
+  record them on the Vita as on Steam, and a
   popup shows each one as you earn it. The game's details show your
   progress and open a Steam-style list with each achievement's name
   and icon, unlocked ones newest first with the time you got them.
@@ -53,8 +55,6 @@ Cat in the Box and fixes for games that stopped at the start.
 - **Person of Courage:** battles pause for about 2 seconds when they
   start and when the victory music plays, while the MIDI sound bank
   loads.
-- **Hylics:** holding **L + R + Start** does not open the in-game
-  menu; tap the icon in the screen border instead.
 
 ## Updating
 

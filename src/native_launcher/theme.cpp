@@ -854,33 +854,6 @@ void makeDirs(const std::string &path) {
 }
 } // namespace
 
-bool gameScriptsMention(const std::string &dir, const std::string &text) {
-  if (text.empty())
-    return false;
-  Files disk;
-  Game game;
-  game.fs = &disk;
-  game.dir = dir;
-  for (auto &n : disk.list(dir)) {
-    auto ext = extension(n);
-    if (ext == ".rgssad" || ext == ".rgss2a" || ext == ".rgss3a") {
-      std::unique_ptr<Archive> archive(new Archive);
-      if (archive->open(disk, dir + "/" + n)) {
-        game.archive = std::move(archive);
-        break;
-      }
-    }
-  }
-  // Script names sit in the Marshal data as plain bytes; only the code
-  // is compressed, so a plain search finds a script by its name.
-  for (auto rel : {"Data/Scripts.rvdata2", "Data/Scripts.rvdata", "Data/Scripts.rxdata"}) {
-    auto scripts = game.data(rel, maxArchivedTrack);
-    if (!scripts.empty())
-      return scripts.find(text) != std::string::npos;
-  }
-  return false;
-}
-
 void themeInit() {
   std::lock_guard<std::mutex> hold(zipLock);
   if (!PHYSFS_isInit())

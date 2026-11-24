@@ -291,16 +291,6 @@ static std::string runningAchievementKey(const hardrpg::Paths &paths) {
     return hardrpg::achievementGameKey(paths, conf.vitaConfigPath, conf.gameFolder);
 }
 
-static void enableSteamAchievements() {
-    try {
-        hardrpg::Paths paths;
-        bool ready = hardrpg::registerAchievements(paths, runningAchievementKey(paths));
-        rb_gv_set("$hardrpg_steam_achievements", ready ? Qtrue : Qfalse);
-    } catch (const std::exception &) {
-        // Storage failure must not stop the game from loading.
-    }
-}
-
 static VALUE localAchievement(VALUE name, bool unlock) {
     if (!RB_TYPE_P(name, RUBY_T_STRING))
         return Qfalse;
@@ -323,6 +313,11 @@ static VALUE localAchievement(VALUE name, bool unlock) {
     }
 }
 
+/* miniffi-binding.cpp's Steam answers: unlock an achievement, or ask whether it is unlocked. */
+bool hardrpgSteamAchievement(const char *id, bool unlock) {
+    return RTEST(localAchievement(rb_str_new_cstr(id), unlock));
+}
+
 RB_METHOD(mkxpUnlockAchievement) {
     VALUE name;
     rb_scan_args(argc, argv, "1", &name);
@@ -334,6 +329,9 @@ RB_METHOD(mkxpAchievementUnlocked) {
     rb_scan_args(argc, argv, "1", &name);
     return localAchievement(name, false);
 }
+#endif
+#if defined(__vita__) && !defined(MKXPZ_NATIVE_LAUNCHER)
+bool hardrpgSteamAchievement(const char *, bool) { return false; }
 #endif
 
 static void mriBindingInit() {
@@ -431,25 +429,13 @@ static void mriBindingInit() {
         "$stdout = VitaNullIO.new\n"
         "$stderr = VitaNullIO.new\n");
 
-    // Toro's SteamUserStatsLite wrapper calls from in-game events. Enable
-    // its local achievement methods when its Windows script is encountered.
-    rb_gv_set("$hardrpg_steam_achievements", Qfalse);
+    // Games built on Freebird's mkxp (To the Moon) unlock through this function; Steam DLL
+    // calls reach the same record through miniffi-binding.cpp.
     rb_eval_string(
-        "class SteamUserStatsLite\n"
-        "  def self.instance\n"
-        "    @hardrpg_instance ||= new\n"
-        "  end\n"
-        "  def initted?\n"
-        "    $hardrpg_steam_achievements\n"
-        "  end\n"
-        "  def set_achievement(name)\n"
-        "    initted? && System.unlock_achievement(name)\n"
-        "  end\n"
-        "  def get_achievement(name)\n"
-        "    System.achievement_unlocked?(name) if initted?\n"
-        "  end\n"
-        "  def update\n"
-        "    nil\n"
+        "module Kernel\n"
+        "  private\n"
+        "  def _steam_achievement_unlock(name)\n"
+        "    System.unlock_achievement(name.to_s) if System.respond_to?(:unlock_achievement)\n"
         "  end\n"
         "end\n");
 #endif
@@ -2365,20 +2351,6 @@ static void runRMXPScripts(BacktraceData &btData) {
             
             fname = newStringUTF8(buf, len);
             btData.scriptNames.insert(buf, scriptName);
-
-#ifdef __vita__
-            /* Toro's Steam script (BS1, BS2) binds Win32 Steam DLLs in its
-             * class body, which cannot load on Vita. Match by exact script
-             * name at any index and let game events use the local bridge. */
-            if (std::strcmp(scriptName, "steam_acheivement") == 0) {
-#ifdef MKXPZ_NATIVE_LAUNCHER
-                enableSteamAchievements();
-#endif
-                vitaDiagLog("RUBY", "rgss_eval_skip_vita index=%ld name=%s", i,
-                            scriptName);
-                continue;
-            }
-#endif
             
             
             // if the script name starts with |s|, only execute

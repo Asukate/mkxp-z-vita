@@ -205,7 +205,7 @@ A font included in the game's own `Fonts` folder always comes first.
 
 **0.6.1 Alpha** is the current release. New in 0.6.1:
 
-- **Achievements:** BLACK SOULS and BLACK SOULS II (Steam editions) record them, with a popup and a Steam-style list.
+- **Steam achievements:** Steam editions of RPG Maker games (BLACK SOULS I and II, Cat in the Box, LISA, Finding Paradise, To the Moon and others) record them, with a popup and a Steam-style list.
 - **Cat in the Box:** about 51-60 fps where it dropped to 22-32 ([#35](https://github.com/Asukate/mkxp-z-vita/issues/35)).
 - **Fixes:** games that stopped with "incomplete format specifier" or a `method_added` error, such as Get Violated By EVERY Girl You Encounter RPG ~MAX Volume!~ and Country Girl Keiko ([#32](https://github.com/Asukate/mkxp-z-vita/issues/32), [#33](https://github.com/Asukate/mkxp-z-vita/issues/33)).
 - **Faster VX Ace maps** with layers, lights, auras or damage popups (N.P.C. Dreams); Exit Fate without short pauses.
@@ -228,7 +228,7 @@ Older versions: [0.6.0](docs/RELEASE-NOTES-0.6.0.md) · [0.5.3](docs/RELEASE-NOT
 - RPG Maker **XP, VX and VX Ace** games run natively (RGSS1, RGSS2 and RGSS3,
   with real Ruby), including games packed in `Game.rgssad`, `.rgss2a` or
   `.rgss3a` archives.
-- Local achievements for the Steam editions of BLACK SOULS and BLACK SOULS II.
+- Local achievements for Steam editions of RPG Maker XP, VX and VX Ace games.
   See [HardRPG achievements](docs/ACHIEVEMENTS.md) for catalogs and game-script integration.
 - RPG Maker **2000 and 2003** games run on the built-in EasyRPG Player, from the
   same library.

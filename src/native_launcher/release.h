@@ -7,7 +7,7 @@
 namespace hardrpg {
 static const char *const releaseNotes[] = {
     "0.6.1 Alpha - " HARDRPG_RELEASE_UTC,
-    "- BLACK SOULS I and II achievements",
+    "- Steam achievements in RPG Maker games",
     "- Cat in the Box at 51-60 fps (#35)",
     "- Two start errors fixed (#32 #33)",
     "- Faster layered and lit VX Ace maps",

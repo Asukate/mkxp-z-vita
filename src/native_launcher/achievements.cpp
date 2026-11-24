@@ -335,28 +335,16 @@ bool achievementsUsed(const Paths &paths, const Entry &entry) {
   return directory(gameDir(paths, key(entry.node.identity(paths))));
 }
 
-bool steamScriptGame(const Paths &paths, const Entry &entry) {
+bool steamGame(const Entry &entry) {
   if (entry.kind != Kind::Game || entry.node.archive)
     return false;
-  auto dir = entry.node.path();
+  // The files a Steam release ships for its achievements: Steam's own API, a helper DLL
+  // (UtilsSteam.dll, steam_stats.dll) or Freebird's mkxp Steam shim.
+  auto dir = entry.node.path() + "/";
   struct stat st;
-  if (stat((dir + "/steam_api.dll").c_str(), &st) != 0)
-    return false;
-  auto game = key(entry.node.identity(paths));
-  auto list = paths.at("achievements/steam-script-checked.txt");
-  std::string checked;
-  try {
-    checked = readFile(list, 256 * 1024);
-  } catch (const std::exception &) {
-  }
-  std::istringstream lines(checked);
-  for (std::string line; std::getline(lines, line);)
-    if (line == game)
-      return false;
-  if (gameScriptsMention(dir, "steam_acheivement"))
-    return registerAchievements(paths, game);
-  if (ensureDir(paths.root) && ensureDir(paths.at("achievements")))
-    std::ofstream(list, std::ios::app) << game << "\n";
+  for (auto name : {"steam_api.dll", "steam_api64.dll", "steam_stats.dll", "UtilsSteam.dll", "steamshim"})
+    if (stat((dir + name).c_str(), &st) == 0)
+      return true;
   return false;
 }
 

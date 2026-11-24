@@ -488,11 +488,11 @@ long artSteamApp(const Paths &paths, const std::vector<std::string> &folders) {
 } // namespace
 
 void UI::fetchAchievementsAutomatically() {
-  // Only games that use achievements: started with the bridge, shipping the
-  // Steam script the bridge answers, or given a catalog by hand. Each is
-  // looked up once, its missing icons again.
+  // Only games that use achievements: already recording them, shipping Steam
+  // files, or given a catalog by hand. Each is looked up once, its missing
+  // icons again; a game Steam lists no achievements for shows none.
   for (auto &e : model.list) {
-    if (e.kind == Kind::Folder || !(achievementsUsed(model.paths, e) || steamScriptGame(model.paths, e)))
+    if (e.kind == Kind::Folder || !(achievementsUsed(model.paths, e) || steamGame(e)))
       continue;
     auto game = key(e.node.identity(model.paths));
     if (steamCatalogComplete(model.paths.at("achievements/" + game)))

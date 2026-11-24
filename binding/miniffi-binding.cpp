@@ -22,6 +22,9 @@
 #include <climits>
 #include <algorithm>
 #include <string>
+#include <unordered_map>
+/* binding-mri.cpp: the Vita achievement record (unlock, or ask whether unlocked). */
+bool hardrpgSteamAchievement(const char *id, bool unlock);
 #endif
 
 #if defined(__vita__) || defined(__psp2__)
@@ -602,30 +605,6 @@ static bool vitaUtilsCall(const char *name, VALUE args, VALUE *result) {
     return true;
 }
 
-/* The Vita has no Steam client. Games that call steam_api.dll through
- * Win32API (Finding Paradise and other Freebird releases) quit unless
- * SteamAPI_Init reports 1. Report the API as started and make the rest
- * no-ops, as the Linux builds of those games run without Steam; achievements
- * stay off because their helper DLLs keep answering 0 (no Steam data). */
-static bool vitaSteamApiCall(const char *name, VALUE *result) {
-    if (!std::strcmp(name, "SteamAPI_Init") || !std::strcmp(name, "SteamAPI_InitSafe")) {
-        static bool logged = false;
-        if (!logged) {
-            logged = true;
-            Debug() << "steam_api: no Steam client on the Vita; reporting" << name << "as started";
-        }
-        *result = INT2NUM(1);
-        return true;
-    }
-    if (!std::strcmp(name, "SteamAPI_RestartAppIfNecessary") ||
-        !std::strcmp(name, "SteamAPI_Shutdown") ||
-        !std::strcmp(name, "SteamAPI_RunCallbacks")) {
-        *result = INT2NUM(0);
-        return true;
-    }
-    return false;
-}
-
 /* kernel32 text conversion (see util/win32-text.h). */
 /* kernel32 GetSystemPowerStatus, filled from the Vita battery. Pokemon Essentials asks once a
  * minute on the map and says "the battery is low, you should save soon" when the Low or Critical
@@ -883,7 +862,7 @@ static bool vitaUser32Call(const char *name, VALUE args, VALUE *result) {
 /* What a Vita MiniFFI object stands for. Win32API.new runs often (Pokemon Essentials makes
  * new objects on every key and window check), so it does the work once: the library and
  * function are classified here, and call only switches on the result. */
-enum VitaFFILib { VL_OTHER, VL_USER32, VL_KERNEL32, VL_UTILS, VL_STEAM, VL_VIDEO };
+enum VitaFFILib { VL_OTHER, VL_USER32, VL_KERNEL32, VL_UTILS, VL_STEAM, VL_STEAM_HELPER, VL_STEAM_HELPER0, VL_VIDEO };
 enum VitaFFIFn {
     VF_GENERIC = 0,    /* the library's dispatcher below, then a typed zero */
     VF_KEY_STATE = 1,  /* user32 GetKeyState (native-events.cpp reads 1 and 2) */
@@ -997,6 +976,8 @@ static VALUE vitaFFIInitialize(int argc, VALUE *argv, VALUE self) {
     f->lib = base == "user32" ? VL_USER32 : base == "kernel32" ? VL_KERNEL32 :
              base == "utils" ? VL_UTILS :
              (base == "steam_api" || base == "steam_api64") ? VL_STEAM :
+             base == "steam_stats" ? VL_STEAM_HELPER0 :
+             base.find("steam") != std::string::npos ? VL_STEAM_HELPER :
              base == "rpgxpvideodecoder" ? VL_VIDEO : VL_OTHER;
     f->nimport = (uint8_t)n;
     f->exports = NIL_P(exports) ? _T_VOID : vitaFFIType(exports);
@@ -1072,6 +1053,145 @@ static long vitaFFIToI(VALUE v) {
     if (RB_INTEGER_TYPE_P(v)) return NUM2LONG(v);
     if (NIL_P(v)) return 0;
     return NUM2LONG(rb_funcall(v, rb_intern("to_i"), 0));
+}
+
+/* Steam on the Vita. There is no Steam client: games that call steam_api.dll through Win32API
+ * (Finding Paradise and other Freebird releases) quit unless SteamAPI_Init reports 1, so the API
+ * reports itself started. Achievements are kept on the Vita instead (binding-mri.cpp,
+ * hardrpgSteamAchievement), answering the calls RPG Maker games make, whatever script makes them:
+ * - Steam's flat API in steam_api.dll (cyanic's SteamUserStatsLite and similar scripts): fake
+ *   non-zero interfaces, SetAchievement / GetAchievement / StoreStats;
+ * - small helper DLLs with setAchievement / getAchievementStatus / getStat / setStat exports
+ *   (Finding Paradise's UtilsSteam.dll answers 1 for true, LISA's steam_stats.dll 0).
+ * Stats live for the session only: they feed a game's own progress checks. */
+static const long kVitaSteamInterface = 0x5354454c;
+static std::unordered_map<std::string, uint32_t> g_vitaSteamStats;
+
+static std::string vitaFFIText(VALUE v) {
+    if (!RB_TYPE_P(v, T_STRING))
+        return std::string();
+    return std::string(RSTRING_PTR(v), strnlen(RSTRING_PTR(v), RSTRING_LEN(v)));
+}
+
+static bool vitaSteamApiCall(const char *name, VALUE args, VALUE *result) {
+    const long argc = RARRAY_LEN(args);
+    auto arg = [&](long i) { return i < argc ? RARRAY_AREF(args, i) : Qnil; };
+    if (!std::strcmp(name, "SteamAPI_Init") || !std::strcmp(name, "SteamAPI_InitSafe")) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            Debug() << "steam_api: no Steam client on the Vita; reporting" << name << "as started";
+        }
+        *result = INT2NUM(1);
+        return true;
+    }
+    if (!std::strcmp(name, "SteamAPI_RestartAppIfNecessary") ||
+        !std::strcmp(name, "SteamAPI_Shutdown") ||
+        !std::strcmp(name, "SteamAPI_RunCallbacks")) {
+        *result = INT2NUM(0);
+        return true;
+    }
+    if (!std::strcmp(name, "SteamAPI_GetHSteamUser") || !std::strcmp(name, "SteamAPI_GetHSteamPipe")) {
+        *result = INT2NUM(1);
+        return true;
+    }
+    if (!std::strcmp(name, "SteamInternal_CreateInterface") ||
+        !std::strcmp(name, "SteamInternal_FindOrCreateUserInterface") ||
+        !std::strncmp(name, "SteamAPI_ISteamClient_GetISteam", 31) ||
+        !std::strncmp(name, "SteamAPI_SteamUserStats", 23) || !std::strncmp(name, "SteamAPI_SteamApps", 18)) {
+        *result = LONG2NUM(kVitaSteamInterface);
+        return true;
+    }
+    if (!std::strcmp(name, "SteamAPI_ISteamApps_BIsSubscribed") ||
+        !std::strcmp(name, "SteamAPI_ISteamApps_BIsSubscribedApp")) {
+        *result = INT2NUM(1);
+        return true;
+    }
+    static const char stats[] = "SteamAPI_ISteamUserStats_";
+    if (std::strncmp(name, stats, sizeof stats - 1))
+        return false;
+    const char *call = name + sizeof stats - 1;
+    const std::string id = vitaFFIText(arg(1));
+    if (!std::strcmp(call, "SetAchievement")) {
+        *result = INT2NUM(hardrpgSteamAchievement(id.c_str(), true) ? 1 : 0);
+        return true;
+    }
+    if (!std::strcmp(call, "GetAchievement") || !std::strcmp(call, "GetAchievementAndUnlockTime")) {
+        const uint8_t got = hardrpgSteamAchievement(id.c_str(), false) ? 1 : 0;
+        vitaFFIWrite(arg(2), &got, 1);
+        if (argc > 3) {
+            const uint32_t when = 0;
+            vitaFFIWrite(arg(3), &when, 4);
+        }
+        *result = INT2NUM(1);
+        return true;
+    }
+    if (!std::strncmp(call, "GetStat", 7)) {
+        auto it = g_vitaSteamStats.find(id);
+        const uint32_t value = it == g_vitaSteamStats.end() ? 0 : it->second;
+        vitaFFIWrite(arg(2), &value, 4);
+        *result = INT2NUM(1);
+        return true;
+    }
+    if (!std::strncmp(call, "SetStat", 7)) {
+        g_vitaSteamStats[id] = uint32_t(vitaFFIToI(arg(2)));
+        *result = INT2NUM(1);
+        return true;
+    }
+    if (!std::strcmp(call, "GetAchievementName") || !std::strcmp(call, "GetAchievementDisplayAttribute")) {
+        *result = rb_str_new_cstr("");
+        return true;
+    }
+    if (!std::strcmp(call, "GetNumAchievements")) {
+        *result = INT2NUM(0);
+        return true;
+    }
+    // StoreStats, RequestCurrentStats, ClearAchievement, ResetAllStats, UpdateAvgRateStat,
+    // IndicateAchievementProgress: done.
+    *result = INT2NUM(1);
+    return true;
+}
+
+static bool vitaSteamHelperCall(const char *name, VALUE args, bool zeroIsTrue, VALUE *result) {
+    const long argc = RARRAY_LEN(args);
+    auto arg = [&](long i) { return i < argc ? RARRAY_AREF(args, i) : Qnil; };
+    VALUE yes = INT2NUM(zeroIsTrue ? 0 : 1), no = INT2NUM(zeroIsTrue ? 1 : 0);
+    const std::string id = vitaFFIText(arg(0));
+    if (!std::strcmp(name, "setAchievement")) {
+        *result = hardrpgSteamAchievement(id.c_str(), true) ? yes : no;
+        return true;
+    }
+    if (!std::strcmp(name, "getAchievementStatus")) {
+        *result = hardrpgSteamAchievement(id.c_str(), false) ? yes : no;
+        return true;
+    }
+    if (!std::strcmp(name, "getStat")) {
+        auto it = g_vitaSteamStats.find(id);
+        *result = LONG2NUM(it == g_vitaSteamStats.end() ? 0 : long(int32_t(it->second)));
+        return true;
+    }
+    if (!std::strcmp(name, "setStat")) {
+        g_vitaSteamStats[id] = uint32_t(vitaFFIToI(arg(1)));
+        *result = yes;
+        return true;
+    }
+    if (!std::strcmp(name, "getAchievementName") || !std::strcmp(name, "getAchievementDesc")) {
+        // No Steam text on the Vita: the achievement's own ID.
+        const long room = argc > 2 ? vitaFFIToI(arg(2)) : 0;
+        if (room > 0) {
+            std::string text = id.substr(0, size_t(room - 1));
+            text.push_back('\0');
+            vitaFFIWrite(arg(1), text.data(), long(text.size()));
+        }
+        *result = yes;
+        return true;
+    }
+    if (!std::strcmp(name, "callbackReceived") || !std::strcmp(name, "resetStats") ||
+        !std::strcmp(name, "testResetAllStats") || !std::strcmp(name, "storeStats")) {
+        *result = yes;
+        return true;
+    }
+    return false;
 }
 
 static VALUE vitaFFICall(int argc, VALUE *argv, VALUE self) {
@@ -1152,7 +1272,11 @@ static VALUE vitaFFICall(int argc, VALUE *argv, VALUE self) {
             if (vitaUtilsCall(f->function, args, &handled)) return handled;
             break;
         case VL_STEAM:
-            if (vitaSteamApiCall(f->function, &handled)) return handled;
+            if (vitaSteamApiCall(f->function, args, &handled)) return handled;
+            break;
+        case VL_STEAM_HELPER:
+        case VL_STEAM_HELPER0:
+            if (vitaSteamHelperCall(f->function, args, f->lib == VL_STEAM_HELPER0, &handled)) return handled;
             break;
         case VL_VIDEO:
             if (vitaVideoDecoderCall(f->function, args, &handled)) return handled;

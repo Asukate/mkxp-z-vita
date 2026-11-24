@@ -31,10 +31,6 @@ bool findTheme(const std::string &source, Theme &out, const std::string &cache =
 // Call once on the main thread before findTheme reads ZIPs on another.
 void themeInit();
 
-// Whether the game's script list (Data/Scripts.*, loose or in its encrypted
-// archive) contains text, such as a script's name. dir is a game folder.
-bool gameScriptsMention(const std::string &dir, const std::string &text);
-
 // The pieces, exposed for tests. Both return the track name, or "".
 std::string marshalTitleBgm(const std::string &systemData, int &volume, int *pitch = nullptr);
 std::string lcfTitleMusic(const std::string &database, int &volume, int *pitch = nullptr);

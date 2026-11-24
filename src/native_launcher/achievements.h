@@ -58,12 +58,9 @@ bool steamCatalogRecorded(const Paths &, const std::string &game);
 // Whether the game uses achievements: it has an achievements folder, made when
 // the game starts with the achievement bridge (or by hand, for a catalog).
 bool achievementsUsed(const Paths &, const Entry &);
-// Whether a game that has not used achievements yet ships Toro's Steam script
-// ("steam_acheivement", BLACK SOULS and BLACK SOULS II), which the bridge
-// answers. Only games with steam_api.dll are read, once: a yes registers the
-// game (achievementsUsed is then true), a no is kept in
-// achievements/steam-script-checked.txt.
-bool steamScriptGame(const Paths &, const Entry &);
+// A Steam release (it ships Steam's API, an achievement helper DLL or a Steam shim): its
+// achievements are looked up on Steam before its first start. Not for ZIPs.
+bool steamGame(const Entry &);
 
 // Reads a Steam Community achievements page (the HTML of
 // steamcommunity.com/achievements/<appid>): false when the page is not one
